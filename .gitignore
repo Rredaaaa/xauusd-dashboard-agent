@@ -1,4 +1,8 @@
 .env
 __pycache__/
 *.pyc
-reports/
+reports/*
+!reports/.gitkeep
+!reports/README.md
+.venv/
+.pytest_cache/

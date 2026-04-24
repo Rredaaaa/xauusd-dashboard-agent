@@ -1,83 +1,109 @@
-# Agent XAUUSD
+# Agent XAUUSD Dashboard
 
-Ce projet cree un agent simple qui :
+Agent local pour suivre `XAU/USD`, construire un dashboard HTML live et produire un rapport d'aide a la lecture du marche.
 
-- recupere le spot `XAU/USD` depuis Investing.com
-- suit aussi le `DXY` et le rendement US 10Y
-- collecte des actualites recentes liees a l'or, au dollar et a la Fed
-- calcule un biais heuristique haussier / baissier / neutre
-- peut ajouter une synthese IA si vous fournissez `OPENAI_API_KEY` et `OPENAI_MODEL`
+Le projet est pense pour etre partage et developpe a deux. Les fichiers de code, documentation, tests et lanceurs sont suivis par Git. Les fichiers generes dans `reports/` restent locaux pour eviter les conflits a chaque lancement.
 
-## Installation
+## Fonctionnalites
+
+- Prix spot `XAU/USD` depuis Investing.com.
+- Dashboard local live sur `http://127.0.0.1:8787/`.
+- Chandeliers intraday avec ligne de prix live.
+- Analyse fondamentale, technique et geopolitique.
+- Scores `/100`, verdict intraday, `SL`, `TP1`, `TP2`.
+- Rapport Markdown et payload JSON.
+- Mode de repli sur le dernier snapshot si une source externe retourne une erreur temporaire.
+
+## Demarrage Rapide
 
 ```powershell
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Ensuite, editez `.env` seulement si vous voulez activer la synthese IA.
-
-## Lancer l'agent
-
-Double-clic sans terminal charge :
+Lancer le dashboard:
 
 ```powershell
 .\Lancer-Agent-XAUUSD.bat
 ```
 
-Le batch genere automatiquement :
-
-- `reports\xauusd_dashboard.html`
-- `reports\xauusd_data.json`
-- `reports\xauusd_report.md`
-
-Puis il ouvre le dashboard HTML dans votre navigateur.
-
-Execution simple en console :
-
-```powershell
-python .\\xauusd_agent.py
-```
-
-Generer seulement le dashboard HTML :
-
-```powershell
-python .\\xauusd_agent.py --quiet --dashboard .\\reports\\xauusd_dashboard.html --data-json .\\reports\\xauusd_data.json --save .\\reports\\xauusd_report.md
-```
-
-Sauvegarder le rapport dans un fichier :
-
-```powershell
-python .\\xauusd_agent.py --save .\\reports\\xauusd_report.md
-```
-
-Mode surveillance toutes les 15 minutes :
+Surveillance continue:
 
 ```powershell
 .\Surveiller-Agent-XAUUSD-15min.bat
 ```
 
-Ce mode met a jour les fichiers dans `reports\` et le dashboard HTML se recharge automatiquement dans le navigateur.
-
-Sortie JSON exploitable par un autre systeme :
+Execution console:
 
 ```powershell
-python .\\xauusd_agent.py --json
+python .\xauusd_agent.py
 ```
 
-## Ce que fait l'agent
+Generer les artefacts:
 
-1. Il lit le spot `XAU/USD` depuis Investing.com.
-2. Il recupere les headlines via Google News RSS.
-3. Il lit aussi le `DXY` et le 10 ans US pour le contexte macro.
-4. Il produit un score heuristique.
-5. Si OpenAI est configure, il demande une synthese concise en francais.
+```powershell
+python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .\reports\xauusd_data.json --dashboard .\reports\xauusd_dashboard.html
+```
 
-## Limites importantes
+## Structure
 
-- Le prix de l'or vient d'Investing.com, tandis que certains indicateurs macro secondaires restent alimentes par Yahoo Finance.
-- Les headlines ne remplacent pas un calendrier macro ou un flux temps reel institutionnel.
-- Le score heuristique est une aide a la lecture, pas un signal garanti.
+```text
+.
+|-- xauusd_agent.py                 # Agent, dashboard, serveur live et analyses
+|-- Lancer-Agent-XAUUSD.bat         # Lance le dashboard live
+|-- Surveiller-Agent-XAUUSD-15min.bat
+|-- requirements.txt
+|-- .env.example
+|-- tests/
+|   `-- test_xauusd_agent.py
+|-- docs/
+|   |-- ARCHITECTURE.md
+|   |-- COLLABORATION.md
+|   `-- SETUP.md
+`-- reports/
+    |-- README.md
+    `-- .gitkeep
+```
+
+## Configuration IA Optionnelle
+
+La synthese IA est optionnelle. Ne publiez jamais `.env`.
+
+```env
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=your_model_name_here
+```
+
+## Tests
+
+```powershell
+python -B -m unittest discover -s tests -v
+```
+
+## Collaboration
+
+Avant de modifier:
+
+```powershell
+git pull
+```
+
+Apres modification:
+
+```powershell
+git status
+git add .
+git commit -m "Description courte"
+git push
+```
+
+Voir [docs/COLLABORATION.md](docs/COLLABORATION.md) pour le workflow conseille entre Maroc et France.
+
+## Limites
+
+- Les scores sont heuristiques: ils aident a lire le marche, ils ne garantissent pas un trade gagnant.
+- Les bougies multi-timeframes utilisent un proxy futures COMEX pour obtenir OHLC/volume puis sont alignees sur le spot.
+- Les sources externes peuvent temporairement retourner des erreurs HTTP. Le dashboard garde alors le dernier snapshot disponible.
 - Ce projet ne fournit pas de conseil financier personnalise.

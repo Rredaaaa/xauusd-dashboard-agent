@@ -50,11 +50,12 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 
 ## Version Vercel
 
-La version web se trouve dans `public/index.html` et appelle l'endpoint `api/xauusd.py`.
+La version web se trouve dans `public/index.html`. Sur Vercel, `api/index.py` sert le dashboard et appelle la logique `api/xauusd.py`.
 
 - Un refresh de la page Vercel relance une requete API et actualise les donnees si les sources repondent.
 - Le dashboard se met aussi a jour automatiquement toutes les 60 secondes en mode rapide.
 - Le bouton `Analyse complete` recharge les actualites, le geopolitique, le sentiment et les flux.
+- Si Investing.com bloque les IP Vercel, l'API utilise un fallback `GC=F` et l'indique comme source.
 
 Voir [docs/VERCEL.md](docs/VERCEL.md) pour le deploiement.
 
@@ -64,6 +65,8 @@ Voir [docs/VERCEL.md](docs/VERCEL.md) pour le deploiement.
 .
 |-- xauusd_agent.py                 # Agent, dashboard, serveur live et analyses
 |-- api/
+|   |-- index.py                    # Entree FastAPI Vercel
+|   |-- dashboard.html              # Copie du dashboard incluse dans la lambda
 |   `-- xauusd.py                   # API serverless Vercel
 |-- public/
 |   `-- index.html                  # Dashboard web Vercel

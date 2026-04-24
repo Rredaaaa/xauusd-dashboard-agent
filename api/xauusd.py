@@ -62,8 +62,26 @@ def fallback_technical_recommendation(price: float, change_pct: float) -> TradeR
 
 def build_cloud_payload(mode: str = "quick", top_news: int = 8) -> dict[str, Any]:
     warnings: list[str] = []
+    price_source = {
+        "name": "Investing.com",
+        "url": "https://www.investing.com/currencies/xau-usd",
+    }
 
-    gold = fetch_investing_xauusd_snapshot(include_historical=mode == "full")
+    try:
+        gold = fetch_investing_xauusd_snapshot(include_historical=mode == "full")
+    except Exception as exc:  # pragma: no cover - network/provider branch
+        warnings.append(
+            "Investing.com bloque temporairement la requete Vercel; "
+            f"fallback GC=F utilise pour garder le dashboard actif: {exc}"
+        )
+        gold = fetch_symbol_snapshot("GC=F", "Gold Futures Proxy", interval="5m", data_range="1d")
+        gold.symbol = "XAU/USD"
+        gold.label = "XAU/USD Proxy"
+        price_source = {
+            "name": "Yahoo Finance GC=F fallback",
+            "url": "https://finance.yahoo.com/quote/GC=F",
+        }
+
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
 
@@ -108,6 +126,8 @@ def build_cloud_payload(mode: str = "quick", top_news: int = 8) -> dict[str, Any
         technical_recommendation=technical_recommendation,
         technical_timeframes=technical_readings,
     )
+    payload["market_snapshot"]["xauusd_spot"]["source_name"] = price_source["name"]
+    payload["market_snapshot"]["xauusd_spot"]["source_url"] = price_source["url"]
     payload["executive_summary"] = executive_summary
     payload["cloud"] = {
         "mode": mode,

@@ -1,10 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/xauusd.py": {
-      "maxDuration": 60
-    }
-  },
   "headers": [
     {
       "source": "/api/(.*)",

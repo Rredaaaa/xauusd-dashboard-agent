@@ -1,0 +1,5606 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import copy
+import html
+import http.server
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from typing import Any
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    )
+}
+
+INVESTING_XAUUSD_URL = "https://www.investing.com/currencies/xau-usd"
+INVESTING_XAUUSD_HISTORICAL_URL = "https://www.investing.com/currencies/xau-usd-historical-data"
+
+NEWS_QUERIES = [
+    ("gold", '"gold news today" OR XAUUSD when:2d'),
+    ("macro_fed", '"Fed interest rate decision {month}" gold when:30d'),
+    ("macro_cpi", '"US CPI inflation latest data" gold when:30d'),
+    ("macro_nfp", '"NFP jobs report latest" gold when:30d'),
+    ("geopolitical", '"geopolitical risk gold today" OR (gold war conflict safe haven) when:3d'),
+    ("sentiment_cot", '"gold COT report latest commitments of traders" OR "gold futures net long" when:14d'),
+    ("sentiment_oi", '"COMEX gold open interest today" OR "gold open interest" when:7d'),
+    ("sentiment_etf", '"gold ETF flows today GLD IAU" OR "GLD IAU flows" when:7d'),
+    ("events_calendar", '"economic calendar today high impact" gold OR forex when:2d'),
+    ("events_fomc", '"FOMC minutes speech today" gold when:7d'),
+    ("risk_vix", '"VIX fear greed index today" OR "VIX today" gold when:2d'),
+    ("physical_demand", '(China gold demand OR India gold demand OR "central bank gold buying") when:30d'),
+]
+
+SYSTEM_PROMPT = """
+You are a disciplined XAUUSD market briefing assistant.
+Use only the supplied market data and headlines.
+Do not invent events, quotes, price levels, or probabilities.
+Do not provide personalized financial advice or guaranteed buy/sell calls.
+Respond in French.
+Keep the analysis concise and practical for a trader.
+Return:
+1. A one-line directional bias.
+2. Three short bullets: bullish case, bearish case, neutral/wait case.
+3. A final risk warning sentence.
+""".strip()
+
+BULLISH_KEYWORDS = {
+    "safe haven": 2,
+    "geopolit": 2,
+    "war": 2,
+    "conflict": 2,
+    "rate cut": 2,
+    "cuts": 1,
+    "dovish": 2,
+    "recession": 1,
+    "inflation": 1,
+    "weak dollar": 2,
+    "dollar falls": 2,
+    "lower yields": 2,
+    "falling yields": 2,
+    "central bank buying": 2,
+}
+
+BEARISH_KEYWORDS = {
+    "hawkish": -2,
+    "higher for longer": -2,
+    "rate hike": -2,
+    "strong dollar": -2,
+    "dollar strengthens": -2,
+    "rising yields": -2,
+    "higher yields": -2,
+    "risk-on": -1,
+    "ceasefire": -1,
+}
+
+RISK_OFF_POSITIVE_KEYWORDS = {
+    "war",
+    "conflict",
+    "attack",
+    "missile",
+    "sanction",
+    "escalation",
+    "banking crisis",
+    "bank run",
+    "panic",
+    "safe haven",
+    "risk-off",
+    "geopolitical risk",
+}
+RISK_OFF_NEGATIVE_KEYWORDS = {
+    "ceasefire",
+    "truce",
+    "deal",
+    "peace",
+    "de-escalation",
+}
+CENTRAL_BANK_DOVISH_KEYWORDS = {
+    "rate cut",
+    "cuts",
+    "dovish",
+    "easing",
+    "pause",
+    "cooling inflation",
+    "soft cpi",
+    "lower inflation",
+}
+CENTRAL_BANK_HAWKISH_KEYWORDS = {
+    "hawkish",
+    "higher for longer",
+    "rate hike",
+    "sticky inflation",
+    "hot cpi",
+    "strong jobs",
+    "higher yields",
+}
+PHYSICAL_DEMAND_POSITIVE_KEYWORDS = {
+    "china gold demand",
+    "india gold demand",
+    "central bank buying",
+    "reserve buying",
+    "imports rise",
+    "physical demand",
+    "festival demand",
+}
+PHYSICAL_DEMAND_NEGATIVE_KEYWORDS = {
+    "weak demand",
+    "demand slows",
+    "imports fall",
+    "jewelry demand weak",
+    "outflows",
+}
+SPECULATORS_LONG_KEYWORDS = {
+    "net long",
+    "long positions rise",
+    "bullish bets",
+    "money managers raise",
+    "speculators net long",
+}
+SPECULATORS_SHORT_KEYWORDS = {
+    "net short",
+    "short positions rise",
+    "bearish bets",
+    "money managers cut longs",
+    "shorts increase",
+}
+ETF_INFLOW_KEYWORDS = {
+    "inflows",
+    "holdings rise",
+    "added",
+    "net inflows",
+    "etf demand",
+}
+ETF_OUTFLOW_KEYWORDS = {
+    "outflows",
+    "holdings fall",
+    "redemptions",
+    "net outflows",
+}
+OPEN_INTEREST_UP_KEYWORDS = {
+    "open interest rises",
+    "open interest up",
+    "open interest increases",
+    "positions build",
+}
+OPEN_INTEREST_DOWN_KEYWORDS = {
+    "open interest falls",
+    "open interest down",
+    "open interest declines",
+    "liquidation",
+}
+VIX_RISK_OFF_KEYWORDS = {
+    "vix jumps",
+    "vix spikes",
+    "fear gauge rises",
+    "volatility surges",
+    "risk aversion",
+}
+VIX_RISK_ON_KEYWORDS = {
+    "vix falls",
+    "fear gauge cools",
+    "volatility eases",
+    "risk appetite",
+}
+
+
+@dataclass
+class PricePoint:
+    timestamp: int
+    close: float
+    high: float | None = None
+    low: float | None = None
+    open: float | None = None
+    volume: int | None = None
+
+
+@dataclass
+class SymbolSnapshot:
+    symbol: str
+    label: str
+    price: float
+    previous_close: float
+    change_abs: float
+    change_pct: float
+    period_change_pct: float
+    day_high: float | None
+    day_low: float | None
+    support: float | None
+    resistance: float | None
+    fetched_at: str
+    points: list[PricePoint]
+    intraday_points: list[PricePoint] = field(default_factory=list)
+
+
+@dataclass
+class NewsItem:
+    title: str
+    source: str
+    link: str
+    published_at: str
+    category: str
+    score: int
+    score_reasons: list[str]
+
+
+@dataclass
+class AnalysisResult:
+    bias: str
+    score: int
+    confidence: int
+    reasons: list[str]
+    bullish_news: list[NewsItem]
+    bearish_news: list[NewsItem]
+    neutral_news: list[NewsItem]
+    geopolitical: "GeopoliticalAnalysis | None" = None
+
+
+@dataclass
+class GeopoliticalAnalysis:
+    score: int
+    summary: str
+    risk_off_status: str
+    central_bank_bias: str
+    physical_demand_trend: str
+    large_speculators: str
+    etf_flows: str
+    comex_open_interest: str
+    vix_tone: str
+    event_watch: list[str]
+    reasons: list[str]
+
+
+@dataclass
+class BriefingBundle:
+    gold: SymbolSnapshot
+    dxy: SymbolSnapshot
+    us10y: SymbolSnapshot
+    news: list[NewsItem]
+    analysis: AnalysisResult
+    payload: dict[str, Any]
+    ai_analysis: str | None
+    geopolitical_analysis: GeopoliticalAnalysis | None = None
+    fundamental_recommendation: "TradeRecommendation | None" = None
+    technical_recommendation: "TradeRecommendation | None" = None
+    technical_timeframes: list["TechnicalReading"] | None = None
+    executive_summary: str = ""
+
+
+@dataclass
+class TradeRecommendation:
+    mode: str
+    verdict: str
+    score: int
+    summary: str
+    reasons: list[str]
+    stop_loss: float
+    take_profit_1: float
+    take_profit_2: float
+    source_note: str
+
+
+@dataclass
+class TechnicalReading:
+    timeframe: str
+    close: float
+    ema20: float
+    ema50: float
+    ema100: float
+    ema200: float
+    rsi7: float
+    macd_line: float
+    macd_signal: float
+    macd_histogram: float
+    volume_ratio: float
+    atr14: float
+    score: float
+    verdict: str
+    reasons: list[str]
+
+
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def http_get_text(url: str) -> str:
+    request = urllib.request.Request(url, headers=HEADERS)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                return response.read().decode("utf-8", "ignore")
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in {429, 500, 502, 503, 504} or attempt == 1:
+                raise
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if attempt == 1:
+                raise
+        time.sleep(1.0 * (attempt + 1))
+    raise RuntimeError(f"Echec HTTP pour {url}: {last_error}")
+
+
+def http_get_json(url: str) -> dict[str, Any]:
+    return json.loads(http_get_text(url))
+
+
+def http_get_next_data(url: str) -> dict[str, Any]:
+    text = http_get_text(url)
+    match = re.search(
+        r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+        text,
+        re.DOTALL,
+    )
+    if not match:
+        raise RuntimeError(f"Impossible de lire les donnees internes de la page {url}.")
+    return json.loads(match.group(1))
+
+
+def compact_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def strip_source_suffix(title: str, source: str) -> str:
+    suffix = f" - {source}".strip()
+    if source and title.endswith(suffix):
+        return title[: -len(suffix)].strip()
+    return title
+
+
+def normalize_title_for_dedupe(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+
+def should_skip_headline(title: str, source: str) -> bool:
+    text = f"{title} {source}".lower()
+    blocked_patterns = [
+        "chart image",
+        "tradingview",
+        "forexcom:xauusd",
+        "nostradamus",
+        "check prediction here",
+        "horoscope",
+    ]
+    return any(pattern in text for pattern in blocked_patterns)
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def current_month_name_en() -> str:
+    months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    return months[datetime.now().astimezone().month - 1]
+
+
+def compute_support_resistance(points: list[PricePoint], lookback: int = 24) -> tuple[float | None, float | None]:
+    recent_points = points[-lookback:]
+    lows = [point.low for point in recent_points if point.low is not None]
+    highs = [point.high for point in recent_points if point.high is not None]
+    closes = [point.close for point in recent_points if point.close is not None]
+    if not closes and not lows and not highs:
+        return None, None
+    support = min(lows) if lows else min(closes)
+    resistance = max(highs) if highs else max(closes)
+    return support, resistance
+
+
+def parse_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    cleaned = str(value).replace(",", "").strip()
+    return float(cleaned) if cleaned else None
+
+
+def parse_epoch_millis_to_iso(value: Any) -> str:
+    if value is None or value == "":
+        return iso_now()
+    return datetime.fromtimestamp(int(str(value)) / 1000, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
+def build_investing_points(rows: list[dict[str, Any]], limit: int = 30) -> list[PricePoint]:
+    points: list[PricePoint] = []
+    ordered_rows = list(reversed(rows[:limit]))
+
+    for row in ordered_rows:
+        close = parse_float(row.get("last_closeRaw") or row.get("last_close"))
+        if close is None:
+            continue
+
+        points.append(
+            PricePoint(
+                timestamp=int(row.get("rowDateRaw") or 0),
+                close=close,
+                high=parse_float(row.get("last_maxRaw") or row.get("last_max")),
+                low=parse_float(row.get("last_minRaw") or row.get("last_min")),
+                open=parse_float(row.get("last_openRaw") or row.get("last_open")),
+                volume=int(row.get("volumeRaw") or 0) if row.get("volumeRaw") not in (None, "") else None,
+            )
+        )
+
+    return points
+
+
+def fetch_investing_xauusd_snapshot(include_historical: bool = True) -> SymbolSnapshot:
+    overview_data = http_get_next_data(INVESTING_XAUUSD_URL)
+    overview_state = overview_data["props"]["pageProps"]["state"]
+    instrument = overview_state["currencyStore"]["instrument"]
+    price = instrument["price"]
+
+    points: list[PricePoint] = []
+    if include_historical:
+        historical_data = http_get_next_data(INVESTING_XAUUSD_HISTORICAL_URL)
+        historical_state = historical_data["props"]["pageProps"]["state"]
+        historical_rows = historical_state["historicalDataStore"]["historicalData"]["data"]
+        points = build_investing_points(historical_rows, limit=30)
+
+    current_price = parse_float(price.get("last"))
+    previous_close = parse_float(price.get("lastClose"))
+    if current_price is None or previous_close is None:
+        raise RuntimeError("Investing.com n'a pas retourne le prix spot XAU/USD attendu.")
+
+    change_abs = parse_float(price.get("change")) or (current_price - previous_close)
+    change_pct = parse_float(price.get("changePcr"))
+    if change_pct is None:
+        change_pct = (change_abs / previous_close) * 100 if previous_close else 0.0
+
+    if len(points) >= 2:
+        period_reference = points[0].close
+        period_change_pct = ((current_price - period_reference) / period_reference) * 100 if period_reference else 0.0
+    else:
+        period_change_pct = change_pct
+        points = [
+            PricePoint(timestamp=int(time.time()) - 86400, close=previous_close),
+            PricePoint(timestamp=int(time.time()), close=current_price),
+        ]
+
+    support, resistance = compute_support_resistance(points, lookback=min(20, len(points)))
+
+    return SymbolSnapshot(
+        symbol="XAU/USD",
+        label="XAU/USD Spot",
+        price=current_price,
+        previous_close=previous_close,
+        change_abs=change_abs,
+        change_pct=change_pct,
+        period_change_pct=period_change_pct,
+        day_high=parse_float(price.get("high")),
+        day_low=parse_float(price.get("low")),
+        support=support,
+        resistance=resistance,
+        fetched_at=parse_epoch_millis_to_iso(price.get("lastUpdateTime")),
+        points=points,
+    )
+
+
+def fetch_symbol_snapshot(symbol: str, label: str, interval: str, data_range: str) -> SymbolSnapshot:
+    encoded_symbol = urllib.parse.quote(symbol, safe="")
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded_symbol}?interval={interval}&range={data_range}"
+    payload = http_get_json(url)
+    result = payload["chart"]["result"][0]
+    meta = result["meta"]
+    timestamps = result.get("timestamp") or []
+    quote = (result.get("indicators") or {}).get("quote", [{}])[0]
+    closes = quote.get("close") or []
+    highs = quote.get("high") or []
+    lows = quote.get("low") or []
+    opens = quote.get("open") or []
+    volumes = quote.get("volume") or []
+
+    points: list[PricePoint] = []
+    for index, timestamp in enumerate(timestamps):
+        close = closes[index] if index < len(closes) else None
+        if close is None:
+            continue
+        points.append(
+            PricePoint(
+                timestamp=timestamp,
+                close=float(close),
+                high=float(highs[index]) if index < len(highs) and highs[index] is not None else None,
+                low=float(lows[index]) if index < len(lows) and lows[index] is not None else None,
+                open=float(opens[index]) if index < len(opens) and opens[index] is not None else None,
+                volume=int(volumes[index]) if index < len(volumes) and volumes[index] is not None else None,
+            )
+        )
+
+    if len(points) < 2:
+        raise RuntimeError(f"Not enough market data returned for {symbol}.")
+
+    price = float(meta.get("regularMarketPrice") or points[-1].close)
+    previous_close = float(
+        meta.get("previousClose")
+        or meta.get("chartPreviousClose")
+        or points[-2].close
+    )
+    change_abs = price - previous_close
+    change_pct = (change_abs / previous_close) * 100 if previous_close else 0.0
+    period_reference = points[0].close
+    period_change_pct = ((price - period_reference) / period_reference) * 100 if period_reference else 0.0
+    support, resistance = compute_support_resistance(points)
+
+    day_high = meta.get("regularMarketDayHigh")
+    day_low = meta.get("regularMarketDayLow")
+
+    return SymbolSnapshot(
+        symbol=symbol,
+        label=label,
+        price=price,
+        previous_close=previous_close,
+        change_abs=change_abs,
+        change_pct=change_pct,
+        period_change_pct=period_change_pct,
+        day_high=float(day_high) if day_high is not None else None,
+        day_low=float(day_low) if day_low is not None else None,
+        support=support,
+        resistance=resistance,
+        fetched_at=iso_now(),
+        points=points,
+    )
+
+
+def align_proxy_points_to_spot(points: list[PricePoint], spot_price: float) -> list[PricePoint]:
+    if not points:
+        return []
+
+    proxy_price = points[-1].close
+    offset = spot_price - proxy_price
+    aligned_points: list[PricePoint] = []
+    for point in points:
+        aligned_points.append(
+            PricePoint(
+                timestamp=point.timestamp,
+                close=point.close + offset,
+                high=(point.high + offset) if point.high is not None else point.close + offset,
+                low=(point.low + offset) if point.low is not None else point.close + offset,
+                open=(point.open + offset) if point.open is not None else point.close + offset,
+                volume=point.volume,
+            )
+        )
+
+    last_point = aligned_points[-1]
+    last_point.close = spot_price
+    last_point.high = max(last_point.high if last_point.high is not None else spot_price, spot_price)
+    last_point.low = min(last_point.low if last_point.low is not None else spot_price, spot_price)
+    return aligned_points
+
+
+def aggregate_points(points: list[PricePoint], bucket_seconds: int) -> list[PricePoint]:
+    buckets: dict[int, PricePoint] = {}
+
+    for point in sorted(points, key=lambda item: item.timestamp):
+        bucket_key = point.timestamp - (point.timestamp % bucket_seconds)
+        if bucket_key not in buckets:
+            buckets[bucket_key] = PricePoint(
+                timestamp=bucket_key,
+                open=point.open if point.open is not None else point.close,
+                high=point.high if point.high is not None else point.close,
+                low=point.low if point.low is not None else point.close,
+                close=point.close,
+                volume=point.volume or 0,
+            )
+            continue
+
+        bucket = buckets[bucket_key]
+        bucket.close = point.close
+        bucket.high = max(
+            bucket.high if bucket.high is not None else point.close,
+            point.high if point.high is not None else point.close,
+        )
+        bucket.low = min(
+            bucket.low if bucket.low is not None else point.close,
+            point.low if point.low is not None else point.close,
+        )
+        bucket.volume = (bucket.volume or 0) + (point.volume or 0)
+
+    return [buckets[key] for key in sorted(buckets.keys())]
+
+
+def ema_series(values: list[float], period: int) -> list[float | None]:
+    if len(values) < period:
+        return [None] * len(values)
+
+    alpha = 2 / (period + 1)
+    initial = sum(values[:period]) / period
+    result: list[float | None] = [None] * (period - 1) + [initial]
+    ema_value = initial
+
+    for value in values[period:]:
+        ema_value = ((value - ema_value) * alpha) + ema_value
+        result.append(ema_value)
+
+    return result
+
+
+def sma_last(values: list[float], period: int) -> float | None:
+    if len(values) < period:
+        return None
+    return sum(values[-period:]) / period
+
+
+def rsi_series(values: list[float], period: int = 7) -> list[float | None]:
+    if len(values) < period + 1:
+        return [None] * len(values)
+
+    deltas = [values[index] - values[index - 1] for index in range(1, len(values))]
+    gains = [max(delta, 0.0) for delta in deltas]
+    losses = [abs(min(delta, 0.0)) for delta in deltas]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    result: list[float | None] = [None] * period
+
+    rs = avg_gain / avg_loss if avg_loss else float("inf")
+    result.append(100 - (100 / (1 + rs)))
+
+    for index in range(period, len(deltas)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[index]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[index]) / period
+        rs = avg_gain / avg_loss if avg_loss else float("inf")
+        result.append(100 - (100 / (1 + rs)))
+
+    return result
+
+
+def macd_with_sma_signal(values: list[float], fast_period: int = 5, slow_period: int = 34, signal_period: int = 5) -> tuple[float, float, float]:
+    fast = ema_series(values, fast_period)
+    slow = ema_series(values, slow_period)
+    macd_line_series: list[float | None] = []
+
+    for fast_value, slow_value in zip(fast, slow):
+        if fast_value is None or slow_value is None:
+            macd_line_series.append(None)
+        else:
+            macd_line_series.append(fast_value - slow_value)
+
+    macd_values = [value for value in macd_line_series if value is not None]
+    if len(macd_values) < signal_period:
+        raise RuntimeError("Pas assez de donnees pour calculer la MACD.")
+
+    macd_line = macd_values[-1]
+    signal = sma_last(macd_values, signal_period)
+    if signal is None:
+        raise RuntimeError("Pas assez de donnees pour calculer le signal MACD.")
+
+    return macd_line, signal, macd_line - signal
+
+
+def atr_series(points: list[PricePoint], period: int = 14) -> list[float | None]:
+    if len(points) < period + 1:
+        return [None] * len(points)
+
+    true_ranges: list[float] = []
+    for index, point in enumerate(points):
+        high = point.high if point.high is not None else point.close
+        low = point.low if point.low is not None else point.close
+        if index == 0:
+            true_ranges.append(high - low)
+            continue
+        previous_close = points[index - 1].close
+        true_ranges.append(
+            max(
+                high - low,
+                abs(high - previous_close),
+                abs(low - previous_close),
+            )
+        )
+
+    initial = sum(true_ranges[1: period + 1]) / period
+    result: list[float | None] = [None] * period + [initial]
+    atr_value = initial
+
+    for tr in true_ranges[period + 1:]:
+        atr_value = ((atr_value * (period - 1)) + tr) / period
+        result.append(atr_value)
+
+    return result
+
+
+def volume_ratio(points: list[PricePoint], lookback: int = 20) -> float:
+    volumes = [float(point.volume or 0) for point in points if point.volume not in (None, 0)]
+    if len(volumes) < lookback + 1:
+        return 1.0
+    average = sum(volumes[-(lookback + 1):-1]) / lookback
+    if average == 0:
+        return 1.0
+    return volumes[-1] / average
+
+
+def compute_price_change_pct(points: list[PricePoint]) -> float:
+    if len(points) < 2 or points[-2].close == 0:
+        return 0.0
+    return ((points[-1].close - points[-2].close) / points[-2].close) * 100
+
+
+def build_technical_reading(timeframe: str, points: list[PricePoint]) -> TechnicalReading:
+    closes = [point.close for point in points]
+    if len(closes) < 210:
+        raise RuntimeError(f"Pas assez de donnees pour le timeframe {timeframe}.")
+
+    ema20 = ema_series(closes, 20)[-1]
+    ema50 = ema_series(closes, 50)[-1]
+    ema100 = ema_series(closes, 100)[-1]
+    ema200 = ema_series(closes, 200)[-1]
+    rsi7 = rsi_series(closes, 7)[-1]
+    atr14 = atr_series(points, 14)[-1]
+
+    if None in (ema20, ema50, ema100, ema200, rsi7, atr14):
+        raise RuntimeError(f"Indicateurs incomplets pour le timeframe {timeframe}.")
+
+    macd_line, macd_signal, macd_histogram = macd_with_sma_signal(closes, fast_period=5, slow_period=34, signal_period=5)
+    last_close = closes[-1]
+    latest_change_pct = compute_price_change_pct(points)
+    latest_volume_ratio = volume_ratio(points)
+
+    score = 0.0
+    reasons: list[str] = []
+
+    for label, ema_value in [("EMA20", ema20), ("EMA50", ema50), ("EMA100", ema100), ("EMA200", ema200)]:
+        if last_close > ema_value:
+            score += 0.75
+            reasons.append(f"{label} soutient le prix")
+        else:
+            score -= 0.75
+            reasons.append(f"{label} agit en resistance")
+
+    if ema20 > ema50 > ema100 > ema200:
+        score += 2.0
+        reasons.append("Empilement EMA haussier")
+    elif ema20 < ema50 < ema100 < ema200:
+        score -= 2.0
+        reasons.append("Empilement EMA baissier")
+
+    if rsi7 >= 85:
+        score -= 1.0
+        reasons.append("RSI7 en zone de surachat")
+    elif rsi7 >= 50:
+        score += 1.5
+        reasons.append("RSI7 au-dessus de 50")
+    elif rsi7 <= 15:
+        score += 0.5
+        reasons.append("RSI7 en zone d'epuisement vendeur")
+    else:
+        score -= 1.5
+        reasons.append("RSI7 sous 50")
+
+    if macd_histogram > 0:
+        score += 2.0
+        reasons.append("MACD 5/34/5 positive")
+    else:
+        score -= 2.0
+        reasons.append("MACD 5/34/5 negative")
+
+    if macd_line > 0:
+        score += 0.5
+    else:
+        score -= 0.5
+
+    if latest_volume_ratio >= 1.15:
+        if latest_change_pct >= 0:
+            score += 1.0
+            reasons.append("Volume acheteur au-dessus de la moyenne")
+        else:
+            score -= 1.0
+            reasons.append("Volume vendeur au-dessus de la moyenne")
+    elif latest_volume_ratio <= 0.85:
+        reasons.append("Volume en retrait")
+    else:
+        reasons.append("Volume proche de la moyenne")
+
+    verdict = "BUY" if score >= 0 else "SELL"
+    return TechnicalReading(
+        timeframe=timeframe,
+        close=last_close,
+        ema20=float(ema20),
+        ema50=float(ema50),
+        ema100=float(ema100),
+        ema200=float(ema200),
+        rsi7=float(rsi7),
+        macd_line=macd_line,
+        macd_signal=macd_signal,
+        macd_histogram=macd_histogram,
+        volume_ratio=latest_volume_ratio,
+        atr14=float(atr14),
+        score=score,
+        verdict=verdict,
+        reasons=reasons[:5],
+    )
+
+
+def fetch_technical_timeframes() -> tuple[list[TechnicalReading], float, list[PricePoint]]:
+    points_5m = fetch_symbol_snapshot("GC=F", "Gold futures 5m", interval="5m", data_range="5d").points
+    points_15m = fetch_symbol_snapshot("GC=F", "Gold futures 15m", interval="15m", data_range="10d").points
+    points_1h = fetch_symbol_snapshot("GC=F", "Gold futures 1h", interval="60m", data_range="6mo").points
+    points_1d = fetch_symbol_snapshot("GC=F", "Gold futures 1d", interval="1d", data_range="2y").points
+    points_4h = aggregate_points(points_1h, bucket_seconds=4 * 60 * 60)
+
+    timeframe_map = [
+        ("1D", points_1d),
+        ("4H", points_4h),
+        ("1H", points_1h),
+        ("15m", points_15m),
+        ("5m", points_5m),
+    ]
+    readings = [build_technical_reading(timeframe, points) for timeframe, points in timeframe_map]
+    proxy_current_price = points_15m[-1].close
+    return readings, proxy_current_price, points_5m
+
+
+def adjust_proxy_level_to_spot(level: float, spot_price: float, proxy_price: float) -> float:
+    return level + (spot_price - proxy_price)
+
+
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
+def build_trade_levels(price: float, atr: float, verdict: str, stop_multiplier: float, tp1_multiplier: float, tp2_multiplier: float) -> tuple[float, float, float]:
+    if verdict == "BUY":
+        return (
+            price - (atr * stop_multiplier),
+            price + (atr * tp1_multiplier),
+            price + (atr * tp2_multiplier),
+        )
+    return (
+        price + (atr * stop_multiplier),
+        price - (atr * tp1_multiplier),
+        price - (atr * tp2_multiplier),
+    )
+
+
+def build_fundamental_recommendation(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    analysis: AnalysisResult,
+    atr_15m: float,
+) -> TradeRecommendation:
+    bullish_score = 50.0
+    reasons: list[str] = []
+
+    if gold.change_pct >= 0:
+        bullish_score += 10
+        reasons.append("Le spot XAU/USD tient au-dessus de la cloture precedente.")
+    else:
+        bullish_score -= 10
+        reasons.append("Le spot XAU/USD reste sous pression face a la cloture precedente.")
+
+    if gold.period_change_pct >= 0:
+        bullish_score += 8
+        reasons.append("La dynamique courte du spot reste orientee positivement.")
+    else:
+        bullish_score -= 8
+        reasons.append("La dynamique courte du spot reste negative.")
+
+    if dxy.change_pct < 0:
+        bullish_score += clamp(abs(dxy.change_pct) * 16, 6, 18)
+        reasons.append("Le DXY recule, ce qui soutient l'or.")
+    else:
+        bullish_score -= clamp(abs(dxy.change_pct) * 16, 6, 18)
+        reasons.append("Le DXY remonte, ce qui freine l'or.")
+
+    yield_change_bps = us10y.change_abs * 100
+    if yield_change_bps < 0:
+        bullish_score += clamp(abs(yield_change_bps) * 1.4, 6, 18)
+        reasons.append("Les rendements US se detendent, favorable au metal jaune.")
+    else:
+        bullish_score -= clamp(abs(yield_change_bps) * 1.4, 6, 18)
+        reasons.append("Les rendements US montent, ce qui penalise l'or.")
+
+    news_tilt = clamp((analysis.score * 4), -16, 16)
+    bullish_score += news_tilt
+    if news_tilt >= 0:
+        reasons.append("Le flux d'actualites garde un biais globalement favorable.")
+    else:
+        reasons.append("Le flux d'actualites reste plutot defavorable.")
+
+    if analysis.geopolitical is not None:
+        geo_tilt = clamp((analysis.geopolitical.score - 50) / 2.5, -10, 10)
+        bullish_score += geo_tilt
+        if geo_tilt > 0:
+            reasons.append("Le bloc geopolitique/sentiment/flux reste globalement favorable a l'or.")
+        elif geo_tilt < 0:
+            reasons.append("Le bloc geopolitique/sentiment/flux ne soutient pas clairement l'or.")
+        else:
+            reasons.append("Le bloc geopolitique/sentiment/flux reste equilibre.")
+
+    mid_range = ((gold.day_high or gold.price) + (gold.day_low or gold.price)) / 2
+    if gold.price >= mid_range:
+        bullish_score += 5
+        reasons.append("Le prix travaille dans la moitie haute du range du jour.")
+    else:
+        bullish_score -= 5
+        reasons.append("Le prix reste dans la moitie basse du range du jour.")
+
+    bullish_score = clamp(bullish_score, 0, 100)
+    verdict = "BUY" if bullish_score >= 50 else "SELL"
+    conviction = bullish_score if verdict == "BUY" else 100 - bullish_score
+    score = round(clamp(conviction, 55, 90))
+    stop_loss, tp1, tp2 = build_trade_levels(
+        gold.price,
+        atr=max(atr_15m, 6.0),
+        verdict=verdict,
+        stop_multiplier=1.15,
+        tp1_multiplier=1.0,
+        tp2_multiplier=2.0,
+    )
+
+    summary = (
+        "Lecture fondamentale intraday positive: dollar et taux se detendent, "
+        "avec un flux d'actualites qui ne contredit pas la hausse."
+        if verdict == "BUY"
+        else "Lecture fondamentale intraday defensive: le contexte macro ne soutient pas assez l'or pour un achat agressif."
+    )
+
+    return TradeRecommendation(
+        mode="Fondamental",
+        verdict=verdict,
+        score=score,
+        summary=summary,
+        reasons=reasons[:6],
+        stop_loss=stop_loss,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        source_note="Spot XAU/USD Investing.com + contexte macro DXY/10Y + actualites + geopol/sentiment/flux.",
+    )
+
+
+def build_technical_recommendation(
+    spot: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    proxy_price: float,
+) -> TradeRecommendation:
+    weights = {"1D": 0.28, "4H": 0.24, "1H": 0.20, "15m": 0.18, "5m": 0.10}
+    weighted_score = 0.0
+    reasons: list[str] = []
+    atr_15m = next(reading.atr14 for reading in readings if reading.timeframe == "15m")
+
+    for reading in readings:
+        normalized = clamp(reading.score / 8.0, -1.0, 1.0)
+        weighted_score += normalized * weights[reading.timeframe]
+        reasons.append(
+            f"{reading.timeframe}: {reading.verdict} avec RSI7 {reading.rsi7:.1f}, MACD {reading.macd_histogram:+.2f}, volume x{reading.volume_ratio:.2f}."
+        )
+
+    verdict = "BUY" if weighted_score >= 0 else "SELL"
+    score = round(clamp(55 + (abs(weighted_score) * 30), 55, 88))
+
+    support_15m = next(reading for reading in readings if reading.timeframe == "15m")
+    resistance_4h = next(reading for reading in readings if reading.timeframe == "4H")
+
+    atr_for_levels = max(atr_15m, 6.0)
+    stop_loss, tp1, tp2 = build_trade_levels(
+        spot.price,
+        atr=atr_for_levels,
+        verdict=verdict,
+        stop_multiplier=1.0,
+        tp1_multiplier=1.1,
+        tp2_multiplier=2.1,
+    )
+
+    support_proxy = min(support_15m.ema20, support_15m.ema50, support_15m.ema100, support_15m.ema200)
+    resistance_proxy = max(resistance_4h.ema20, resistance_4h.ema50, resistance_4h.ema100, resistance_4h.ema200)
+    adjusted_support = adjust_proxy_level_to_spot(support_proxy, spot.price, proxy_price)
+    adjusted_resistance = adjust_proxy_level_to_spot(resistance_proxy, spot.price, proxy_price)
+
+    if verdict == "BUY":
+        stop_loss = min(stop_loss, adjusted_support - (atr_for_levels * 0.35))
+        tp1 = max(tp1, spot.day_high or tp1)
+        tp2 = max(tp2, adjusted_resistance)
+        summary = "Structure technique intraday constructive: les petits timeframes tirent vers le haut et le plan favorise la continuation."
+    else:
+        stop_loss = max(stop_loss, adjusted_resistance + (atr_for_levels * 0.35))
+        tp1 = min(tp1, spot.day_low or tp1)
+        tp2 = min(tp2, adjusted_support)
+        summary = "Structure technique intraday fragile: le poids des timeframes superieurs garde un risque vendeur dominant."
+
+    return TradeRecommendation(
+        mode="Technique",
+        verdict=verdict,
+        score=score,
+        summary=summary,
+        reasons=reasons,
+        stop_loss=stop_loss,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        source_note="Indicateurs calcules sur GC=F (proxy futures COMEX) pour obtenir les bougies multi-timeframes et le volume, puis alignes sur le spot XAU/USD.",
+    )
+
+
+def build_executive_summary(
+    fundamental: TradeRecommendation,
+    technical: TradeRecommendation,
+    geopolitical: GeopoliticalAnalysis | None = None,
+) -> str:
+    if fundamental.verdict == technical.verdict:
+        alignment = (
+            f"Le fondamental et la technique pointent tous les deux vers {fundamental.verdict}. "
+            "Le marche envoie donc un message plus propre que d'habitude."
+        )
+    elif fundamental.verdict == "BUY":
+        alignment = (
+            "Le fondamental reste favorable a l'or, mais le graphique intraday ne donne pas encore "
+            "un point d'entree assez propre pour suivre ce biais sans prudence."
+        )
+    else:
+        alignment = (
+            "La technique reste plus fragile que le contexte macro. Cela veut dire que le marche "
+            "peut encore vendre les rebonds meme si le decor de fond n'est pas franchement anti-or."
+        )
+
+    geo_lines: list[str] = []
+    if geopolitical:
+        if geopolitical.risk_off_status == "actif":
+            geo_lines.append(
+                "Le risque geopolitique reste actif, donc la demande de couverture sur l'or ne disparait pas."
+            )
+        elif geopolitical.risk_off_status == "en reflux":
+            geo_lines.append(
+                "Le stress geopolitique se calme un peu, ce qui retire une partie du soutien refuge."
+            )
+
+        if geopolitical.central_bank_bias == "restrictif":
+            geo_lines.append(
+                "En meme temps, le marche craint qu'un choc energie ou une inflation plus tenace retarde les baisses de taux."
+            )
+        elif geopolitical.central_bank_bias == "accommodant":
+            geo_lines.append(
+                "Le ton des banques centrales parait moins hostile, ce qui aide l'or via un dollar et des rendements moins agressifs."
+            )
+        else:
+            geo_lines.append(
+                "Le message des banques centrales reste partage, donc l'or garde du soutien sans obtenir un feu vert total."
+            )
+
+        if geopolitical.large_speculators == "net long":
+            geo_lines.append(
+                "Les speculators sont deja plutot acheteurs, ce qui soutient le fond mais limite un peu l'effet surprise."
+            )
+        elif geopolitical.large_speculators == "net short":
+            geo_lines.append(
+                "Les speculators restent defensifs, donc tout choc haussier peut forcer des rachats de shorts."
+            )
+
+    score_line = f"Scores du moment: fondamental {fundamental.score}/100, technique {technical.score}/100"
+    if geopolitical:
+        score_line += f", geopolitique {geopolitical.score}/100."
+    else:
+        score_line += "."
+
+    details = " ".join(geo_lines)
+    if details:
+        return f"{alignment} {details} {score_line}"
+    return f"{alignment} {score_line}"
+
+
+def score_headline(title: str) -> tuple[int, list[str]]:
+    text = title.lower()
+    score = 0
+    reasons: list[str] = []
+
+    for keyword, weight in BULLISH_KEYWORDS.items():
+        if keyword in text:
+            score += weight
+            reasons.append(f"bullish:{keyword}")
+
+    for keyword, weight in BEARISH_KEYWORDS.items():
+        if keyword in text:
+            score += weight
+            reasons.append(f"bearish:{keyword}")
+
+    return max(-3, min(3, score)), reasons
+
+
+def fetch_news(top_n: int) -> list[NewsItem]:
+    items: list[NewsItem] = []
+    seen_titles: set[str] = set()
+    month_name = current_month_name_en()
+    result_limit = max(top_n, 24)
+    deadline = time.time() + 18
+
+    for category, query_template in NEWS_QUERIES:
+        if time.time() >= deadline:
+            break
+        query = query_template.format(month=month_name)
+        encoded_query = urllib.parse.quote(query, safe='()":')
+        url = (
+            "https://news.google.com/rss/search"
+            f"?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
+        )
+        try:
+            xml_text = http_get_text(url)
+            root = ET.fromstring(xml_text)
+        except Exception:
+            continue
+
+        for item in root.findall("./channel/item"):
+            source = compact_whitespace(item.findtext("source", default="Unknown source"))
+            raw_title = compact_whitespace(item.findtext("title", default=""))
+            title = strip_source_suffix(raw_title, source)
+            dedupe_key = normalize_title_for_dedupe(title)
+            if not title or dedupe_key in seen_titles or should_skip_headline(title, source):
+                continue
+
+            score, reasons = score_headline(title)
+            published_raw = item.findtext("pubDate", default="")
+            published_at = (
+                parsedate_to_datetime(published_raw).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+                if published_raw
+                else iso_now()
+            )
+
+            items.append(
+                NewsItem(
+                    title=title,
+                    source=source,
+                    link=compact_whitespace(item.findtext("link", default="")),
+                    published_at=published_at,
+                    category=category,
+                    score=score,
+                    score_reasons=reasons,
+                )
+            )
+            seen_titles.add(dedupe_key)
+            if len(items) >= result_limit:
+                items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
+                return items[:result_limit]
+
+    items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
+    return items[:result_limit]
+
+
+def build_market_reasons(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnapshot) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+
+    if gold.change_pct >= 0.30:
+        score += 2
+        reasons.append(f"L'or traite au-dessus de la cloture precedente ({gold.change_pct:+.2f}%).")
+    elif gold.change_pct <= -0.30:
+        score -= 2
+        reasons.append(f"L'or traite sous la cloture precedente ({gold.change_pct:+.2f}%).")
+
+    if gold.period_change_pct >= 1.00:
+        score += 1
+        reasons.append(f"La tendance courte reste constructive sur la fenetre observee ({gold.period_change_pct:+.2f}%).")
+    elif gold.period_change_pct <= -1.00:
+        score -= 1
+        reasons.append(f"La tendance courte reste fragile sur la fenetre observee ({gold.period_change_pct:+.2f}%).")
+
+    if dxy.change_pct <= -0.20:
+        score += 2
+        reasons.append(f"Le DXY recule ({dxy.change_pct:+.2f}%), ce qui soutient souvent l'or.")
+    elif dxy.change_pct >= 0.20:
+        score -= 2
+        reasons.append(f"Le DXY remonte ({dxy.change_pct:+.2f}%), ce qui pese souvent sur l'or.")
+
+    us10y_change_bps = (us10y.change_abs * 100)
+    if us10y_change_bps <= -3:
+        score += 2
+        reasons.append(f"Le 10 ans US baisse d'environ {us10y_change_bps:+.1f} bps, un support pour l'or.")
+    elif us10y_change_bps >= 3:
+        score -= 2
+        reasons.append(f"Le 10 ans US monte d'environ {us10y_change_bps:+.1f} bps, un vent contraire pour l'or.")
+
+    return score, reasons
+
+
+def classify_bias(score: int) -> str:
+    if score >= 5:
+        return "bullish"
+    if score >= 2:
+        return "slightly bullish"
+    if score <= -5:
+        return "bearish"
+    if score <= -2:
+        return "slightly bearish"
+    return "neutral"
+
+
+def filter_news_by_categories(news: list[NewsItem], categories: set[str]) -> list[NewsItem]:
+    return [item for item in news if item.category in categories]
+
+
+def count_keyword_matches(items: list[NewsItem], keywords: set[str]) -> int:
+    total = 0
+    for item in items:
+        text = f"{item.title} {' '.join(item.score_reasons)}".lower()
+        if any(keyword in text for keyword in keywords):
+            total += 1
+    return total
+
+
+def resolve_signal_label(
+    positive_hits: int,
+    negative_hits: int,
+    positive_label: str,
+    negative_label: str,
+    neutral_label: str,
+) -> str:
+    if positive_hits > negative_hits and positive_hits > 0:
+        return positive_label
+    if negative_hits > positive_hits and negative_hits > 0:
+        return negative_label
+    return neutral_label
+
+
+def build_geopolitical_analysis(news: list[NewsItem]) -> GeopoliticalAnalysis:
+    risk_items = filter_news_by_categories(news, {"geopolitical", "risk_vix"})
+    central_bank_items = filter_news_by_categories(news, {"macro_fed", "macro_cpi", "macro_nfp", "events_fomc"})
+    physical_items = filter_news_by_categories(news, {"physical_demand", "gold"})
+    spec_items = filter_news_by_categories(news, {"sentiment_cot"})
+    etf_items = filter_news_by_categories(news, {"sentiment_etf"})
+    open_interest_items = filter_news_by_categories(news, {"sentiment_oi"})
+    vix_items = filter_news_by_categories(news, {"risk_vix"})
+    event_items = filter_news_by_categories(
+        news,
+        {"events_calendar", "events_fomc", "macro_fed", "macro_cpi", "macro_nfp", "geopolitical", "risk_vix", "gold"},
+    )
+
+    risk_off_pos = count_keyword_matches(risk_items, RISK_OFF_POSITIVE_KEYWORDS)
+    risk_off_neg = count_keyword_matches(risk_items, RISK_OFF_NEGATIVE_KEYWORDS)
+    central_bank_dovish = count_keyword_matches(central_bank_items, CENTRAL_BANK_DOVISH_KEYWORDS)
+    central_bank_hawkish = count_keyword_matches(central_bank_items, CENTRAL_BANK_HAWKISH_KEYWORDS)
+    physical_pos = count_keyword_matches(physical_items, PHYSICAL_DEMAND_POSITIVE_KEYWORDS)
+    physical_neg = count_keyword_matches(physical_items, PHYSICAL_DEMAND_NEGATIVE_KEYWORDS)
+    specs_long = count_keyword_matches(spec_items, SPECULATORS_LONG_KEYWORDS)
+    specs_short = count_keyword_matches(spec_items, SPECULATORS_SHORT_KEYWORDS)
+    etf_inflows = count_keyword_matches(etf_items, ETF_INFLOW_KEYWORDS)
+    etf_outflows = count_keyword_matches(etf_items, ETF_OUTFLOW_KEYWORDS)
+    oi_up = count_keyword_matches(open_interest_items, OPEN_INTEREST_UP_KEYWORDS)
+    oi_down = count_keyword_matches(open_interest_items, OPEN_INTEREST_DOWN_KEYWORDS)
+    vix_risk_off = count_keyword_matches(vix_items, VIX_RISK_OFF_KEYWORDS)
+    vix_risk_on = count_keyword_matches(vix_items, VIX_RISK_ON_KEYWORDS)
+
+    risk_off_status = resolve_signal_label(risk_off_pos, risk_off_neg, "actif", "en reflux", "mixte")
+    central_bank_bias = resolve_signal_label(
+        central_bank_dovish,
+        central_bank_hawkish,
+        "accommodant",
+        "restrictif",
+        "mitige",
+    )
+    physical_demand_trend = resolve_signal_label(
+        physical_pos,
+        physical_neg,
+        "achats en hausse",
+        "achats en ralentissement",
+        "flux physiques mixtes",
+    )
+    large_speculators = resolve_signal_label(
+        specs_long,
+        specs_short,
+        "net long",
+        "net short",
+        "positionnement mixte",
+    )
+    etf_flows = resolve_signal_label(
+        etf_inflows,
+        etf_outflows,
+        "inflows",
+        "outflows",
+        "flux mixtes",
+    )
+    comex_open_interest = resolve_signal_label(
+        oi_up,
+        oi_down,
+        "en hausse",
+        "en baisse",
+        "sans tendance nette",
+    )
+    vix_tone = resolve_signal_label(
+        vix_risk_off,
+        vix_risk_on,
+        "risk-off",
+        "risk-on",
+        "neutre",
+    )
+
+    score = 50
+    reasons: list[str] = []
+
+    if risk_off_status == "actif":
+        score += 14
+        reasons.append("Evenement risk-off actif detecte via les headlines geopolitiques ou de stress.")
+    elif risk_off_status == "en reflux":
+        score -= 8
+        reasons.append("Le stress geopol ou bancaire semble plutot se calmer.")
+    else:
+        reasons.append("Le risque geopol reste present mais sans signal unique de panique durable.")
+
+    if central_bank_bias == "accommodant":
+        score += 10
+        reasons.append("Le ton des banques centrales ressort plutot accommodant pour l'or.")
+    elif central_bank_bias == "restrictif":
+        score -= 10
+        reasons.append("Le ton des banques centrales ressort plutot restrictif.")
+    else:
+        reasons.append("Le ton des banques centrales reste mitige.")
+
+    if physical_demand_trend == "achats en hausse":
+        score += 8
+        reasons.append("La demande physique Chine/Inde/banques centrales parait constructive.")
+    elif physical_demand_trend == "achats en ralentissement":
+        score -= 8
+        reasons.append("La demande physique parait moins porteuse.")
+    else:
+        reasons.append("La demande physique reste mixte dans les headlines recuperees.")
+
+    if large_speculators == "net long":
+        score += 6
+        reasons.append("Les large speculators ressortent plutot net long sur les Gold Futures.")
+    elif large_speculators == "net short":
+        score -= 6
+        reasons.append("Les large speculators ressortent plutot net short.")
+    else:
+        reasons.append("Le positionnement COT des large speculators reste peu lisible.")
+
+    if etf_flows == "inflows":
+        score += 6
+        reasons.append("Les flux ETF GLD/IAU paraissent orientes en entrees.")
+    elif etf_flows == "outflows":
+        score -= 6
+        reasons.append("Les flux ETF GLD/IAU paraissent orientes en sorties.")
+    else:
+        reasons.append("Les flux ETF restent mixtes.")
+
+    if comex_open_interest == "en hausse":
+        score += 4
+        reasons.append("L'open interest COMEX monte, signe d'engagement croissant.")
+    elif comex_open_interest == "en baisse":
+        score -= 4
+        reasons.append("L'open interest COMEX recule, signe possible de de-risking.")
+    else:
+        reasons.append("L'open interest COMEX ne donne pas encore de direction propre.")
+
+    if vix_tone == "risk-off":
+        score += 5
+        reasons.append("Le VIX/fear gauge penche vers l'aversion au risque.")
+    elif vix_tone == "risk-on":
+        score -= 5
+        reasons.append("Le VIX/fear gauge ne confirme pas un besoin fort de couverture.")
+    else:
+        reasons.append("Le VIX reste neutre.")
+
+    event_watch = [item.title for item in sorted(event_items, key=lambda item: item.published_at, reverse=True)[:5]]
+    score = round(clamp(score, 20, 85))
+
+    if score >= 60:
+        summary = (
+            "Le cadrage geopolitique et les flux restent plutot porteurs pour l'or: "
+            "risk-off present ou latent, ton des banques centrales moins hostile et soutien des flux."
+        )
+    elif score <= 45:
+        summary = (
+            "Le cadrage geopolitique et les flux ne soutiennent pas clairement l'or: "
+            "stress limite, ton monetaire plus restrictif ou flux moins favorables."
+        )
+    else:
+        summary = (
+            "Le cadrage geopolitique reste melange: quelques elements risk-off existent, "
+            "mais les flux et la macro ne convergent pas encore assez."
+        )
+
+    return GeopoliticalAnalysis(
+        score=score,
+        summary=summary,
+        risk_off_status=risk_off_status,
+        central_bank_bias=central_bank_bias,
+        physical_demand_trend=physical_demand_trend,
+        large_speculators=large_speculators,
+        etf_flows=etf_flows,
+        comex_open_interest=comex_open_interest,
+        vix_tone=vix_tone,
+        event_watch=event_watch,
+        reasons=reasons[:7],
+    )
+
+
+def analyze_market(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnapshot, news: list[NewsItem]) -> AnalysisResult:
+    market_score, market_reasons = build_market_reasons(gold, dxy, us10y)
+    category_scores: dict[str, int] = {}
+    for item in news:
+        category_scores[item.category] = category_scores.get(item.category, 0) + item.score
+
+    normalized_news_score = sum(clamp(value, -2, 2) for value in category_scores.values())
+    news_score = round(clamp(normalized_news_score / 2, -4, 4))
+    geopolitical = build_geopolitical_analysis(news)
+    geopolitical_tilt = round(clamp((geopolitical.score - 50) / 12, -3, 3))
+    total_score = market_score + news_score + geopolitical_tilt
+    bias = classify_bias(total_score)
+    confidence = max(35, min(82, 40 + (abs(total_score) * 4) + (3 if geopolitical.event_watch else 0)))
+
+    bullish_news = [item for item in news if item.score > 0]
+    bearish_news = [item for item in news if item.score < 0]
+    neutral_news = [item for item in news if item.score == 0]
+
+    reasons = market_reasons[:]
+    if news_score > 0:
+        reasons.append("Le flux de headlines est legerement favorable a l'or.")
+    elif news_score < 0:
+        reasons.append("Le flux de headlines penche legerement contre l'or.")
+    else:
+        reasons.append("Les headlines restent mixtes, sans avantage directionnel net.")
+
+    if geopolitical_tilt > 0:
+        reasons.append("Le bloc geopolitique/sentiment/flux ajoute un soutien net a l'or.")
+    elif geopolitical_tilt < 0:
+        reasons.append("Le bloc geopolitique/sentiment/flux ne renforce pas le dossier haussier.")
+    else:
+        reasons.append("Le bloc geopolitique/sentiment/flux reste equilibre.")
+
+    return AnalysisResult(
+        bias=bias,
+        score=total_score,
+        confidence=confidence,
+        reasons=reasons,
+        bullish_news=bullish_news,
+        bearish_news=bearish_news,
+        neutral_news=neutral_news,
+        geopolitical=geopolitical,
+    )
+
+
+def format_price_line(snapshot: SymbolSnapshot, suffix: str = "") -> str:
+    extra = f" {suffix}".rstrip()
+    return (
+        f"- {snapshot.label}: {snapshot.price:.2f}{extra} "
+        f"({snapshot.change_pct:+.2f}% vs cloture precedente, "
+        f"variation courte {snapshot.period_change_pct:+.2f}%)"
+    )
+
+
+def format_yield_line(snapshot: SymbolSnapshot) -> str:
+    return (
+        f"- {snapshot.label}: {snapshot.price:.2f}% "
+        f"({snapshot.change_abs * 100:+.1f} bps vs cloture precedente, "
+        f"variation courte {snapshot.period_change_pct:+.2f}%)"
+    )
+
+
+def clean_display_text(value: str) -> str:
+    cleaned = compact_whitespace(value)
+    if not cleaned:
+        return cleaned
+    if any(marker in cleaned for marker in ("â", "Ã", "Â")):
+        for source_encoding in ("cp1252", "latin-1"):
+            try:
+                repaired = cleaned.encode(source_encoding, "ignore").decode("utf-8", "ignore")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if repaired and repaired != cleaned:
+                cleaned = repaired
+                break
+    replacements = {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00b7": "-",
+        "\u00a0": " ",
+        "\ufffd": "",
+    }
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+    return compact_whitespace(cleaned)
+
+
+def parse_iso_sort_key(iso_text: str) -> datetime:
+    try:
+        return datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+
+
+def headline_sort_key(item: NewsItem) -> tuple[int, datetime]:
+    category_priority = {
+        "geopolitical": 0,
+        "gold": 1,
+        "macro_fed": 2,
+        "macro_cpi": 3,
+        "macro_nfp": 4,
+        "events_fomc": 5,
+        "risk_vix": 6,
+        "sentiment_cot": 7,
+        "sentiment_etf": 8,
+        "sentiment_oi": 9,
+        "physical_demand": 10,
+        "events_calendar": 11,
+    }
+    return (category_priority.get(item.category, 99), parse_iso_sort_key(item.published_at))
+
+
+def text_contains_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(pattern in text for pattern in patterns)
+
+
+def explain_headline_reason(item: NewsItem) -> str:
+    text = normalize_title_for_dedupe(clean_display_text(item.title))
+
+    if text_contains_any(text, ("iran", "middle east", "war", "conflict", "hormuz", "blockade", "shipping", "ports", "oil", "barrel", "fuel", "liquidity")):
+        if text_contains_any(text, ("usd", "dollar", "liquidity")):
+            return "La guerre pousse les investisseurs a chercher de la liquidite immediate en dollar, pas seulement des refuges comme l'or."
+        if text_contains_any(text, ("oil", "barrel", "fuel", "hormuz", "shipping", "ports", "blockade")):
+            return "Le marche craint une perturbation durable du petrole, donc plus d'inflation energie et plus de stress global."
+        return "Le conflit brouille les reperes habituels de marche et augmente l'aversion au risque."
+
+    if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "hike", "higher for longer")):
+        return "Cette headline change la lecture du marche sur le calendrier des taux de la Fed."
+
+    if text_contains_any(text, ("cpi", "inflation", "gasoline", "prices rise", "price pressures")):
+        return "Cette headline dit si l'inflation se calme ou repart, donc si la Fed peut assouplir ou non."
+
+    if text_contains_any(text, ("jobs", "nfp", "nonfarm", "employment", "payroll")):
+        return "Le marche de l'emploi influence directement le dollar, les rendements et les attentes de taux."
+
+    if text_contains_any(text, ("cot", "commitments of traders", "managed money", "speculative")):
+        return "Le COT montre si les speculateurs sont deja charges a l'achat ou a la vente."
+
+    if text_contains_any(text, ("open interest", "positions build", "liquidation")):
+        return "L'open interest dit si le marche construit de nouvelles positions ou s'il se degonfle."
+
+    if text_contains_any(text, ("etf", "gld", "iau", "holdings", "inflows", "outflows")):
+        return "Les flux ETF mesurent si les investisseurs financiers renforcent ou reduisent leur exposition a l'or."
+
+    if text_contains_any(text, ("vix", "fear", "volatility", "risk aversion")):
+        return "Le VIX aide a savoir si le marche cherche de la protection."
+
+    return "Cette information ajoute du contexte, meme si elle ne suffit pas seule a declencher un trade."
+
+
+def explain_headline_gold_impact(item: NewsItem) -> tuple[str, str]:
+    text = normalize_title_for_dedupe(clean_display_text(item.title))
+
+    if text_contains_any(text, ("iran", "middle east", "war", "conflict", "hormuz", "oil", "barrel", "fuel", "blockade", "shipping", "ports")):
+        if text_contains_any(text, ("usd", "dollar", "liquidity")):
+            return (
+                "mixte",
+                "Le risque geopolitique aide l'or comme refuge, mais la demande de dollars liquides peut freiner la hausse a court terme.",
+            )
+        if text_contains_any(text, ("oil", "barrel", "fuel", "inflation")):
+            return (
+                "mixte",
+                "Le choc petrole soutient le theme refuge et inflation pour l'or, mais il peut aussi repousser les baisses de taux de la Fed.",
+            )
+        return ("bullish", "Plus d'incertitude geopolitique soutient en general la demande de couverture sur l'or.")
+
+    if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "dovish", "pause")) or item.category == "macro_fed":
+        if item.score > 0:
+            return ("bullish", "Une Fed percue comme moins restrictive est plutot favorable a l'or.")
+        if item.score < 0:
+            return ("bearish", "Une Fed plus restrictive soutient le dollar et les rendements, donc pese sur l'or.")
+        return ("mixte", "Le message Fed n'est pas assez net pour donner un avantage clair a l'or.")
+
+    if text_contains_any(text, ("cpi", "inflation", "gasoline")) or item.category == "macro_cpi":
+        if item.score > 0:
+            return ("bullish", "Une inflation qui se calme peut reduire la pression sur les taux et aider l'or.")
+        if item.score < 0:
+            return ("bearish", "Une inflation qui repart complique les baisses de taux et peut penaliser l'or.")
+        return ("mixte", "L'effet inflation est partage entre theme refuge et risque de Fed plus dure.")
+
+    if text_contains_any(text, ("jobs", "nfp", "nonfarm", "employment", "payroll")) or item.category == "macro_nfp":
+        if item.score > 0:
+            return ("bullish", "Un emploi plus faible peut detendre le dollar et les rendements, ce qui aide l'or.")
+        if item.score < 0:
+            return ("bearish", "Un emploi solide peut renforcer le dollar et retarder les baisses de taux.")
+        return ("mixte", "Les chiffres de l'emploi ne donnent pas ici un signal directionnel clair.")
+
+    if text_contains_any(text, ("cot", "managed money", "speculative")) or item.category == "sentiment_cot":
+        return ("info", "Le COT ne bouge pas directement le prix intraday, mais il dit si le marche est deja trop charge.")
+
+    if text_contains_any(text, ("open interest",)) or item.category == "sentiment_oi":
+        return ("info", "L'open interest confirme surtout si le mouvement est alimente par de nouveaux engagements.")
+
+    if text_contains_any(text, ("etf", "gld", "iau")) or item.category == "sentiment_etf":
+        return ("info", "Les flux ETF sont utiles pour le fond de marche, plus que pour un declenchement intraday instantane.")
+
+    if text_contains_any(text, ("vix", "fear", "volatility")) or item.category == "risk_vix":
+        return ("mixte", "Une hausse de la peur soutient la couverture, mais selon le contexte le dollar peut capter une partie de ces flux.")
+
+    if item.score > 0:
+        return ("bullish", "Cette headline va plutot dans le sens d'un soutien a l'or.")
+    if item.score < 0:
+        return ("bearish", "Cette headline ajoute plutot une pression a court terme sur l'or.")
+    return ("mixte", "Headline de contexte utile, mais sans impact directionnel propre a elle seule.")
+
+
+def pick_story_headlines(news: list[NewsItem], limit: int = 6) -> list[NewsItem]:
+    selected: list[NewsItem] = []
+    seen: set[str] = set()
+    preferred_categories = [
+        "geopolitical",
+        "macro_fed",
+        "macro_cpi",
+        "macro_nfp",
+        "gold",
+        "risk_vix",
+        "sentiment_cot",
+        "sentiment_etf",
+        "sentiment_oi",
+    ]
+
+    sorted_news = sorted(news, key=headline_sort_key, reverse=False)
+    for category in preferred_categories:
+        for item in sorted_news:
+            if item.category != category:
+                continue
+            key = normalize_title_for_dedupe(item.title)
+            if key in seen:
+                continue
+            selected.append(item)
+            seen.add(key)
+            break
+        if len(selected) >= limit:
+            return selected[:limit]
+
+    for item in sorted(news, key=lambda current: (abs(current.score), parse_iso_sort_key(current.published_at)), reverse=True):
+        key = normalize_title_for_dedupe(item.title)
+        if key in seen:
+            continue
+        selected.append(item)
+        seen.add(key)
+        if len(selected) >= limit:
+            break
+    return selected[:limit]
+
+
+def find_story_for_categories(news: list[NewsItem], *categories: str) -> NewsItem | None:
+    selected = set(categories)
+    for item in pick_story_headlines(news, limit=max(10, len(selected) * 2)):
+        if item.category in selected:
+            return item
+    for item in news:
+        if item.category in selected:
+            return item
+    return None
+
+
+def build_information_digest_items(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    geopolitical: GeopoliticalAnalysis | None,
+) -> list[tuple[str, str, str]]:
+    items: list[tuple[str, str, str]] = []
+    tape_reason = (
+        f"L'or cote {gold.price:.2f}, le DXY fait {dxy.change_pct:+.2f}% et le 10 ans US bouge de "
+        f"{us10y.change_abs * 100:+.1f} bps."
+    )
+    if dxy.change_pct < 0 and us10y.change_abs < 0:
+        tape_impact = "Le tandem dollar plus faible + rendements plus bas soutient clairement l'or pour l'instant."
+    elif dxy.change_pct > 0 and us10y.change_abs > 0:
+        tape_impact = "Dollar et rendements montent ensemble: c'est normalement un frein direct pour l'or."
+    else:
+        tape_impact = "Les moteurs macro sont melanges, donc l'or ne recoit pas un soutien propre et lineaire."
+    items.append(("Tape du jour", tape_reason, tape_impact))
+
+    geo_story = find_story_for_categories(news, "geopolitical", "gold")
+    if geo_story:
+        _geo_label, geo_impact = explain_headline_gold_impact(geo_story)
+        items.append(
+            (
+                "Geopolitique",
+                clean_display_text(geo_story.title),
+                f"{explain_headline_reason(geo_story)} {geo_impact}",
+            )
+        )
+    elif geopolitical:
+        items.append(
+            (
+                "Geopolitique",
+                f"Risk-off {geopolitical.risk_off_status}, banques centrales {geopolitical.central_bank_bias}.",
+                geopolitical.summary,
+            )
+        )
+
+    macro_story = find_story_for_categories(news, "macro_fed", "macro_cpi", "macro_nfp", "events_fomc")
+    if macro_story:
+        _macro_label, macro_impact = explain_headline_gold_impact(macro_story)
+        items.append(
+            (
+                "Macro US",
+                clean_display_text(macro_story.title),
+                f"{explain_headline_reason(macro_story)} {macro_impact}",
+            )
+        )
+
+    flow_story = find_story_for_categories(news, "sentiment_cot", "sentiment_etf", "sentiment_oi", "physical_demand", "risk_vix")
+    if flow_story:
+        _flow_label, flow_impact = explain_headline_gold_impact(flow_story)
+        items.append(
+            (
+                "Flux et sentiment",
+                clean_display_text(flow_story.title),
+                f"{explain_headline_reason(flow_story)} {flow_impact}",
+            )
+        )
+    elif geopolitical:
+        items.append(
+            (
+                "Flux et sentiment",
+                (
+                    f"Large specs {geopolitical.large_speculators}, ETF {geopolitical.etf_flows}, "
+                    f"open interest {geopolitical.comex_open_interest}."
+                ),
+                "Cela dit si la hausse est construite par de nouveaux acheteurs ou si elle reste surtout defensive."
+            )
+        )
+
+    return items[:4]
+
+
+def render_news_lines(items: list[NewsItem], max_items: int) -> list[str]:
+    lines: list[str] = []
+    for item in pick_story_headlines(items, limit=max_items):
+        timestamp = item.published_at.replace("+00:00", "Z")
+        impact_label, impact_text = explain_headline_gold_impact(item)
+        lines.append(f"- [{clean_display_text(item.source)}] {clean_display_text(item.title)} ({timestamp})")
+        lines.append(f"  En clair: {explain_headline_reason(item)}")
+        lines.append(f"  Impact sur l'or ({impact_label}): {impact_text}")
+        if item.link:
+            lines.append(f"  {item.link}")
+    return lines
+
+
+def heuristic_decision_sentence(analysis: AnalysisResult) -> str:
+    if analysis.bias == "bullish":
+        return "Biais court terme: haussier, mais a confirmer seulement si le dollar reste mou et les taux poursuivent leur detente."
+    if analysis.bias == "slightly bullish":
+        return "Biais court terme: legerement haussier, avec besoin d'une confirmation par les news macro et le comportement du DXY."
+    if analysis.bias == "bearish":
+        return "Biais court terme: baissier, surtout si les rendements US et le dollar reprennent de la force."
+    if analysis.bias == "slightly bearish":
+        return "Biais court terme: legerement baissier, sans signal de conviction tres eleve."
+    return "Biais court terme: neutre, le contexte ne donne pas encore un avantage propre dans un sens."
+
+
+def call_openai_analysis(payload: dict[str, Any]) -> str | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL")
+    if not api_key or not model:
+        return None
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return "Analyse IA indisponible: la librairie 'openai' n'est pas installee."
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=model,
+            input=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        "Analyse le briefing suivant et genere une synthese prudente.\n\n"
+                        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+                    ),
+                },
+            ],
+        )
+        text = getattr(response, "output_text", None)
+        if text:
+            return text.strip()
+        return "Analyse IA indisponible: la reponse n'a pas retourne de texte exploitable."
+    except Exception as exc:  # pragma: no cover - network/runtime branch
+        return f"Analyse IA indisponible: {exc}"
+
+
+def build_payload(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    analysis: AnalysisResult,
+    geopolitical_analysis: GeopoliticalAnalysis | None = None,
+    fundamental_recommendation: TradeRecommendation | None = None,
+    technical_recommendation: TradeRecommendation | None = None,
+    technical_timeframes: list[TechnicalReading] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "generated_at": iso_now(),
+        "market_snapshot": {
+            "xauusd_spot": {
+                "symbol": gold.symbol,
+                "price": round(gold.price, 2),
+                "previous_close": round(gold.previous_close, 2),
+                "change_pct": round(gold.change_pct, 2),
+                "short_term_change_pct": round(gold.period_change_pct, 2),
+                "support": round(gold.support, 2) if gold.support is not None else None,
+                "resistance": round(gold.resistance, 2) if gold.resistance is not None else None,
+                "day_high": round(gold.day_high, 2) if gold.day_high is not None else None,
+                "day_low": round(gold.day_low, 2) if gold.day_low is not None else None,
+                "recent_closes": [
+                    {
+                        "timestamp": point.timestamp,
+                        "close": round(point.close, 2),
+                    }
+                    for point in gold.points[-40:]
+                ],
+                "intraday_candles": [
+                    {
+                        "timestamp": point.timestamp,
+                        "open": round((point.open if point.open is not None else point.close), 2),
+                        "high": round((point.high if point.high is not None else point.close), 2),
+                        "low": round((point.low if point.low is not None else point.close), 2),
+                        "close": round(point.close, 2),
+                        "volume": point.volume,
+                    }
+                    for point in gold.intraday_points[-80:]
+                ],
+                "last_update": gold.fetched_at,
+                "source_name": "Investing.com",
+                "source_url": INVESTING_XAUUSD_URL,
+            },
+            "dxy": {
+                "symbol": dxy.symbol,
+                "price": round(dxy.price, 3),
+                "change_pct": round(dxy.change_pct, 2),
+            },
+            "us10y_yield": {
+                "symbol": us10y.symbol,
+                "price": round(us10y.price, 3),
+                "change_bps": round(us10y.change_abs * 100, 1),
+            },
+        },
+        "heuristic_bias": {
+            "bias": analysis.bias,
+            "score": analysis.score,
+            "confidence": analysis.confidence,
+            "reasons": analysis.reasons,
+        },
+        "headlines": [
+            {
+                "title": item.title,
+                "source": item.source,
+                "published_at": item.published_at,
+                "category": item.category,
+                "score": item.score,
+                "score_reasons": item.score_reasons,
+                "link": item.link,
+            }
+            for item in news
+        ],
+        "note": (
+            "This is an information briefing for research. "
+            "It is not personalized financial advice."
+        ),
+    }
+
+    if fundamental_recommendation:
+        payload["fundamental_recommendation"] = asdict(fundamental_recommendation)
+    if technical_recommendation:
+        payload["technical_recommendation"] = asdict(technical_recommendation)
+    if geopolitical_analysis:
+        payload["geopolitical_analysis"] = asdict(geopolitical_analysis)
+    if technical_timeframes:
+        payload["technical_timeframes"] = [asdict(reading) for reading in technical_timeframes]
+
+    return payload
+
+
+def build_price_points(entries: list[dict[str, Any]]) -> list[PricePoint]:
+    points: list[PricePoint] = []
+    for entry in entries:
+        close = parse_float(entry.get("close"))
+        if close is None:
+            continue
+        volume_raw = entry.get("volume")
+        points.append(
+            PricePoint(
+                timestamp=int(entry.get("timestamp", 0) or 0),
+                close=close,
+                high=parse_float(entry.get("high")),
+                low=parse_float(entry.get("low")),
+                open=parse_float(entry.get("open")),
+                volume=int(volume_raw) if volume_raw is not None else None,
+            )
+        )
+    return points
+
+
+def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
+    market_snapshot = payload.get("market_snapshot", {})
+    gold_data = market_snapshot.get("xauusd_spot", {})
+    dxy_data = market_snapshot.get("dxy", {})
+    us10y_data = market_snapshot.get("us10y_yield", {})
+    heuristic = payload.get("heuristic_bias", {})
+
+    gold_price = float(gold_data.get("price", 0.0) or 0.0)
+    gold_previous_close = float(gold_data.get("previous_close", gold_price) or gold_price)
+    gold_points = build_price_points(gold_data.get("recent_closes", []))
+    intraday_points = build_price_points(gold_data.get("intraday_candles", []))
+
+    dxy_price = float(dxy_data.get("price", 0.0) or 0.0)
+    dxy_change_pct = float(dxy_data.get("change_pct", 0.0) or 0.0)
+    dxy_previous_close = dxy_price / (1 + (dxy_change_pct / 100)) if dxy_change_pct else dxy_price
+
+    us10y_price = float(us10y_data.get("price", 0.0) or 0.0)
+    us10y_change_bps = float(us10y_data.get("change_bps", 0.0) or 0.0)
+    us10y_previous_close = us10y_price - (us10y_change_bps / 100.0)
+
+    gold = SymbolSnapshot(
+        symbol=str(gold_data.get("symbol", "XAU/USD")),
+        label="XAU/USD Spot",
+        price=gold_price,
+        previous_close=gold_previous_close,
+        change_abs=gold_price - gold_previous_close,
+        change_pct=float(gold_data.get("change_pct", 0.0) or 0.0),
+        period_change_pct=float(gold_data.get("short_term_change_pct", 0.0) or 0.0),
+        day_high=parse_float(gold_data.get("day_high")),
+        day_low=parse_float(gold_data.get("day_low")),
+        support=parse_float(gold_data.get("support")),
+        resistance=parse_float(gold_data.get("resistance")),
+        fetched_at=str(payload.get("generated_at", iso_now())),
+        points=gold_points or [PricePoint(timestamp=int(time.time()), close=gold_price)],
+        intraday_points=intraday_points,
+    )
+    dxy = SymbolSnapshot(
+        symbol=str(dxy_data.get("symbol", "DX-Y.NYB")),
+        label="US Dollar Index",
+        price=dxy_price,
+        previous_close=dxy_previous_close,
+        change_abs=dxy_price - dxy_previous_close,
+        change_pct=dxy_change_pct,
+        period_change_pct=dxy_change_pct,
+        day_high=None,
+        day_low=None,
+        support=None,
+        resistance=None,
+        fetched_at=str(payload.get("generated_at", iso_now())),
+        points=[PricePoint(timestamp=int(time.time()), close=dxy_price)],
+    )
+    us10y = SymbolSnapshot(
+        symbol=str(us10y_data.get("symbol", "^TNX")),
+        label="US 10Y",
+        price=us10y_price,
+        previous_close=us10y_previous_close,
+        change_abs=us10y_price - us10y_previous_close,
+        change_pct=0.0,
+        period_change_pct=0.0,
+        day_high=None,
+        day_low=None,
+        support=None,
+        resistance=None,
+        fetched_at=str(payload.get("generated_at", iso_now())),
+        points=[PricePoint(timestamp=int(time.time()), close=us10y_price)],
+    )
+
+    news = [
+        NewsItem(
+            title=str(item.get("title", "")),
+            source=str(item.get("source", "Source inconnue")),
+            link=str(item.get("link", "")),
+            published_at=str(item.get("published_at", iso_now())),
+            category=str(item.get("category", "gold")),
+            score=int(item.get("score", 0) or 0),
+            score_reasons=list(item.get("score_reasons", [])),
+        )
+        for item in payload.get("headlines", [])
+    ]
+
+    geopolitical_payload = payload.get("geopolitical_analysis")
+    geopolitical_analysis = (
+        GeopoliticalAnalysis(
+            score=int(geopolitical_payload.get("score", 50)),
+            summary=str(geopolitical_payload.get("summary", "Lecture geopolitique indisponible.")),
+            risk_off_status=str(geopolitical_payload.get("risk_off_status", "mitige")),
+            central_bank_bias=str(geopolitical_payload.get("central_bank_bias", "mitige")),
+            physical_demand_trend=str(geopolitical_payload.get("physical_demand_trend", "mixte")),
+            large_speculators=str(geopolitical_payload.get("large_speculators", "mixte")),
+            etf_flows=str(geopolitical_payload.get("etf_flows", "mixte")),
+            comex_open_interest=str(geopolitical_payload.get("comex_open_interest", "mixte")),
+            vix_tone=str(geopolitical_payload.get("vix_tone", "neutre")),
+            event_watch=list(geopolitical_payload.get("event_watch", [])),
+            reasons=list(geopolitical_payload.get("reasons", [])),
+        )
+        if isinstance(geopolitical_payload, dict)
+        else None
+    )
+
+    analysis = AnalysisResult(
+        bias=str(heuristic.get("bias", "neutral")),
+        score=int(heuristic.get("score", 0) or 0),
+        confidence=int(heuristic.get("confidence", 50) or 50),
+        reasons=list(heuristic.get("reasons", [])),
+        bullish_news=[],
+        bearish_news=[],
+        neutral_news=[],
+        geopolitical=geopolitical_analysis,
+    )
+
+    fundamental_payload = payload.get("fundamental_recommendation")
+    fundamental_recommendation = (
+        TradeRecommendation(
+            mode=str(fundamental_payload.get("mode", "Fondamental")),
+            verdict=str(fundamental_payload.get("verdict", "BUY")),
+            score=int(fundamental_payload.get("score", 50) or 50),
+            summary=str(fundamental_payload.get("summary", "Lecture fondamentale indisponible.")),
+            reasons=list(fundamental_payload.get("reasons", [])),
+            stop_loss=float(fundamental_payload.get("stop_loss", gold_price) or gold_price),
+            take_profit_1=float(fundamental_payload.get("take_profit_1", gold_price) or gold_price),
+            take_profit_2=float(fundamental_payload.get("take_profit_2", gold_price) or gold_price),
+            source_note=str(fundamental_payload.get("source_note", "Snapshot precedent re-utilise.")),
+        )
+        if isinstance(fundamental_payload, dict)
+        else None
+    )
+    technical_payload = payload.get("technical_recommendation")
+    technical_recommendation = (
+        TradeRecommendation(
+            mode=str(technical_payload.get("mode", "Technique")),
+            verdict=str(technical_payload.get("verdict", "BUY")),
+            score=int(technical_payload.get("score", 50) or 50),
+            summary=str(technical_payload.get("summary", "Lecture technique indisponible.")),
+            reasons=list(technical_payload.get("reasons", [])),
+            stop_loss=float(technical_payload.get("stop_loss", gold_price) or gold_price),
+            take_profit_1=float(technical_payload.get("take_profit_1", gold_price) or gold_price),
+            take_profit_2=float(technical_payload.get("take_profit_2", gold_price) or gold_price),
+            source_note=str(technical_payload.get("source_note", "Snapshot precedent re-utilise.")),
+        )
+        if isinstance(technical_payload, dict)
+        else None
+    )
+    technical_timeframes = [
+        TechnicalReading(
+            timeframe=str(item.get("timeframe", "")),
+            close=float(item.get("close", 0.0) or 0.0),
+            ema20=float(item.get("ema20", 0.0) or 0.0),
+            ema50=float(item.get("ema50", 0.0) or 0.0),
+            ema100=float(item.get("ema100", 0.0) or 0.0),
+            ema200=float(item.get("ema200", 0.0) or 0.0),
+            rsi7=float(item.get("rsi7", 0.0) or 0.0),
+            macd_line=float(item.get("macd_line", 0.0) or 0.0),
+            macd_signal=float(item.get("macd_signal", 0.0) or 0.0),
+            macd_histogram=float(item.get("macd_histogram", 0.0) or 0.0),
+            volume_ratio=float(item.get("volume_ratio", 0.0) or 0.0),
+            atr14=float(item.get("atr14", 0.0) or 0.0),
+            score=float(item.get("score", 0.0) or 0.0),
+            verdict=str(item.get("verdict", "NEUTRAL")),
+            reasons=list(item.get("reasons", [])),
+        )
+        for item in payload.get("technical_timeframes", [])
+    ]
+
+    return BriefingBundle(
+        gold=gold,
+        dxy=dxy,
+        us10y=us10y,
+        news=news,
+        analysis=analysis,
+        payload=payload,
+        ai_analysis=payload.get("ai_summary"),
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        technical_timeframes=technical_timeframes,
+        executive_summary=str(payload.get("executive_summary", "")),
+    )
+
+
+def load_cached_bundle(data_json_path: Path | None = None) -> BriefingBundle | None:
+    candidates: list[Path] = []
+    if data_json_path is not None:
+        candidates.append(data_json_path)
+    default_path = Path("reports") / "xauusd_data.json"
+    if default_path not in candidates:
+        candidates.append(default_path)
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+            return build_bundle_from_payload(payload)
+        except Exception:
+            continue
+    return None
+
+
+def render_report(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    analysis: AnalysisResult,
+    ai_analysis: str | None,
+    geopolitical_analysis: GeopoliticalAnalysis | None = None,
+    fundamental_recommendation: TradeRecommendation | None = None,
+    technical_recommendation: TradeRecommendation | None = None,
+    executive_summary: str | None = None,
+) -> str:
+    support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
+    resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
+    generated_at = iso_now().replace("+00:00", "Z")
+
+    lines = [
+        "# XAU/USD Market Briefing",
+        "",
+        f"Genere a {generated_at}",
+        "",
+        "## Resume Executif",
+        executive_summary or "Resume indisponible.",
+        "",
+        "## Snapshot",
+        f"- Source prix spot: Investing.com XAU/USD ({INVESTING_XAUUSD_URL})",
+        format_price_line(gold),
+        format_price_line(dxy),
+        format_yield_line(us10y),
+        f"- Zone technique courte: support ~ {support} / resistance ~ {resistance}",
+        "",
+        "## Lecture Rapide",
+        f"- Score heuristique: {analysis.score}",
+        f"- Confiance heuristique: {analysis.confidence}/100",
+        f"- {heuristic_decision_sentence(analysis)}",
+    ]
+
+    if fundamental_recommendation:
+        lines.extend(
+            [
+                "",
+                "## Verdict Fondamental",
+                f"- Score: {fundamental_recommendation.score}/100",
+                f"- Verdict: {fundamental_recommendation.verdict}",
+                f"- SL: {fundamental_recommendation.stop_loss:.2f}",
+                f"- TP1: {fundamental_recommendation.take_profit_1:.2f}",
+                f"- TP2: {fundamental_recommendation.take_profit_2:.2f}",
+                f"- Resume: {fundamental_recommendation.summary}",
+            ]
+        )
+
+    if technical_recommendation:
+        lines.extend(
+            [
+                "",
+                "## Verdict Technique",
+                f"- Score: {technical_recommendation.score}/100",
+                f"- Verdict: {technical_recommendation.verdict}",
+                f"- SL: {technical_recommendation.stop_loss:.2f}",
+                f"- TP1: {technical_recommendation.take_profit_1:.2f}",
+                f"- TP2: {technical_recommendation.take_profit_2:.2f}",
+                f"- Resume: {technical_recommendation.summary}",
+            ]
+        )
+
+    if geopolitical_analysis:
+        lines.extend(
+            [
+                "",
+                "## Lecture Geopolitique, Sentiment & Flux",
+                f"- Score: {geopolitical_analysis.score}/100",
+                f"- Evenement risk-off actif: {geopolitical_analysis.risk_off_status}",
+                f"- Sentiment banques centrales: {geopolitical_analysis.central_bank_bias}",
+                f"- Achats physiques Chine/Inde/banques centrales: {geopolitical_analysis.physical_demand_trend}",
+                f"- Large Speculators sur Gold Futures: {geopolitical_analysis.large_speculators}",
+                f"- Flux ETF GLD/IAU: {geopolitical_analysis.etf_flows}",
+                f"- Open interest COMEX: {geopolitical_analysis.comex_open_interest}",
+                f"- VIX / peur de marche: {geopolitical_analysis.vix_tone}",
+                f"- Resume: {geopolitical_analysis.summary}",
+            ]
+        )
+        if geopolitical_analysis.reasons:
+            lines.append("- Signaux geopolitiques dominants:")
+            for reason in geopolitical_analysis.reasons:
+                lines.append(f"  - {reason}")
+        if geopolitical_analysis.event_watch:
+            lines.append("- Evenements du jour / a surveiller:")
+            for event in geopolitical_analysis.event_watch:
+                lines.append(f"  - {clean_display_text(event)}")
+
+    if analysis.reasons:
+        lines.append("- Facteurs dominants:")
+        for reason in analysis.reasons:
+            lines.append(f"  - {reason}")
+
+    lines.extend(["", "## Headlines expliquees"])
+    headlines = render_news_lines(news, max_items=8)
+    if headlines:
+        lines.extend(headlines)
+    else:
+        lines.append("- Sources headlines indisponibles temporairement. Le rapport continue avec la lecture prix / DXY / taux / geo du moment.")
+
+    if ai_analysis:
+        lines.extend(["", "## Synthese IA", ai_analysis])
+
+    lines.extend(
+        [
+            "",
+            "## Avertissement",
+            "Ce rapport sert d'aide a la lecture du marche. "
+            "Ce n'est pas un conseil financier personnalise ni un signal de trading garanti.",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def format_bias_label(bias: str) -> str:
+    labels = {
+        "bullish": "Haussier",
+        "slightly bullish": "Legerement haussier",
+        "bearish": "Baissier",
+        "slightly bearish": "Legerement baissier",
+        "neutral": "Neutre",
+    }
+    return labels.get(bias, bias.title())
+
+
+def format_bias_class(bias: str) -> str:
+    if "bullish" in bias:
+        return "bullish"
+    if "bearish" in bias:
+        return "bearish"
+    return "neutral"
+
+
+def format_timestamp_for_humans(iso_text: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso_text.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return iso_text
+
+
+def format_headline_tone(score: int) -> tuple[str, str]:
+    if score > 0:
+        return "positive", "Support pour l'or"
+    if score < 0:
+        return "negative", "Pression sur l'or"
+    return "neutral", "Impact mixte"
+
+
+def format_number(value: float | None, decimals: int = 2, suffix: str = "") -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.{decimals}f}{suffix}"
+
+
+def sparkline_svg(points: list[PricePoint]) -> str:
+    closes = [point.close for point in points[-36:] if point.close is not None]
+    width = 680
+    height = 220
+    padding = 18
+
+    if len(closes) < 2:
+        return (
+            '<svg viewBox="0 0 680 220" role="img" aria-label="Serie indisponible">'
+            '<rect width="680" height="220" fill="#fffdf8"></rect>'
+            '<text x="340" y="116" text-anchor="middle" fill="#8a5b12" font-size="16"'
+            ' font-family="JetBrains Mono, IBM Plex Mono, Courier New, monospace">'
+            "Serie de prix indisponible"
+            "</text></svg>"
+        )
+
+    minimum = min(closes)
+    maximum = max(closes)
+    spread = maximum - minimum or 1.0
+    inner_width = width - (padding * 2)
+    inner_height = height - (padding * 2)
+    line_color = "#00ff88" if closes[-1] >= closes[0] else "#ff3c5a"
+
+    polyline_points: list[str] = []
+    for index, close in enumerate(closes):
+        x = padding + (index / (len(closes) - 1)) * inner_width
+        y = height - padding - ((close - minimum) / spread) * inner_height
+        polyline_points.append(f"{x:.2f},{y:.2f}")
+
+    last_x, last_y = polyline_points[-1].split(",")
+    quarter_y = padding + (inner_height * 0.25)
+    mid_y = padding + (inner_height * 0.50)
+    three_quarter_y = padding + (inner_height * 0.75)
+
+    return f"""
+<svg viewBox="0 0 {width} {height}" role="img" aria-label="Evolution recente du prix de l'or">
+  <rect width="{width}" height="{height}" fill="#fffdf8"></rect>
+  <line x1="{padding}" y1="{padding}" x2="{padding}" y2="{height - padding}" stroke="#e7dccd" stroke-width="1"></line>
+  <line x1="{padding}" y1="{quarter_y:.2f}" x2="{width - padding}" y2="{quarter_y:.2f}" stroke="#e7dccd" stroke-width="1"></line>
+  <line x1="{padding}" y1="{mid_y:.2f}" x2="{width - padding}" y2="{mid_y:.2f}" stroke="#e7dccd" stroke-width="1"></line>
+  <line x1="{padding}" y1="{three_quarter_y:.2f}" x2="{width - padding}" y2="{three_quarter_y:.2f}" stroke="#e7dccd" stroke-width="1"></line>
+  <line x1="{padding}" y1="{last_y}" x2="{width - padding}" y2="{last_y}" stroke="#8a5b12" stroke-width="1" stroke-dasharray="6 6" opacity="0.75"></line>
+  <polyline fill="none" stroke="{line_color}" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter"
+    points="{' '.join(polyline_points)}"></polyline>
+  <rect x="{float(last_x) - 3:.2f}" y="{float(last_y) - 3:.2f}" width="6" height="6" fill="#8a5b12"></rect>
+</svg>
+""".strip()
+
+
+def candlestick_svg(points: list[PricePoint], current_price: float) -> str:
+    candles = [point for point in points[-48:] if point.open is not None]
+    width = 940
+    height = 320
+    padding_left = 18
+    padding_right = 74
+    padding_top = 16
+    padding_bottom = 26
+
+    if len(candles) < 2:
+        return (
+            '<svg viewBox="0 0 940 320" role="img" aria-label="Bougies indisponibles">'
+            '<rect width="940" height="320" fill="#fffdf8"></rect>'
+            '<text x="470" y="164" text-anchor="middle" fill="#8a5b12" font-size="16"'
+            ' font-family="JetBrains Mono, IBM Plex Mono, Courier New, monospace">'
+            "Bougies intraday indisponibles"
+            "</text></svg>"
+        )
+
+    lows = [point.low if point.low is not None else min(point.open or point.close, point.close) for point in candles]
+    highs = [point.high if point.high is not None else max(point.open or point.close, point.close) for point in candles]
+    lower_bound = min(min(lows), current_price)
+    upper_bound = max(max(highs), current_price)
+    spread = upper_bound - lower_bound or 1.0
+
+    inner_width = width - padding_left - padding_right
+    inner_height = height - padding_top - padding_bottom
+    slot = inner_width / len(candles)
+    body_width = max(4.0, min(10.0, slot * 0.55))
+
+    def y_scale(value: float) -> float:
+        return padding_top + ((upper_bound - value) / spread) * inner_height
+
+    grid_lines = []
+    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = padding_top + (inner_height * fraction)
+        grid_lines.append(
+            f'<line x1="{padding_left}" y1="{y:.2f}" x2="{width - padding_right}" y2="{y:.2f}" stroke="#e7dccd" stroke-width="1"></line>'
+        )
+
+    candle_nodes: list[str] = []
+    for index, candle in enumerate(candles):
+        open_price = candle.open if candle.open is not None else candle.close
+        close_price = candle.close
+        high_price = candle.high if candle.high is not None else max(open_price, close_price)
+        low_price = candle.low if candle.low is not None else min(open_price, close_price)
+        x_center = padding_left + (index * slot) + (slot / 2)
+        wick_top = y_scale(high_price)
+        wick_bottom = y_scale(low_price)
+        open_y = y_scale(open_price)
+        close_y = y_scale(close_price)
+        body_top = min(open_y, close_y)
+        body_height = max(abs(close_y - open_y), 1.5)
+        color = "#00ff88" if close_price >= open_price else "#ff3c5a"
+        candle_nodes.append(
+            f'<line x1="{x_center:.2f}" y1="{wick_top:.2f}" x2="{x_center:.2f}" y2="{wick_bottom:.2f}" stroke="{color}" stroke-width="1.4"></line>'
+            f'<rect x="{(x_center - (body_width / 2)):.2f}" y="{body_top:.2f}" width="{body_width:.2f}" height="{body_height:.2f}" fill="{color}"></rect>'
+        )
+
+    price_y = y_scale(current_price)
+    label_y = max(padding_top + 12, min(height - padding_bottom - 4, price_y - 6))
+    price_line = (
+        f'<line x1="{padding_left}" y1="{price_y:.2f}" x2="{width - padding_right}" y2="{price_y:.2f}" '
+        'stroke="#8a5b12" stroke-width="1" stroke-dasharray="6 5"></line>'
+        f'<rect x="{width - padding_right + 8:.2f}" y="{price_y - 11:.2f}" width="54" height="18" fill="#fffdf8" stroke="#8a5b12" stroke-width="1"></rect>'
+        f'<text x="{width - padding_right + 35:.2f}" y="{label_y:.2f}" text-anchor="middle" fill="#8a5b12" font-size="12"'
+        ' font-family="JetBrains Mono, IBM Plex Mono, Courier New, monospace">'
+        f"{current_price:.2f}</text>"
+    )
+
+    return f"""
+<svg viewBox="0 0 {width} {height}" role="img" aria-label="Bougies intraday XAU/USD avec ligne de prix en temps reel">
+  <rect width="{width}" height="{height}" fill="#fffdf8"></rect>
+  {''.join(grid_lines)}
+  {''.join(candle_nodes)}
+  {price_line}
+</svg>
+""".strip()
+
+
+def render_reasons_list(reasons: list[str]) -> str:
+    items = "".join(f"<li>{html.escape(reason)}</li>" for reason in reasons)
+    return f"<ul class=\"reason-list\">{items}</ul>"
+
+
+def recommendation_css_class(verdict: str) -> str:
+    return "bullish" if verdict.upper() == "BUY" else "bearish"
+
+
+def render_trade_levels(recommendation: TradeRecommendation) -> str:
+    return (
+        '<div class="trade-levels">'
+        f'<div><span>SL</span><strong>{recommendation.stop_loss:.2f}</strong></div>'
+        f'<div><span>TP1</span><strong>{recommendation.take_profit_1:.2f}</strong></div>'
+        f'<div><span>TP2</span><strong>{recommendation.take_profit_2:.2f}</strong></div>'
+        "</div>"
+    )
+
+
+def render_trade_compact(recommendation: TradeRecommendation) -> str:
+    badge_class = recommendation_css_class(recommendation.verdict)
+    return f"""
+    <article class="quick-card {badge_class}">
+      <div class="quick-card-top">
+        <div>
+          <div class="section-kicker">{html.escape(recommendation.mode)}</div>
+          <strong>{html.escape(recommendation.verdict)}</strong>
+        </div>
+        <div class="quick-score">{recommendation.score}<small>/100</small></div>
+      </div>
+      <div class="quick-level-row">
+        <span>SL {recommendation.stop_loss:.2f}</span>
+        <span>TP1 {recommendation.take_profit_1:.2f}</span>
+        <span>TP2 {recommendation.take_profit_2:.2f}</span>
+      </div>
+    </article>
+    """.strip()
+
+
+def render_trade_card(recommendation: TradeRecommendation) -> str:
+    badge_class = recommendation_css_class(recommendation.verdict)
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in recommendation.reasons[:3])
+    return f"""
+    <article class="trade-card {badge_class}">
+      <div class="trade-card-head">
+        <div>
+          <div class="section-kicker">{html.escape(recommendation.mode)}</div>
+          <h2>{html.escape(recommendation.mode)} intraday</h2>
+        </div>
+        <div class="trade-score">{recommendation.score}<small>/100</small></div>
+      </div>
+      <div class="trade-verdict {badge_class}">{html.escape(recommendation.verdict)}</div>
+      <p class="trade-summary">{html.escape(recommendation.summary)}</p>
+      {render_trade_levels(recommendation)}
+      <ul class="trade-reasons">{reasons}</ul>
+      <div class="trade-footer">
+        <span>Verdict: {html.escape(recommendation.verdict)}</span>
+        <span>{html.escape(recommendation.source_note)}</span>
+      </div>
+    </article>
+    """.strip()
+
+
+def render_technical_table(readings: list[TechnicalReading]) -> str:
+    rows = []
+    for reading in readings:
+        rows.append(
+            f"""
+            <tr>
+              <td>{html.escape(reading.timeframe)}</td>
+              <td>{reading.close:.2f}</td>
+              <td>{reading.ema20:.2f} / {reading.ema50:.2f} / {reading.ema100:.2f} / {reading.ema200:.2f}</td>
+              <td>{reading.rsi7:.1f}</td>
+              <td>{reading.macd_histogram:+.2f}</td>
+              <td>x{reading.volume_ratio:.2f}</td>
+              <td class="{recommendation_css_class(reading.verdict)}">{html.escape(reading.verdict)}</td>
+            </tr>
+            """.strip()
+        )
+    return (
+        '<div class="table-wrap"><table class="technical-table">'
+        "<thead><tr><th>TF</th><th>Close</th><th>EMA 20/50/100/200</th><th>RSI7</th><th>MACD hist</th><th>Volume</th><th>Verdict</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def render_geopolitical_panel(analysis: GeopoliticalAnalysis | None) -> str:
+    if analysis is None:
+        return '<div class="footer-note">Analyse geopolitique indisponible.</div>'
+
+    status_rows = [
+        ("Risk-off", analysis.risk_off_status),
+        ("Banques centrales", analysis.central_bank_bias),
+        ("Achats physiques", analysis.physical_demand_trend),
+        ("Large Specs", analysis.large_speculators),
+        ("ETF GLD/IAU", analysis.etf_flows),
+        ("Open Interest", analysis.comex_open_interest),
+        ("VIX", analysis.vix_tone),
+    ]
+    status_cells = "".join(
+        f'<div class="geo-stat"><strong>{html.escape(label)}</strong><span>{html.escape(value)}</span></div>'
+        for label, value in status_rows
+    )
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in analysis.reasons[:6]) or "<li>Aucun signal geopol dominant.</li>"
+    events = "".join(f"<li>{html.escape(clean_display_text(event))}</li>" for event in analysis.event_watch[:5]) or "<li>Aucun evenement majeur detecte.</li>"
+    return (
+        f'<div class="metric-footnote" style="margin-top:0;">Score geopol/sentiment/flux: {analysis.score}/100</div>'
+        f'<p class="trade-summary" style="margin-top:8px;">{html.escape(analysis.summary)}</p>'
+        f'<div class="geo-grid">{status_cells}</div>'
+        f'<div class="geo-columns">'
+        f'<div><div class="section-kicker">Signaux</div><ul class="reason-list">{reasons}</ul></div>'
+        f'<div><div class="section-kicker">Evenements du jour</div><ul class="reason-list">{events}</ul></div>'
+        f"</div>"
+    )
+
+
+def render_headlines_grid(news: list[NewsItem]) -> str:
+    cards: list[str] = []
+    for item in news[:8]:
+        tone_class, tone_label = format_headline_tone(item.score)
+        cards.append(
+            f"""
+            <article class="headline-card {tone_class}">
+              <div class="headline-meta">
+                <span class="headline-source">{html.escape(item.source)}</span>
+                <span class="headline-tag">{html.escape(tone_label)}</span>
+              </div>
+              <h3>{html.escape(item.title)}</h3>
+              <p>{html.escape(format_timestamp_for_humans(item.published_at))}</p>
+              <a href="{html.escape(item.link)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>
+            </article>
+            """.strip()
+        )
+
+    if not cards:
+        return '<div class="empty-state">Aucune actualite exploitable n\'a ete recuperee.</div>'
+    return "".join(cards)
+
+
+def render_ai_summary(ai_analysis: str | None) -> str:
+    if not ai_analysis:
+        return ""
+    escaped = html.escape(ai_analysis).replace("\n", "<br>")
+    return (
+        '<section class="panel ai-panel span-12">'
+        '<div class="section-kicker">Synthese IA</div>'
+        '<div class="terminal-line">'
+        '<span class="prompt">&gt;</span>'
+        '<span class="terminal-tag">MODEL</span>'
+        f'<div class="ai-copy">{escaped}</div>'
+        "</div>"
+        "</section>"
+    )
+
+
+def build_what_happens_now_lines(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    fundamental: TradeRecommendation,
+    technical: TradeRecommendation,
+    geopolitical: GeopoliticalAnalysis | None,
+) -> list[tuple[str, str]]:
+    lines: list[tuple[str, str]] = []
+
+    price_direction = "monte" if gold.change_pct >= 0 else "baisse"
+    macro_push = "soutiennent" if dxy.change_pct < 0 and us10y.change_abs < 0 else "freinent" if dxy.change_pct > 0 and us10y.change_abs > 0 else "se compensent"
+    lines.append(
+        (
+            "Tape du marche",
+            f"L'or {price_direction} a {gold.price:.2f}, pendant que le DXY fait {dxy.change_pct:+.2f}% et que le 10 ans US bouge de {us10y.change_abs * 100:+.1f} bps. "
+            f"En clair: le dollar et les taux {macro_push} l'or aujourd'hui.",
+        )
+    )
+
+    geo_story = find_story_for_categories(news, "geopolitical", "gold")
+    if geo_story is not None:
+        _impact_label, impact_text = explain_headline_gold_impact(geo_story)
+        lines.append(
+            (
+                "Headline clef",
+                f"{clean_display_text(geo_story.title)}. {explain_headline_reason(geo_story)} {impact_text}",
+            )
+        )
+
+    if geopolitical is not None:
+        if geopolitical.risk_off_status == "actif":
+            geo_sentence = (
+                "Le risque geopolitique reste actif. Cela soutient la demande de couverture sur l'or, "
+                "mais cela peut aussi envoyer une partie des capitaux vers le dollar pour chercher de la liquidite."
+            )
+        elif geopolitical.risk_off_status == "en reflux":
+            geo_sentence = (
+                "Le stress geopolitique se calme un peu. L'or perd alors une partie de son soutien refuge."
+            )
+        else:
+            geo_sentence = (
+                "Le fond geopolitique reste brouille: il y a du stress, mais pas un signal unique assez fort pour imposer seul la direction."
+            )
+        lines.append(("Geopolitique", geo_sentence))
+
+        if geopolitical.central_bank_bias == "accommodant":
+            central_bank_sentence = "Le message banques centrales est plutot favorable a l'or: le marche voit plus facilement un assouplissement qu'un nouveau durcissement."
+        elif geopolitical.central_bank_bias == "restrictif":
+            central_bank_sentence = "Le message banques centrales reste plutot dur: cela soutient le dollar et limite le potentiel haussier immediat de l'or."
+        else:
+            central_bank_sentence = "Le message banques centrales est mitige: pas assez dovish pour declencher une hausse propre, pas assez hawkish non plus pour casser brutalement l'or."
+        lines.append(("Banques centrales", central_bank_sentence))
+
+    if fundamental.verdict == technical.verdict:
+        alignment_sentence = (
+            f"Le fondamental et la technique sont alignes en {fundamental.verdict}. "
+            f"Le plan intraday est donc plus simple a executer tant que le contexte ne change pas."
+        )
+    else:
+        alignment_sentence = (
+            f"Le fondamental dit {fundamental.verdict} mais la technique dit {technical.verdict}. "
+            "Cela veut dire que le contexte de fond n'est pas suffisant pour garantir une hausse propre: le marche reste vulnerable aux contre-pieds et aux retours de volatilite."
+        )
+    lines.append(("Lecture intraday", alignment_sentence))
+
+    return lines
+
+
+def render_what_happens_now(lines: list[tuple[str, str]]) -> str:
+    blocks = []
+    for title, text in lines:
+        blocks.append(
+            f"""
+            <div class="story-row">
+              <div class="story-label">{html.escape(title)}</div>
+              <div class="story-text">{html.escape(text)}</div>
+            </div>
+            """.strip()
+        )
+    return "".join(blocks)
+
+
+def render_information_digest(items: list[tuple[str, str, str]]) -> str:
+    blocks: list[str] = []
+    for label, title, explanation in items:
+        blocks.append(
+            f"""
+            <article class="digest-card">
+              <div class="digest-tag">{html.escape(label)}</div>
+              <h3>{html.escape(title)}</h3>
+              <p>{html.escape(explanation)}</p>
+            </article>
+            """.strip()
+        )
+    if not blocks:
+        return '<div class="empty-state">Aucun resume d\'informations exploitable pour le moment.</div>'
+    return "".join(blocks)
+
+
+def render_headline_reason_cards(news: list[NewsItem], limit: int = 6) -> str:
+    cards: list[str] = []
+    for item in pick_story_headlines(news, limit=limit):
+        impact_label, impact_text = explain_headline_gold_impact(item)
+        tone_class = "bullish" if impact_label == "bullish" else "bearish" if impact_label == "bearish" else "neutral"
+        cards.append(
+            f"""
+            <article class="headline-brief {tone_class}">
+              <div class="headline-brief-top">
+                <div class="headline-brief-source">{html.escape(clean_display_text(item.source))}</div>
+                <div class="headline-brief-time">{html.escape(format_timestamp_for_humans(item.published_at))}</div>
+              </div>
+              <h3>{html.escape(clean_display_text(item.title))}</h3>
+              <p><strong>Ce que cela veut dire:</strong> {html.escape(explain_headline_reason(item))}</p>
+              <p><strong>Impact sur l'or:</strong> {html.escape(impact_text)}</p>
+              <a href="{html.escape(item.link)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>
+            </article>
+            """.strip()
+        )
+
+    if not cards:
+        return (
+            '<div class="empty-state">'
+            "Sources headlines indisponibles temporairement. Le dashboard continue avec le prix, "
+            "le DXY, les taux et le dernier cadrage geo/sentiment disponible."
+            "</div>"
+        )
+    return "".join(cards)
+
+
+def build_scenarios(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnapshot) -> tuple[str, str, str]:
+    support = format_number(gold.support)
+    resistance = format_number(gold.resistance)
+    dxy_change = f"{dxy.change_pct:+.2f}%"
+    yield_change = f"{us10y.change_abs * 100:+.1f} bps"
+
+    bullish_case = (
+        f"Scenario hausse: favorable tant que l'or defend la zone {support} "
+        f"et que le DXY ({dxy_change}) ainsi que le 10Y US ({yield_change}) ne se retournent pas franchement."
+    )
+    bearish_case = (
+        f"Scenario baisse: le risque augmente si le prix echoue sous {resistance} "
+        "et si le dollar ou les rendements US reprennent de la force."
+    )
+    wait_case = (
+        f"Scenario attente: patienter si le prix reste enferme entre {support} et {resistance} "
+        "sans catalyseur macro propre."
+    )
+    return bullish_case, bearish_case, wait_case
+
+
+def render_dashboard(
+    bundle: BriefingBundle,
+    live_client: bool = False,
+    fragment_endpoint: str = "/fragment",
+    poll_seconds: int = 10,
+) -> str:
+    return render_dashboard_clarity_v2(bundle, live_client, fragment_endpoint, poll_seconds)
+
+    gold = bundle.gold
+    dxy = bundle.dxy
+    us10y = bundle.us10y
+    analysis = bundle.analysis
+    ai_analysis = bundle.ai_analysis
+    bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
+    generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
+    chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
+    confidence_width = max(8, min(100, analysis.confidence))
+
+    fundamental = bundle.fundamental_recommendation or TradeRecommendation(
+        mode="Fondamental",
+        verdict="BUY" if analysis.score >= 0 else "SELL",
+        score=max(50, min(100, 50 + (abs(analysis.score) * 5))),
+        summary=heuristic_decision_sentence(analysis),
+        reasons=analysis.reasons[:4],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    technical = bundle.technical_recommendation or TradeRecommendation(
+        mode="Technique",
+        verdict="BUY",
+        score=50,
+        summary="Technique indisponible.",
+        reasons=["Lecture technique indisponible."],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
+    technical_readings = bundle.technical_timeframes or []
+    executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
+    price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
+    dxy_class = "bullish" if dxy.change_pct < 0 else "bearish" if dxy.change_pct > 0 else "neutral"
+    us10y_class = "bullish" if us10y.change_abs < 0 else "bearish" if us10y.change_abs > 0 else "neutral"
+    bias_class = format_bias_class(analysis.bias)
+    bias_label = format_bias_label(analysis.bias).upper()
+    geo_class = (
+        "bullish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score >= 55
+        else "bearish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score <= 45
+        else "neutral"
+    )
+    meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
+    live_script = ""
+    if live_client:
+        live_script = f"""
+  <script>
+    (() => {{
+      const app = document.getElementById("dashboard-app");
+      if (!app) return;
+      let busy = false;
+      async function refreshLive() {{
+        if (busy) return;
+        busy = true;
+        try {{
+          const response = await fetch("{fragment_endpoint}?_ts=" + Date.now(), {{ cache: "no-store" }});
+          if (!response.ok) return;
+          app.innerHTML = await response.text();
+        }} catch (_error) {{
+          // Keep the last successful snapshot on screen if the refresh fails.
+        }} finally {{
+          busy = false;
+        }}
+      }}
+      window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+    }})();
+  </script>
+""".rstrip()
+
+    try:
+        local_dt = datetime.fromisoformat(bundle.payload["generated_at"].replace("Z", "+00:00")).astimezone()
+        hour = local_dt.hour
+        if 6 <= hour < 12:
+            session_label = "EUROPE"
+        elif 12 <= hour < 18:
+            session_label = "EUROPE/US"
+        elif 18 <= hour < 23:
+            session_label = "US"
+        else:
+            session_label = "ASIA/OFF"
+    except ValueError:
+        session_label = "LIVE"
+
+    technical_matrix = (
+        render_technical_table(technical_readings)
+        if technical_readings
+        else '<div class="footer-note">Lecture technique indisponible.</div>'
+    )
+
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+{meta_refresh}  <meta name="color-scheme" content="dark">
+  <title>Dashboard XAUUSD</title>
+  <style>
+    :root {{
+      --bg: #0a0b0d;
+      --panel: #0d0f12;
+      --panel-alt: #08090b;
+      --terminal: #050607;
+      --grid: #1a1d24;
+      --text: #c8c8c8;
+      --bull: #00ff88;
+      --bear: #ff3c5a;
+      --amber: #f5a623;
+      --muted: #2a2d35;
+      --soft: #8f96a3;
+    }}
+
+    * {{
+      box-sizing: border-box;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      font-family: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+    }}
+    html, body {{
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+    }}
+    body::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.08;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.08) 0,
+        rgba(255, 255, 255, 0.08) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+    }}
+    a {{
+      color: var(--amber);
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    h1, h2, h3, p {{
+      margin: 0;
+    }}
+    .page {{
+      position: relative;
+      z-index: 1;
+      width: min(1600px, calc(100% - 10px));
+      margin: 5px auto;
+      background: var(--muted);
+      border: 1px solid var(--muted);
+    }}
+    .hero,
+    .panel,
+    .trade-card,
+    .quick-card,
+    .executive-panel,
+    .ticker-panel,
+    .status-cell {{
+      background: var(--panel);
+      border: 1px solid var(--muted);
+      padding: 10px 12px;
+    }}
+    .hero {{
+      border: none;
+      padding: 0;
+      background: var(--muted);
+    }}
+    .hero-header,
+    .hero-summary-strip,
+    .quick-decision-grid,
+    .top-grid,
+    .trade-grid,
+    .content-grid,
+    .scenario-grid,
+    .key-levels,
+    .trade-levels {{
+      display: grid;
+      gap: 1px;
+      background: var(--muted);
+    }}
+    .hero-summary-strip {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }}
+    .quick-decision-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    .top-grid {{
+      grid-template-columns: minmax(0, 2fr) minmax(320px, 0.8fr);
+    }}
+    .trade-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    .content-grid {{
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      margin-top: 1px;
+    }}
+    .span-4 {{ grid-column: span 4; }}
+    .span-5 {{ grid-column: span 5; }}
+    .span-6 {{ grid-column: span 6; }}
+    .span-7 {{ grid-column: span 7; }}
+    .span-12 {{ grid-column: span 12; }}
+    .section-kicker,
+    .eyebrow {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }}
+    .ticker-panel {{
+      min-height: 210px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }}
+    .ticker-symbol {{
+      color: var(--amber);
+      font-size: 20px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }}
+    .ticker-row {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 14px;
+    }}
+    .ticker-price {{
+      font-size: clamp(50px, 7vw, 82px);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.06em;
+      white-space: nowrap;
+    }}
+    .ticker-price.bullish,
+    .metric-delta.positive,
+    .trade-card.bullish .trade-verdict,
+    .quick-card.bullish strong,
+    .signal-badge.bullish,
+    .status-value.bullish,
+    .technical-table .bullish,
+    .positive h3 {{
+      color: var(--bull);
+    }}
+    .ticker-price.bearish,
+    .metric-delta.negative,
+    .trade-card.bearish .trade-verdict,
+    .quick-card.bearish strong,
+    .signal-badge.bearish,
+    .status-value.bearish,
+    .technical-table .bearish,
+    .negative h3 {{
+      color: var(--bear);
+    }}
+    .ticker-price.neutral,
+    .metric-delta.neutral,
+    .status-value.neutral,
+    .neutral h3 {{
+      color: var(--text);
+    }}
+    .ticker-cursor {{
+      display: inline-block;
+      width: 12px;
+      height: 0.95em;
+      margin-left: 8px;
+      background: currentColor;
+      vertical-align: text-bottom;
+      animation: blink 1s steps(1) infinite;
+    }}
+    @keyframes blink {{
+      50% {{ opacity: 0; }}
+    }}
+    .ticker-delta {{
+      font-size: 24px;
+      font-weight: 700;
+      white-space: nowrap;
+      padding-bottom: 8px;
+    }}
+    .ticker-meta {{
+      margin-top: 10px;
+      color: var(--soft);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      line-height: 1.7;
+    }}
+    .status-cell {{
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 68px;
+      background: var(--terminal);
+    }}
+    .status-value {{
+      font-size: 20px;
+      font-weight: 700;
+      text-transform: uppercase;
+      line-height: 1.25;
+    }}
+    .status-value.small {{
+      font-size: 14px;
+      color: var(--text);
+    }}
+    .confidence-bar {{
+      height: 8px;
+      margin-top: 8px;
+      background: var(--grid);
+      border: 1px solid var(--muted);
+    }}
+    .confidence-bar span {{
+      display: block;
+      width: {confidence_width}%;
+      height: 100%;
+      background: var(--amber);
+    }}
+    .quick-card {{
+      min-height: 124px;
+      background: var(--panel-alt);
+      border-top: 2px solid var(--muted);
+    }}
+    .quick-card.bullish {{ border-top-color: var(--bull); }}
+    .quick-card.bearish {{ border-top-color: var(--bear); }}
+    .quick-card-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: flex-start;
+    }}
+    .quick-card-top strong {{
+      display: inline-block;
+      font-size: 30px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .quick-score {{
+      color: var(--amber);
+      font-size: 38px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }}
+    .quick-score small {{
+      font-size: 15px;
+      color: var(--soft);
+      margin-left: 4px;
+    }}
+    .quick-level-row {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--muted);
+    }}
+    .quick-level-row span {{
+      display: block;
+      padding: 8px 10px;
+      background: var(--panel);
+      color: var(--text);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .trade-card {{
+      min-height: 100%;
+      background: var(--panel-alt);
+      border-left: 3px solid var(--muted);
+    }}
+    .trade-card.bullish {{ border-left-color: var(--bull); }}
+    .trade-card.bearish {{ border-left-color: var(--bear); }}
+    .trade-card-head {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: start;
+      margin-bottom: 10px;
+    }}
+    .trade-card h2,
+    .metric-card h2,
+    .scenario h3 {{
+      color: var(--amber);
+      font-size: 14px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .trade-score {{
+      color: var(--amber);
+      font-size: 36px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }}
+    .trade-score small {{
+      font-size: 15px;
+      color: var(--soft);
+      margin-left: 4px;
+    }}
+    .trade-verdict {{
+      margin-bottom: 10px;
+      font-size: 22px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }}
+    .trade-summary,
+    .footer-note,
+    .metric-footnote,
+    .scenario p,
+    .terminal-text,
+    .ai-copy {{
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 14px;
+    }}
+    .trade-levels {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin: 10px 0;
+    }}
+    .trade-levels div {{
+      background: var(--panel);
+      border: 1px solid var(--muted);
+      padding: 8px 10px;
+    }}
+    .trade-levels span,
+    .trade-footer,
+    .level-chip strong,
+    .metric-footnote,
+    .footer-note {{
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .trade-levels strong,
+    .metric-value,
+    .level-chip span {{
+      display: block;
+      margin-top: 4px;
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--text);
+    }}
+    .trade-reasons,
+    .reason-list {{
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text);
+      line-height: 1.55;
+      font-size: 13px;
+    }}
+    .trade-footer {{
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--muted);
+      color: var(--soft);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }}
+    .executive-panel {{
+      background: var(--terminal);
+      min-height: 100%;
+    }}
+    .terminal-line {{
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 6px 0;
+      border-top: 1px solid rgba(42, 45, 53, 0.55);
+    }}
+    .terminal-line:first-of-type {{
+      border-top: none;
+    }}
+    .prompt {{
+      color: var(--bull);
+      font-weight: 700;
+    }}
+    .terminal-tag {{
+      color: var(--amber);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .terminal-text a {{
+      text-transform: none;
+    }}
+    .metric-card {{
+      min-height: 0;
+    }}
+    .metric-value {{
+      font-size: 34px;
+      letter-spacing: -0.04em;
+      color: var(--text);
+    }}
+    .metric-delta {{
+      margin-top: 6px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .metric-footnote {{
+      color: var(--soft);
+      margin-top: 10px;
+      line-height: 1.7;
+    }}
+    .chart-wrap {{
+      margin-top: 10px;
+      border: 1px solid var(--muted);
+      background: #0d0f12;
+    }}
+    .chart-wrap svg {{
+      display: block;
+      width: 100%;
+      height: auto;
+    }}
+    .key-levels {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 1px;
+    }}
+    .level-chip {{
+      background: var(--panel-alt);
+      border: 1px solid var(--muted);
+      padding: 8px 10px;
+    }}
+    .level-chip strong {{
+      color: var(--amber);
+    }}
+    .scenario-grid {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 10px;
+    }}
+    .scenario {{
+      background: var(--panel-alt);
+      border-top: 2px solid var(--muted);
+      padding: 10px 12px;
+      min-height: 0;
+    }}
+    .scenario.positive {{ border-top-color: var(--bull); }}
+    .scenario.negative {{ border-top-color: var(--bear); }}
+    .scenario.neutral {{ border-top-color: var(--amber); }}
+    .scenario p {{
+      margin-top: 8px;
+    }}
+    .table-wrap {{
+      overflow-x: auto;
+      border: 1px solid var(--muted);
+      background: #0d0f12;
+    }}
+    .technical-table {{
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+    }}
+    .technical-table th,
+    .technical-table td {{
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--muted);
+      font-size: 13px;
+    }}
+    .technical-table th {{
+      color: var(--amber);
+      background: #0b0d10;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 11px;
+    }}
+    .technical-table tr:nth-child(even) td {{
+      background: rgba(8, 9, 11, 0.65);
+    }}
+    .geo-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 10px;
+      background: var(--muted);
+    }}
+    .geo-stat {{
+      background: var(--panel-alt);
+      border: 1px solid var(--muted);
+      padding: 8px 10px;
+      min-height: 72px;
+    }}
+    .geo-stat strong {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .geo-stat span {{
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      text-transform: uppercase;
+      line-height: 1.35;
+    }}
+    .geo-columns {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .ai-panel {{
+      background: var(--terminal);
+    }}
+    @media (max-width: 1180px) {{
+      .hero-header,
+      .top-grid,
+      .trade-grid,
+      .scenario-grid,
+      .geo-grid,
+      .geo-columns {{
+        grid-template-columns: 1fr;
+      }}
+      .span-4,
+      .span-5,
+      .span-6,
+      .span-7,
+      .span-12 {{
+        grid-column: span 12;
+      }}
+    }}
+    @media (max-width: 900px) {{
+      .hero-summary-strip,
+      .quick-decision-grid,
+      .key-levels,
+      .trade-levels {{
+        grid-template-columns: 1fr;
+      }}
+      .ticker-row {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
+      .terminal-line {{
+        grid-template-columns: auto 1fr;
+      }}
+      .terminal-tag {{
+        grid-column: 2;
+      }}
+      .terminal-text,
+      .ai-copy {{
+        grid-column: 1 / -1;
+        padding-left: 22px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page" id="dashboard-app">
+    <section class="hero">
+      <div class="hero-header">
+        <div class="ticker-panel">
+          <div class="section-kicker">Instrument · Timeframe · Session</div>
+          <div class="ticker-symbol">XAU/USD SPOT · INTRADAY · {session_label}</div>
+          <div class="ticker-row">
+            <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
+            <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
+          </div>
+          <div class="ticker-meta">
+            Updated {html.escape(generated_at)} · Range {format_number(gold.day_low)} / {format_number(gold.day_high)} ·
+            Source <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a>
+          </div>
+        </div>
+      </div>
+      <div class="quick-decision-grid">
+        {render_trade_compact(fundamental)}
+        {render_trade_compact(technical)}
+      </div>
+      <div class="hero-summary-strip">
+        <div class="status-cell">
+          <div class="section-kicker">Bias</div>
+          <div class="status-value {bias_class}">{html.escape(bias_label)}</div>
+        </div>
+        <div class="status-cell">
+          <div class="section-kicker">Confidence</div>
+          <div class="status-value">{analysis.confidence}/100</div>
+          <div class="confidence-bar"><span></span></div>
+        </div>
+        <div class="status-cell">
+          <div class="section-kicker">News Score</div>
+          <div class="status-value small">{analysis.score:+d} · {html.escape(generated_at)}</div>
+        </div>
+        <div class="status-cell">
+          <div class="section-kicker">Geo Score</div>
+          <div class="status-value {geo_class}">
+            {f"{geopolitical_analysis.score}/100" if geopolitical_analysis else "N/A"}
+          </div>
+        </div>
+      </div>
+      <div class="top-grid">
+        <div class="trade-grid">
+          {render_trade_card(fundamental)}
+          {render_trade_card(technical)}
+        </div>
+        <aside class="executive-panel">
+          <div class="section-kicker">Agent Chat</div>
+          <div class="terminal-line">
+            <span class="prompt">&gt;</span>
+            <span class="terminal-tag">EXEC</span>
+            <div class="terminal-text">{html.escape(executive_summary)}</div>
+          </div>
+          <div class="terminal-line">
+            <span class="prompt">&gt;</span>
+            <span class="terminal-tag">FUND</span>
+            <div class="terminal-text">{html.escape(fundamental.summary)}</div>
+          </div>
+          <div class="terminal-line">
+            <span class="prompt">&gt;</span>
+            <span class="terminal-tag">TECH</span>
+            <div class="terminal-text">{html.escape(technical.summary)}</div>
+          </div>
+          <div class="terminal-line">
+            <span class="prompt">&gt;</span>
+            <span class="terminal-tag">GEO</span>
+            <div class="terminal-text">{html.escape(geopolitical_analysis.summary if geopolitical_analysis else "Lecture geopolitique indisponible.")}</div>
+          </div>
+          <div class="terminal-line">
+            <span class="prompt">&gt;</span>
+            <span class="terminal-tag">NOTE</span>
+            <div class="terminal-text">Pas conseil financier personnalise.</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel metric-card span-4">
+        <div class="section-kicker">Spot Price</div>
+        <h2>XAU/USD Spot</h2>
+        <div class="metric-value">{gold.price:.2f}</div>
+        <div class="metric-delta {price_class}">{gold.change_pct:+.2f}% vs close</div>
+        <div class="metric-footnote">
+          Tendance courte {gold.period_change_pct:+.2f}%<br>
+          Support {format_number(gold.support)} · Resistance {format_number(gold.resistance)}
+        </div>
+      </article>
+      <article class="panel metric-card span-4">
+        <div class="section-kicker">Dollar Index</div>
+        <h2>DXY</h2>
+        <div class="metric-value">{dxy.price:.2f}</div>
+        <div class="metric-delta {dxy_class}">{dxy.change_pct:+.2f}% session</div>
+        <div class="metric-footnote">
+          Un DXY en baisse soutient souvent l'or.<br>
+          Etat actuel {"favorable" if dxy.change_pct < 0 else "sous pression"}.
+        </div>
+      </article>
+      <article class="panel metric-card span-4">
+        <div class="section-kicker">US Yield</div>
+        <h2>10Y US</h2>
+        <div class="metric-value">{us10y.price:.2f}%</div>
+        <div class="metric-delta {us10y_class}">{us10y.change_abs * 100:+.1f} bps</div>
+        <div class="metric-footnote">
+          Des rendements plus bas aident souvent l'or.<br>
+          Variation courte {us10y.period_change_pct:+.2f}%.
+        </div>
+      </article>
+
+      <article class="panel span-7">
+        <div class="section-kicker">Instrument · Chart · Intraday</div>
+        <h2>5m Candles + Live Price Line</h2>
+        <div class="chart-wrap">{chart_svg}</div>
+        <div class="metric-footnote" style="margin-top:8px;">
+          Bougies 5 minutes proxy GC=F alignees sur le spot XAU/USD. Ligne ambre = prix spot en temps reel.
+        </div>
+        <div class="key-levels">
+          <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
+          <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
+          <div class="level-chip"><strong>Last</strong><span>{format_number(gold.price)}</span></div>
+        </div>
+      </article>
+
+      <article class="panel span-5">
+        <div class="section-kicker">Fundamental Drivers</div>
+        <h2>Macro Context</h2>
+        {render_reasons_list(fundamental.reasons)}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Geo Politics / Sentiment / Flow</div>
+        <h2>Risk-off / Banques centrales / Flux physiques / COT / ETF / VIX</h2>
+        {render_geopolitical_panel(geopolitical_analysis)}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Technical Matrix</div>
+        <h2>EMA 20/50/100/200 · RSI7 · MACD 5/34/5 · Volume Proxy</h2>
+        {technical_matrix}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Execution Scenarios</div>
+        <h2>Scenario hausse · baisse · attente</h2>
+        <div class="scenario-grid">
+          <div class="scenario positive">
+            <h3>Scenario hausse</h3>
+            <p>{html.escape(bullish_case)}</p>
+          </div>
+          <div class="scenario negative">
+            <h3>Scenario baisse</h3>
+            <p>{html.escape(bearish_case)}</p>
+          </div>
+          <div class="scenario neutral">
+            <h3>Scenario attente</h3>
+            <p>{html.escape(wait_case)}</p>
+          </div>
+        </div>
+      </article>
+
+      {render_ai_summary(ai_analysis)}
+
+      <section class="panel span-12">
+        <div class="section-kicker">Disclaimer</div>
+        <div class="footer-note">
+          Ce dashboard fournit un cadre d'analyse intraday avec verdict BUY ou SELL, SL et TP.
+          Il ne constitue pas un conseil financier personnalise.
+        </div>
+      </section>
+    </section>
+  </main>
+{live_script}
+</body>
+</html>"""
+
+
+def render_dashboard_clarity(
+    bundle: BriefingBundle,
+    live_client: bool = False,
+    fragment_endpoint: str = "/fragment",
+    poll_seconds: int = 10,
+) -> str:
+    gold = bundle.gold
+    dxy = bundle.dxy
+    us10y = bundle.us10y
+    analysis = bundle.analysis
+    ai_analysis = bundle.ai_analysis
+    geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
+    technical_readings = bundle.technical_timeframes or []
+    chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
+    confidence_width = max(8, min(100, analysis.confidence))
+    bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
+    generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
+
+    fundamental = bundle.fundamental_recommendation or TradeRecommendation(
+        mode="Fondamental",
+        verdict="BUY" if analysis.score >= 0 else "SELL",
+        score=max(50, min(100, 50 + (abs(analysis.score) * 5))),
+        summary=heuristic_decision_sentence(analysis),
+        reasons=analysis.reasons[:4],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    technical = bundle.technical_recommendation or TradeRecommendation(
+        mode="Technique",
+        verdict="BUY",
+        score=50,
+        summary="Technique indisponible.",
+        reasons=["Lecture technique indisponible."],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
+
+    price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
+    dxy_class = "bullish" if dxy.change_pct < 0 else "bearish" if dxy.change_pct > 0 else "neutral"
+    us10y_class = "bullish" if us10y.change_abs < 0 else "bearish" if us10y.change_abs > 0 else "neutral"
+    geo_class = (
+        "bullish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score >= 55
+        else "bearish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score <= 45
+        else "neutral"
+    )
+    story_lines = build_what_happens_now_lines(
+        gold,
+        dxy,
+        us10y,
+        bundle.news,
+        fundamental,
+        technical,
+        geopolitical_analysis,
+    )
+    digest_items = build_information_digest_items(gold, dxy, us10y, bundle.news, geopolitical_analysis)
+    technical_matrix = (
+        render_technical_table(technical_readings)
+        if technical_readings
+        else '<div class="footer-note">Lecture technique indisponible.</div>'
+    )
+
+    meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
+    live_script = ""
+    if live_client:
+        live_script = f"""
+  <script>
+    (() => {{
+      const app = document.getElementById("dashboard-app");
+      if (!app) return;
+      let busy = false;
+      async function refreshLive() {{
+        if (busy) return;
+        busy = true;
+        try {{
+          const response = await fetch("{fragment_endpoint}?_ts=" + Date.now(), {{ cache: "no-store" }});
+          if (!response.ok) return;
+          app.innerHTML = await response.text();
+        }} catch (_error) {{
+        }} finally {{
+          busy = false;
+        }}
+      }}
+      window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+    }})();
+  </script>
+""".rstrip()
+
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+{meta_refresh}  <meta name="color-scheme" content="light">
+  <title>Dashboard XAUUSD</title>
+  <style>
+    :root {{
+      --bg: #f6f1e8;
+      --bg-2: #efe6d7;
+      --panel: #fffdf9;
+      --panel-alt: #f8f2e7;
+      --text: #1f2933;
+      --soft: #667085;
+      --muted: #d8ccb8;
+      --line: #e7dccd;
+      --bull: #127a48;
+      --bear: #b93a32;
+      --amber: #8b5e18;
+      --blue: #1e4fd6;
+    }}
+    * {{
+      box-sizing: border-box;
+      font-family: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+    }}
+    html, body {{
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, var(--bg), var(--bg-2));
+      color: var(--text);
+    }}
+    a {{
+      color: var(--blue);
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    h1, h2, h3, p {{
+      margin: 0;
+    }}
+    .page {{
+      width: min(1500px, calc(100% - 28px));
+      margin: 14px auto 28px;
+    }}
+    .hero-grid,
+    .summary-grid,
+    .digest-grid,
+    .content-grid,
+    .headline-grid,
+    .metrics-grid,
+    .trade-levels,
+    .key-levels,
+    .scenario-grid,
+    .geo-grid,
+    .geo-columns {{
+      display: grid;
+      gap: 14px;
+    }}
+    .hero-grid {{
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr) minmax(320px, 1fr);
+      margin-bottom: 14px;
+    }}
+    .summary-grid {{
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.9fr);
+      margin-bottom: 14px;
+    }}
+    .digest-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .content-grid {{
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }}
+    .headline-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    .metrics-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .trade-levels,
+    .key-levels {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .scenario-grid {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .geo-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }}
+    .geo-columns {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .panel,
+    .trade-card,
+    .summary-box,
+    .digest-card,
+    .headline-brief,
+    .story-row,
+    .metric-chip,
+    .level-chip,
+    .scenario {{
+      background: var(--panel);
+      border: 1px solid var(--muted);
+      border-radius: 10px;
+    }}
+    .panel,
+    .trade-card {{
+      padding: 18px 18px 16px;
+    }}
+    .span-5 {{ grid-column: span 5; }}
+    .span-7 {{ grid-column: span 7; }}
+    .span-12 {{ grid-column: span 12; }}
+    .section-kicker {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }}
+    .hero-price {{ background: var(--panel); }}
+    .ticker-symbol {{
+      color: var(--amber);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .ticker-row {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 16px;
+      margin-top: 8px;
+    }}
+    .ticker-price {{
+      font-size: clamp(48px, 7vw, 78px);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      white-space: nowrap;
+    }}
+    .ticker-delta {{
+      font-size: 24px;
+      font-weight: 700;
+    }}
+    .ticker-price.bullish,
+    .ticker-delta.bullish,
+    .bullish,
+    .headline-brief.bullish h3 {{
+      color: var(--bull);
+    }}
+    .ticker-price.bearish,
+    .ticker-delta.bearish,
+    .bearish,
+    .headline-brief.bearish h3 {{
+      color: var(--bear);
+    }}
+    .ticker-price.neutral,
+    .ticker-delta.neutral,
+    .neutral,
+    .headline-brief.neutral h3 {{
+      color: var(--text);
+    }}
+    .ticker-cursor {{
+      display: inline-block;
+      width: 10px;
+      height: 0.92em;
+      margin-left: 8px;
+      background: currentColor;
+      vertical-align: text-bottom;
+      animation: blink 1s steps(1) infinite;
+    }}
+    @keyframes blink {{
+      50% {{ opacity: 0; }}
+    }}
+    .ticker-meta {{
+      margin-top: 12px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.7;
+    }}
+    .metric-chip,
+    .level-chip {{
+      padding: 12px 14px;
+    }}
+    .metric-chip strong,
+    .level-chip strong {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .metric-chip span,
+    .level-chip span {{
+      display: block;
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+    }}
+    .metric-chip small {{
+      display: block;
+      margin-top: 6px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .trade-card {{
+      border-top: 6px solid var(--muted);
+      background: var(--panel);
+    }}
+    .trade-card.bullish {{ border-top-color: rgba(19, 138, 82, 0.35); }}
+    .trade-card.bearish {{ border-top-color: rgba(201, 59, 59, 0.35); }}
+    .trade-card-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }}
+    .trade-card h2 {{
+      color: var(--text);
+      font-size: 24px;
+      margin-top: 2px;
+    }}
+    .trade-score {{
+      color: var(--amber);
+      font-size: 34px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .trade-score small {{
+      font-size: 15px;
+      color: var(--soft);
+    }}
+    .trade-verdict {{
+      display: inline-block;
+      padding: 8px 12px;
+      background: var(--panel-alt);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }}
+    .trade-summary,
+    .story-text,
+    .headline-brief p,
+    .footer-note {{
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.7;
+    }}
+    .trade-levels {{
+      margin: 12px 0;
+    }}
+    .trade-levels div {{
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+    }}
+    .trade-levels span {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .trade-levels strong {{
+      display: block;
+      margin-top: 6px;
+      font-size: 24px;
+      color: var(--text);
+    }}
+    .trade-reasons,
+    .reason-list {{
+      margin: 0;
+      padding-left: 18px;
+      line-height: 1.65;
+      font-size: 13px;
+      color: var(--text);
+    }}
+    .trade-footer {{
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.6;
+      display: grid;
+      gap: 4px;
+    }}
+    .summary-box {{ padding: 18px; }}
+    .summary-box h2,
+    .panel h2 {{
+      font-size: 24px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }}
+    .summary-box .lead {{
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.75;
+      margin-bottom: 14px;
+    }}
+    .story-row {{
+      padding: 13px 14px;
+      margin-top: 10px;
+      background: var(--panel-alt);
+    }}
+    .digest-card {{
+      padding: 16px;
+      background: var(--panel-alt);
+    }}
+    .digest-tag {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }}
+    .digest-card h3 {{
+      font-size: 15px;
+      line-height: 1.55;
+      margin-bottom: 8px;
+      color: var(--text);
+    }}
+    .digest-card p {{
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.7;
+      margin: 0;
+    }}
+    .story-label {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .decision-grid {{
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .decision-item {{
+      padding: 14px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }}
+    .decision-item strong {{
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }}
+    .decision-item span {{
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.6;
+    }}
+    .confidence-bar {{
+      height: 10px;
+      margin-top: 10px;
+      background: #eee4d7;
+      border-radius: 999px;
+      overflow: hidden;
+    }}
+    .confidence-bar span {{
+      display: block;
+      width: {confidence_width}%;
+      height: 100%;
+      background: linear-gradient(90deg, #e7b45e, #8a5b12);
+    }}
+    .chart-wrap {{
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fffdf8;
+    }}
+    .chart-wrap svg {{
+      display: block;
+      width: 100%;
+      height: auto;
+    }}
+    .headline-brief {{
+      padding: 16px;
+      border-left: 6px solid var(--line);
+    }}
+    .headline-brief.bullish {{ border-left-color: rgba(19, 138, 82, 0.35); }}
+    .headline-brief.bearish {{ border-left-color: rgba(201, 59, 59, 0.35); }}
+    .headline-brief.neutral {{ border-left-color: rgba(138, 91, 18, 0.30); }}
+    .headline-brief-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--soft);
+      font-size: 12px;
+    }}
+    .headline-brief h3 {{
+      font-size: 17px;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }}
+    .headline-brief p + p {{
+      margin-top: 8px;
+    }}
+    .headline-brief a {{
+      display: inline-block;
+      margin-top: 10px;
+      font-size: 13px;
+    }}
+    .table-wrap {{
+      overflow-x: auto;
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fffdfa;
+    }}
+    .technical-table {{
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+    }}
+    .technical-table th,
+    .technical-table td {{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+      color: var(--text);
+    }}
+    .technical-table th {{
+      background: #f7efe2;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+    .geo-stat {{
+      padding: 12px 14px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }}
+    .geo-stat strong {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .geo-stat span {{
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.5;
+    }}
+    .scenario {{
+      padding: 16px;
+    }}
+    .scenario h3 {{
+      font-size: 16px;
+      margin-bottom: 8px;
+    }}
+    .scenario.positive h3 {{ color: var(--bull); }}
+    .scenario.negative h3 {{ color: var(--bear); }}
+    .scenario.neutral h3 {{ color: var(--amber); }}
+    .ai-panel {{
+      margin-top: 14px;
+    }}
+    .terminal-line {{
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 10px;
+      align-items: start;
+      margin-top: 10px;
+    }}
+    .prompt {{
+      color: var(--bull);
+      font-weight: 700;
+    }}
+    .terminal-tag {{
+      color: var(--amber);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .ai-copy {{
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 14px;
+    }}
+    .empty-state {{
+      color: var(--soft);
+      font-size: 14px;
+      padding: 10px 0;
+    }}
+    @media (max-width: 1180px) {{
+      .hero-grid,
+      .summary-grid,
+      .digest-grid,
+      .headline-grid,
+      .metrics-grid,
+      .scenario-grid,
+      .geo-grid,
+      .geo-columns {{
+        grid-template-columns: 1fr;
+      }}
+      .span-5,
+      .span-7,
+      .span-12 {{
+        grid-column: span 12;
+      }}
+    }}
+    @media (max-width: 900px) {{
+      .page {{
+        width: min(100%, calc(100% - 18px));
+        margin: 9px auto 18px;
+      }}
+      .hero-grid,
+      .trade-levels,
+      .key-levels {{
+        grid-template-columns: 1fr;
+      }}
+      .ticker-row {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page" id="dashboard-app">
+    <section class="hero-grid">
+      <article class="panel hero-price">
+        <div class="section-kicker">Vue instantanee</div>
+        <div class="ticker-symbol">XAU/USD spot intraday</div>
+        <div class="ticker-row">
+          <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
+          <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
+        </div>
+        <div class="ticker-meta">
+          Mis a jour {html.escape(generated_at)}<br>
+          Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
+          Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-chip">
+            <strong>Biais</strong>
+            <span class="{price_class}">{format_bias_label(analysis.bias)}</span>
+            <small>{heuristic_decision_sentence(analysis)}</small>
+          </div>
+          <div class="metric-chip">
+            <strong>Confiance</strong>
+            <span>{analysis.confidence}/100</span>
+            <div class="confidence-bar"><span></span></div>
+          </div>
+          <div class="metric-chip">
+            <strong>DXY</strong>
+            <span class="{dxy_class}">{dxy.price:.2f}</span>
+            <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
+          </div>
+          <div class="metric-chip">
+            <strong>10Y US</strong>
+            <span class="{us10y_class}">{us10y.price:.2f}%</span>
+            <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
+          </div>
+        </div>
+      </article>
+
+      {render_trade_card(fundamental)}
+      {render_trade_card(technical)}
+    </section>
+
+    <section class="summary-grid">
+      <article class="summary-box">
+        <div class="section-kicker">Ce qui se passe reellement</div>
+        <h2>Lecture du jour</h2>
+        <p class="lead">{html.escape(executive_summary)}</p>
+        {render_what_happens_now(story_lines)}
+      </article>
+
+      <article class="summary-box">
+        <div class="section-kicker">Pourquoi le modele dit cela</div>
+        <h2>Lecture simple</h2>
+        <div class="decision-grid">
+          <div class="decision-item">
+            <strong class="{recommendation_css_class(fundamental.verdict)}">Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
+            <span>{html.escape(fundamental.summary)}</span>
+          </div>
+          <div class="decision-item">
+            <strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong>
+            <span>{html.escape(technical.summary)}</span>
+          </div>
+          <div class="decision-item">
+            <strong class="{geo_class}">Geopolitique: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong>
+            <span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span>
+          </div>
+          <div class="decision-item">
+            <strong>Ce que cela veut dire pour vous</strong>
+            <span>Le mot BUY ou SELL ne veut pas dire “acheter maintenant a tout prix”. Il veut dire “dans le contexte actuel, le scenario dominant penche de ce cote, a condition que le prix respecte les niveaux SL et TP affiches”.</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="section-kicker">Actualites expliquees</div>
+      <h2>Pourquoi ces infos comptent aujourd'hui</h2>
+      <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
+      <div class="headline-grid" style="margin-top:14px;">
+        {render_headline_reason_cards(bundle.news, limit=6)}
+      </div>
+    </section>
+
+    <section class="content-grid" style="margin-top:14px;">
+      <article class="panel span-7">
+        <div class="section-kicker">Graphe intraday</div>
+        <h2>5m chandelles + ligne de prix live</h2>
+        <div class="chart-wrap">{chart_svg}</div>
+        <div class="footer-note" style="margin-top:10px;">
+          Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
+          La ligne ambre montre le prix spot en temps reel.
+        </div>
+        <div class="key-levels" style="margin-top:14px;">
+          <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
+          <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
+          <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
+        </div>
+      </article>
+
+      <article class="panel span-5">
+        <div class="section-kicker">Contexte geo / sentiment / flux</div>
+        <h2>Ce qui soutient ou freine l'or</h2>
+        {render_geopolitical_panel(geopolitical_analysis)}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Lecture technique detaillee</div>
+        <h2>EMA 20/50/100/200 · RSI7 · MACD 5/34/5 · Volume</h2>
+        {technical_matrix}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Scenarios d'execution</div>
+        <h2>Comment lire le trade intraday</h2>
+        <div class="scenario-grid" style="margin-top:12px;">
+          <div class="scenario positive">
+            <h3>Scenario hausse</h3>
+            <p>{html.escape(bullish_case)}</p>
+          </div>
+          <div class="scenario negative">
+            <h3>Scenario baisse</h3>
+            <p>{html.escape(bearish_case)}</p>
+          </div>
+          <div class="scenario neutral">
+            <h3>Scenario attente</h3>
+            <p>{html.escape(wait_case)}</p>
+          </div>
+        </div>
+      </article>
+
+      {render_ai_summary(ai_analysis)}
+
+      <section class="panel span-12">
+        <div class="section-kicker">Avertissement</div>
+        <div class="footer-note">
+          Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
+        </div>
+      </section>
+    </section>
+  </main>
+{live_script}
+</body>
+</html>"""
+
+
+def render_dashboard_clarity_v2(
+    bundle: BriefingBundle,
+    live_client: bool = False,
+    fragment_endpoint: str = "/fragment",
+    poll_seconds: int = 10,
+) -> str:
+    gold = bundle.gold
+    dxy = bundle.dxy
+    us10y = bundle.us10y
+    analysis = bundle.analysis
+    ai_analysis = bundle.ai_analysis
+    geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
+    technical_readings = bundle.technical_timeframes or []
+    chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
+    confidence_width = max(8, min(100, analysis.confidence))
+    bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
+    generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
+
+    fundamental = bundle.fundamental_recommendation or TradeRecommendation(
+        mode="Fondamental",
+        verdict="BUY" if analysis.score >= 0 else "SELL",
+        score=max(50, min(100, 50 + (abs(analysis.score) * 5))),
+        summary=heuristic_decision_sentence(analysis),
+        reasons=analysis.reasons[:4],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    technical = bundle.technical_recommendation or TradeRecommendation(
+        mode="Technique",
+        verdict="BUY",
+        score=50,
+        summary="Technique indisponible.",
+        reasons=["Lecture technique indisponible."],
+        stop_loss=gold.price - 10,
+        take_profit_1=gold.price + 10,
+        take_profit_2=gold.price + 20,
+        source_note="Mode de secours du dashboard.",
+    )
+    executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
+
+    price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
+    dxy_class = "bullish" if dxy.change_pct < 0 else "bearish" if dxy.change_pct > 0 else "neutral"
+    us10y_class = "bullish" if us10y.change_abs < 0 else "bearish" if us10y.change_abs > 0 else "neutral"
+    geo_class = (
+        "bullish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score >= 55
+        else "bearish"
+        if geopolitical_analysis is not None and geopolitical_analysis.score <= 45
+        else "neutral"
+    )
+    story_lines = build_what_happens_now_lines(
+        gold,
+        dxy,
+        us10y,
+        bundle.news,
+        fundamental,
+        technical,
+        geopolitical_analysis,
+    )
+    digest_items = build_information_digest_items(gold, dxy, us10y, bundle.news, geopolitical_analysis)
+    technical_matrix = (
+        render_technical_table(technical_readings)
+        if technical_readings
+        else '<div class="footer-note">Lecture technique indisponible.</div>'
+    )
+
+    meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
+    live_script = ""
+    if live_client:
+        live_script = f"""
+  <script>
+    (() => {{
+      const app = document.getElementById("dashboard-app");
+      if (!app) return;
+      let busy = false;
+      async function refreshLive() {{
+        if (busy) return;
+        busy = true;
+        try {{
+          const response = await fetch("{fragment_endpoint}?_ts=" + Date.now(), {{ cache: "no-store" }});
+          if (!response.ok) return;
+          app.innerHTML = await response.text();
+        }} catch (_error) {{
+        }} finally {{
+          busy = false;
+        }}
+      }}
+      window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+    }})();
+  </script>
+""".rstrip()
+
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+{meta_refresh}  <meta name="color-scheme" content="light">
+  <title>Dashboard XAUUSD</title>
+  <style>
+    :root {{
+      --bg: #f6f1e8;
+      --bg-2: #efe6d7;
+      --panel: #fffdf9;
+      --panel-alt: #f8f2e7;
+      --text: #1f2933;
+      --soft: #667085;
+      --muted: #d8ccb8;
+      --line: #e7dccd;
+      --bull: #127a48;
+      --bear: #b93a32;
+      --amber: #8b5e18;
+      --blue: #1e4fd6;
+    }}
+    * {{
+      box-sizing: border-box;
+      font-family: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+    }}
+    html, body {{
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, var(--bg), var(--bg-2));
+      color: var(--text);
+    }}
+    a {{
+      color: var(--blue);
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    h1, h2, h3, p {{
+      margin: 0;
+    }}
+    .page {{
+      width: min(1500px, calc(100% - 28px));
+      margin: 14px auto 28px;
+    }}
+    .hero-grid,
+    .summary-grid,
+    .digest-grid,
+    .content-grid,
+    .headline-grid,
+    .metrics-grid,
+    .trade-levels,
+    .key-levels,
+    .scenario-grid,
+    .geo-grid,
+    .geo-columns {{
+      display: grid;
+      gap: 14px;
+    }}
+    .hero-grid {{
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr) minmax(320px, 1fr);
+      margin-bottom: 14px;
+    }}
+    .summary-grid {{
+      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.9fr);
+      margin-bottom: 14px;
+    }}
+    .digest-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .content-grid {{
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .headline-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .metrics-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .trade-levels,
+    .key-levels {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .scenario-grid {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .geo-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }}
+    .geo-columns {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 14px;
+    }}
+    .panel,
+    .trade-card,
+    .summary-box,
+    .digest-card,
+    .headline-brief,
+    .story-row,
+    .metric-chip,
+    .level-chip,
+    .scenario {{
+      background: var(--panel);
+      border: 1px solid var(--muted);
+      border-radius: 10px;
+    }}
+    .panel,
+    .trade-card,
+    .summary-box {{
+      padding: 18px 18px 16px;
+    }}
+    .digest-card {{
+      padding: 16px;
+      background: var(--panel-alt);
+    }}
+    .span-5 {{ grid-column: span 5; }}
+    .span-7 {{ grid-column: span 7; }}
+    .span-12 {{ grid-column: span 12; }}
+    .section-kicker {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }}
+    .hero-price {{
+      background: var(--panel);
+    }}
+    .ticker-symbol {{
+      color: var(--amber);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .ticker-row {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 16px;
+      margin-top: 8px;
+    }}
+    .ticker-price {{
+      font-size: clamp(48px, 7vw, 78px);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      white-space: nowrap;
+    }}
+    .ticker-delta {{
+      font-size: 24px;
+      font-weight: 700;
+    }}
+    .ticker-price.bullish,
+    .ticker-delta.bullish,
+    .bullish,
+    .headline-brief.bullish h3 {{
+      color: var(--bull);
+    }}
+    .ticker-price.bearish,
+    .ticker-delta.bearish,
+    .bearish,
+    .headline-brief.bearish h3 {{
+      color: var(--bear);
+    }}
+    .ticker-price.neutral,
+    .ticker-delta.neutral,
+    .neutral,
+    .headline-brief.neutral h3 {{
+      color: var(--text);
+    }}
+    .ticker-cursor {{
+      display: inline-block;
+      width: 10px;
+      height: 0.92em;
+      margin-left: 8px;
+      background: currentColor;
+      vertical-align: text-bottom;
+      animation: blink 1s steps(1) infinite;
+    }}
+    @keyframes blink {{
+      50% {{ opacity: 0; }}
+    }}
+    .ticker-meta {{
+      margin-top: 12px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.7;
+    }}
+    .metric-chip,
+    .level-chip {{
+      padding: 12px 14px;
+    }}
+    .metric-chip strong,
+    .level-chip strong {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .metric-chip span,
+    .level-chip span {{
+      display: block;
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--text);
+    }}
+    .metric-chip small {{
+      display: block;
+      margin-top: 6px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .trade-card {{
+      border-top: 6px solid var(--muted);
+      background: var(--panel);
+    }}
+    .trade-card.bullish {{ border-top-color: rgba(19, 138, 82, 0.35); }}
+    .trade-card.bearish {{ border-top-color: rgba(201, 59, 59, 0.35); }}
+    .trade-card-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }}
+    .trade-card h2 {{
+      color: var(--text);
+      font-size: 24px;
+      margin-top: 2px;
+    }}
+    .trade-score {{
+      color: var(--amber);
+      font-size: 34px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .trade-score small {{
+      font-size: 15px;
+      color: var(--soft);
+    }}
+    .trade-verdict {{
+      display: inline-block;
+      padding: 8px 12px;
+      background: var(--panel-alt);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }}
+    .trade-summary,
+    .story-text,
+    .headline-brief p,
+    .footer-note {{
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.7;
+    }}
+    .trade-levels {{
+      margin: 12px 0;
+    }}
+    .trade-levels div {{
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }}
+    .trade-levels span {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .trade-levels strong {{
+      display: block;
+      margin-top: 6px;
+      font-size: 24px;
+      color: var(--text);
+    }}
+    .trade-reasons,
+    .reason-list {{
+      margin: 0;
+      padding-left: 18px;
+      line-height: 1.65;
+      font-size: 13px;
+      color: var(--text);
+    }}
+    .trade-footer {{
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.6;
+      display: grid;
+      gap: 4px;
+    }}
+    .summary-box h2,
+    .panel h2 {{
+      font-size: 24px;
+      color: var(--text);
+      margin-bottom: 8px;
+    }}
+    .summary-box .lead {{
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.75;
+      margin-bottom: 14px;
+    }}
+    .story-row {{
+      padding: 13px 14px;
+      margin-top: 10px;
+      background: var(--panel-alt);
+    }}
+    .digest-tag {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }}
+    .digest-card h3 {{
+      font-size: 15px;
+      line-height: 1.55;
+      margin-bottom: 8px;
+      color: var(--text);
+    }}
+    .digest-card p {{
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.7;
+      margin: 0;
+    }}
+    .story-label {{
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .decision-grid {{
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .decision-item {{
+      padding: 14px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }}
+    .decision-item strong {{
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }}
+    .decision-item span {{
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.6;
+    }}
+    .confidence-bar {{
+      height: 10px;
+      margin-top: 10px;
+      background: #eee4d7;
+      border-radius: 999px;
+      overflow: hidden;
+    }}
+    .confidence-bar span {{
+      display: block;
+      width: {confidence_width}%;
+      height: 100%;
+      background: linear-gradient(90deg, #e7b45e, #8a5b12);
+    }}
+    .chart-wrap {{
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fffdf8;
+    }}
+    .chart-wrap svg {{
+      display: block;
+      width: 100%;
+      height: auto;
+    }}
+    .headline-brief {{
+      padding: 16px;
+      border-left: 6px solid var(--line);
+    }}
+    .headline-brief.bullish {{ border-left-color: rgba(19, 138, 82, 0.35); }}
+    .headline-brief.bearish {{ border-left-color: rgba(201, 59, 59, 0.35); }}
+    .headline-brief.neutral {{ border-left-color: rgba(138, 91, 18, 0.30); }}
+    .headline-brief-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--soft);
+      font-size: 12px;
+    }}
+    .headline-brief h3 {{
+      font-size: 17px;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }}
+    .headline-brief p + p {{
+      margin-top: 8px;
+    }}
+    .headline-brief a {{
+      display: inline-block;
+      margin-top: 10px;
+      font-size: 13px;
+    }}
+    .table-wrap {{
+      overflow-x: auto;
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fffdfa;
+    }}
+    .technical-table {{
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+    }}
+    .technical-table th,
+    .technical-table td {{
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+      color: var(--text);
+    }}
+    .technical-table th {{
+      background: #f7efe2;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+    .geo-stat {{
+      padding: 12px 14px;
+      background: var(--panel-alt);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }}
+    .geo-stat strong {{
+      display: block;
+      color: var(--amber);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }}
+    .geo-stat span {{
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.5;
+    }}
+    .scenario {{
+      padding: 16px;
+    }}
+    .scenario h3 {{
+      font-size: 16px;
+      margin-bottom: 8px;
+    }}
+    .scenario.positive h3 {{ color: var(--bull); }}
+    .scenario.negative h3 {{ color: var(--bear); }}
+    .scenario.neutral h3 {{ color: var(--amber); }}
+    .ai-panel {{
+      margin-top: 14px;
+    }}
+    .terminal-line {{
+      display: grid;
+      grid-template-columns: auto auto 1fr;
+      gap: 10px;
+      align-items: start;
+      margin-top: 10px;
+    }}
+    .prompt {{
+      color: var(--bull);
+      font-weight: 700;
+    }}
+    .terminal-tag {{
+      color: var(--amber);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .ai-copy {{
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 14px;
+    }}
+    .empty-state {{
+      color: var(--soft);
+      font-size: 14px;
+      padding: 10px 0;
+    }}
+    @media (max-width: 1180px) {{
+      .hero-grid,
+      .summary-grid,
+      .digest-grid,
+      .headline-grid,
+      .metrics-grid,
+      .scenario-grid,
+      .geo-grid,
+      .geo-columns {{
+        grid-template-columns: 1fr;
+      }}
+      .span-5,
+      .span-7,
+      .span-12 {{
+        grid-column: span 12;
+      }}
+    }}
+    @media (max-width: 900px) {{
+      .page {{
+        width: min(100%, calc(100% - 18px));
+        margin: 9px auto 18px;
+      }}
+      .hero-grid,
+      .trade-levels,
+      .key-levels {{
+        grid-template-columns: 1fr;
+      }}
+      .ticker-row {{
+        flex-direction: column;
+        align-items: flex-start;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page" id="dashboard-app">
+    <section class="hero-grid">
+      <article class="panel hero-price">
+        <div class="section-kicker">Vue instantanee</div>
+        <div class="ticker-symbol">XAU/USD spot intraday</div>
+        <div class="ticker-row">
+          <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
+          <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
+        </div>
+        <div class="ticker-meta">
+          Mis a jour {html.escape(generated_at)}<br>
+          Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
+          Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-chip">
+            <strong>Biais</strong>
+            <span class="{price_class}">{format_bias_label(analysis.bias)}</span>
+            <small>{heuristic_decision_sentence(analysis)}</small>
+          </div>
+          <div class="metric-chip">
+            <strong>Confiance</strong>
+            <span>{analysis.confidence}/100</span>
+            <div class="confidence-bar"><span></span></div>
+          </div>
+          <div class="metric-chip">
+            <strong>DXY</strong>
+            <span class="{dxy_class}">{dxy.price:.2f}</span>
+            <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
+          </div>
+          <div class="metric-chip">
+            <strong>10Y US</strong>
+            <span class="{us10y_class}">{us10y.price:.2f}%</span>
+            <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
+          </div>
+        </div>
+      </article>
+
+      {render_trade_card(fundamental)}
+      {render_trade_card(technical)}
+    </section>
+
+    <section class="summary-grid">
+      <article class="summary-box">
+        <div class="section-kicker">Ce qui se passe reellement</div>
+        <h2>Le marche du jour en francais simple</h2>
+        <p class="lead">{html.escape(executive_summary)}</p>
+        {render_what_happens_now(story_lines)}
+      </article>
+
+      <article class="summary-box">
+        <div class="section-kicker">Traduction simple des scores</div>
+        <h2>Comment lire BUY / SELL ici</h2>
+        <div class="decision-grid">
+          <div class="decision-item">
+            <strong class="{recommendation_css_class(fundamental.verdict)}">Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
+            <span>{html.escape(fundamental.summary)}</span>
+          </div>
+          <div class="decision-item">
+            <strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong>
+            <span>{html.escape(technical.summary)}</span>
+          </div>
+          <div class="decision-item">
+            <strong class="{geo_class}">Geopolitique: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong>
+            <span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span>
+          </div>
+          <div class="decision-item">
+            <strong>Ce que cela veut dire pour vous</strong>
+            <span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="section-kicker">Resume des infos du jour</div>
+      <h2>Les messages qui comptent vraiment</h2>
+      <p class="footer-note">Chaque bloc ci-dessous explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
+      <div class="digest-grid">
+        {render_information_digest(digest_items)}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-kicker">Actualites expliquees</div>
+      <h2>Pourquoi ces infos comptent aujourd'hui</h2>
+      <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
+      <div class="headline-grid">
+        {render_headline_reason_cards(bundle.news, limit=6)}
+      </div>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel span-7">
+        <div class="section-kicker">Graphe intraday</div>
+        <h2>5m chandelles + ligne de prix live</h2>
+        <div class="chart-wrap">{chart_svg}</div>
+        <div class="footer-note" style="margin-top:10px;">
+          Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
+          La ligne ambre montre le prix spot en temps reel.
+        </div>
+        <div class="key-levels" style="margin-top:14px;">
+          <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
+          <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
+          <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
+        </div>
+      </article>
+
+      <article class="panel span-5">
+        <div class="section-kicker">Contexte geo / sentiment / flux</div>
+        <h2>Ce qui soutient ou freine l'or</h2>
+        {render_geopolitical_panel(geopolitical_analysis)}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Lecture technique detaillee</div>
+        <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
+        {technical_matrix}
+      </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Scenarios d'execution</div>
+        <h2>Comment lire le trade intraday</h2>
+        <div class="scenario-grid" style="margin-top:12px;">
+          <div class="scenario positive">
+            <h3>Scenario hausse</h3>
+            <p>{html.escape(bullish_case)}</p>
+          </div>
+          <div class="scenario negative">
+            <h3>Scenario baisse</h3>
+            <p>{html.escape(bearish_case)}</p>
+          </div>
+          <div class="scenario neutral">
+            <h3>Scenario attente</h3>
+            <p>{html.escape(wait_case)}</p>
+          </div>
+        </div>
+      </article>
+
+      {render_ai_summary(ai_analysis)}
+
+      <section class="panel span-12">
+        <div class="section-kicker">Avertissement</div>
+        <div class="footer-note">
+          Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
+        </div>
+      </section>
+    </section>
+  </main>
+{live_script}
+</body>
+</html>"""
+
+
+def extract_dashboard_main_inner(html_document: str) -> str:
+    marker = '<main class="page" id="dashboard-app">'
+    start = html_document.find(marker)
+    if start < 0:
+        raise RuntimeError("Impossible de localiser le conteneur principal du dashboard.")
+    start += len(marker)
+    end = html_document.find("</main>", start)
+    if end < 0:
+        raise RuntimeError("Impossible de localiser la fin du conteneur principal du dashboard.")
+    return html_document[start:end]
+
+
+def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
+    live_bundle = copy.deepcopy(base_bundle)
+    gold = fetch_investing_xauusd_snapshot(include_historical=False)
+    dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
+    us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
+    technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
+    gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
+    analysis = analyze_market(gold, dxy, us10y, live_bundle.news)
+    geopolitical_analysis = analysis.geopolitical
+    atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
+    fundamental_recommendation = build_fundamental_recommendation(gold, dxy, us10y, analysis, atr_15m)
+    technical_recommendation = build_technical_recommendation(gold, technical_readings, proxy_price)
+    executive_summary = build_executive_summary(
+        fundamental_recommendation,
+        technical_recommendation,
+        geopolitical_analysis,
+    )
+    payload = build_payload(
+        gold,
+        dxy,
+        us10y,
+        live_bundle.news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        technical_timeframes=technical_readings,
+    )
+    payload["executive_summary"] = executive_summary
+    if live_bundle.ai_analysis:
+        payload["ai_summary"] = live_bundle.ai_analysis
+
+    live_bundle.gold = gold
+    live_bundle.dxy = dxy
+    live_bundle.us10y = us10y
+    live_bundle.analysis = analysis
+    live_bundle.payload = payload
+    live_bundle.geopolitical_analysis = geopolitical_analysis
+    live_bundle.fundamental_recommendation = fundamental_recommendation
+    live_bundle.technical_recommendation = technical_recommendation
+    live_bundle.technical_timeframes = technical_readings
+    live_bundle.executive_summary = executive_summary
+    return live_bundle
+
+
+def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
+    gold = fetch_investing_xauusd_snapshot(include_historical=True)
+    dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
+    us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
+    news = fetch_news(top_news)
+    analysis = analyze_market(gold, dxy, us10y, news)
+    geopolitical_analysis = analysis.geopolitical
+    technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
+    gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
+    atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
+    fundamental_recommendation = build_fundamental_recommendation(gold, dxy, us10y, analysis, atr_15m)
+    technical_recommendation = build_technical_recommendation(gold, technical_readings, proxy_price)
+    executive_summary = build_executive_summary(
+        fundamental_recommendation,
+        technical_recommendation,
+        geopolitical_analysis,
+    )
+    payload = build_payload(
+        gold,
+        dxy,
+        us10y,
+        news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        technical_timeframes=technical_readings,
+    )
+    payload["executive_summary"] = executive_summary
+    ai_analysis = call_openai_analysis(payload) if include_ai else None
+
+    if ai_analysis:
+        payload["ai_summary"] = ai_analysis
+
+    return BriefingBundle(
+        gold=gold,
+        dxy=dxy,
+        us10y=us10y,
+        news=news,
+        analysis=analysis,
+        payload=payload,
+        ai_analysis=ai_analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        technical_timeframes=technical_readings,
+        executive_summary=executive_summary,
+    )
+
+
+def write_text_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def render_artifacts(
+    bundle: BriefingBundle,
+    include_dashboard: bool,
+    live_client: bool = False,
+    fragment_endpoint: str = "/fragment",
+    poll_seconds: int = 10,
+) -> tuple[str, str, str | None]:
+    report = render_report(
+        bundle.gold,
+        bundle.dxy,
+        bundle.us10y,
+        bundle.news,
+        bundle.analysis,
+        bundle.ai_analysis,
+        bundle.geopolitical_analysis,
+        bundle.fundamental_recommendation,
+        bundle.technical_recommendation,
+        bundle.executive_summary,
+    )
+    json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
+    html_dashboard = (
+        render_dashboard(
+            bundle,
+            live_client=live_client,
+            fragment_endpoint=fragment_endpoint,
+            poll_seconds=poll_seconds,
+        )
+        if include_dashboard
+        else None
+    )
+    return report, json_report, html_dashboard
+
+
+def persist_artifacts(
+    bundle: BriefingBundle,
+    save_path: Path | None,
+    data_json_path: Path | None,
+    dashboard_path: Path | None,
+) -> None:
+    report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=dashboard_path is not None)
+    if save_path:
+        write_text_file(save_path, report)
+    if data_json_path:
+        write_text_file(data_json_path, json_report)
+    if dashboard_path and html_dashboard is not None:
+        write_text_file(dashboard_path, html_dashboard)
+
+
+class DashboardLiveCache:
+    def __init__(
+        self,
+        top_news: int,
+        live_refresh_seconds: int,
+        full_refresh_seconds: int,
+        save_path: Path | None = None,
+        data_json_path: Path | None = None,
+        dashboard_path: Path | None = None,
+        include_ai: bool = False,
+    ) -> None:
+        self.top_news = top_news
+        self.live_refresh_seconds = max(5, live_refresh_seconds)
+        self.full_refresh_seconds = max(self.live_refresh_seconds, full_refresh_seconds)
+        self.save_path = save_path
+        self.data_json_path = data_json_path
+        self.dashboard_path = dashboard_path
+        self.include_ai = include_ai
+        self.lock = threading.Lock()
+        self.full_bundle: BriefingBundle | None = None
+        self.latest_bundle: BriefingBundle | None = None
+        self.full_refreshed_at = 0.0
+        self.latest_refreshed_at = 0.0
+
+    def _persist_latest(self, bundle: BriefingBundle, save_report: bool) -> None:
+        if save_report and self.save_path:
+            report = render_report(
+                bundle.gold,
+                bundle.dxy,
+                bundle.us10y,
+                bundle.news,
+                bundle.analysis,
+                bundle.ai_analysis,
+                bundle.geopolitical_analysis,
+                bundle.fundamental_recommendation,
+                bundle.technical_recommendation,
+                bundle.executive_summary,
+            )
+            write_text_file(self.save_path, report)
+
+        if self.data_json_path:
+            write_text_file(self.data_json_path, json.dumps(bundle.payload, ensure_ascii=False, indent=2))
+
+        if self.dashboard_path:
+            write_text_file(self.dashboard_path, render_dashboard(bundle, live_client=False))
+
+    def _load_cached_bundle_or_raise(self, original_error: Exception) -> BriefingBundle:
+        cached_bundle = load_cached_bundle(self.data_json_path)
+        if cached_bundle is None:
+            raise original_error
+        return cached_bundle
+
+    def get_bundle(self) -> BriefingBundle:
+        now = time.time()
+        with self.lock:
+            if self.full_bundle is None or (now - self.full_refreshed_at) >= self.full_refresh_seconds:
+                try:
+                    bundle = build_briefing(self.top_news, include_ai=self.include_ai)
+                except Exception as exc:
+                    bundle = self._load_cached_bundle_or_raise(exc)
+                self.full_bundle = bundle
+                self.latest_bundle = bundle
+                self.full_refreshed_at = now
+                self.latest_refreshed_at = now
+                self._persist_latest(bundle, save_report=True)
+                return bundle
+
+            if self.latest_bundle is None or (now - self.latest_refreshed_at) >= self.live_refresh_seconds:
+                try:
+                    bundle = build_live_bundle(self.full_bundle)
+                except Exception:
+                    return self.latest_bundle or self.full_bundle
+                self.latest_bundle = bundle
+                self.latest_refreshed_at = now
+                self._persist_latest(bundle, save_report=False)
+
+            return self.latest_bundle
+
+
+def serve_dashboard(args: argparse.Namespace) -> int:
+    cache = DashboardLiveCache(
+        top_news=args.top_news,
+        live_refresh_seconds=args.live_refresh_seconds,
+        full_refresh_seconds=args.full_refresh_seconds,
+        save_path=args.save,
+        data_json_path=args.data_json,
+        dashboard_path=args.dashboard,
+        include_ai=args.live_ai,
+    )
+
+    class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            route = parsed.path or "/"
+
+            if route == "/favicon.ico":
+                self.send_response(204)
+                self.end_headers()
+                return
+
+            try:
+                bundle = cache.get_bundle()
+            except Exception as exc:
+                self.send_response(500)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(f"Erreur de mise a jour du dashboard: {exc}".encode("utf-8"))
+                return
+
+            if route in ("/", "/index.html"):
+                html_document = render_dashboard(
+                    bundle,
+                    live_client=True,
+                    fragment_endpoint="/fragment",
+                    poll_seconds=args.live_refresh_seconds,
+                )
+                payload = html_document.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            if route == "/fragment":
+                fragment = extract_dashboard_main_inner(render_dashboard(bundle, live_client=False))
+                payload = fragment.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            if route == "/api/live.json":
+                payload = json.dumps(bundle.payload, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+
+        def log_message(self, format: str, *log_args: Any) -> None:  # noqa: A003
+            if not args.quiet:
+                super().log_message(format, *log_args)
+
+    try:
+        server = http.server.ThreadingHTTPServer((args.host, args.port), DashboardRequestHandler)
+    except OSError as exc:
+        print(f"Impossible de lancer le serveur du dashboard sur {args.host}:{args.port}: {exc}", file=sys.stderr)
+        return 1
+
+    if not args.quiet:
+        print(f"Dashboard live disponible sur http://{args.host}:{args.port}/")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="XAUUSD market news agent with heuristic analysis and optional OpenAI summary."
+    )
+    parser.add_argument("--top-news", type=int, default=8, help="Number of headlines to keep in the report.")
+    parser.add_argument("--json", action="store_true", help="Print structured JSON instead of markdown.")
+    parser.add_argument(
+        "--save",
+        type=Path,
+        default=None,
+        help="Optional file path to save the markdown report.",
+    )
+    parser.add_argument(
+        "--dashboard",
+        type=Path,
+        default=None,
+        help="Optional file path to save the HTML dashboard.",
+    )
+    parser.add_argument(
+        "--data-json",
+        type=Path,
+        default=None,
+        help="Optional file path to save the JSON payload.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Do not print the full report to the console.",
+    )
+    parser.add_argument(
+        "--watch-minutes",
+        type=int,
+        default=0,
+        help="Rerun the briefing every N minutes. Default: run once.",
+    )
+    parser.add_argument(
+        "--max-cycles",
+        type=int,
+        default=0,
+        help="Stop after N cycles in watch mode. Default: infinite watch.",
+    )
+    parser.add_argument(
+        "--serve-dashboard",
+        action="store_true",
+        help="Start a local live dashboard server instead of writing a static HTML file only.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Host for the live dashboard server.")
+    parser.add_argument("--port", type=int, default=8787, help="Port for the live dashboard server.")
+    parser.add_argument(
+        "--live-refresh-seconds",
+        type=int,
+        default=10,
+        help="Refresh interval in seconds for the live XAU/USD price and candlestick chart.",
+    )
+    parser.add_argument(
+        "--full-refresh-seconds",
+        type=int,
+        default=60,
+        help="Refresh interval in seconds for the broader analysis and recommendations in live mode.",
+    )
+    parser.add_argument(
+        "--live-ai",
+        action="store_true",
+        help="Allow OpenAI summaries during live server refreshes. Disabled by default to avoid repeated API calls.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    load_env_file(Path(".env"))
+    args = parse_args()
+    if args.serve_dashboard:
+        return serve_dashboard(args)
+
+    cycle = 0
+
+    while True:
+        cycle += 1
+        try:
+            bundle = build_briefing(top_news=args.top_news, include_ai=True)
+        except Exception as exc:
+            bundle = load_cached_bundle(args.data_json)
+            if bundle is None:
+                print(f"Erreur lors de la generation du briefing: {exc}", file=sys.stderr)
+                return 1
+            print(
+                f"Sources live indisponibles temporairement, utilisation du dernier snapshot en cache: {exc}",
+                file=sys.stderr,
+            )
+
+        report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=args.dashboard is not None)
+
+        if args.save:
+            write_text_file(args.save, report)
+
+        if args.data_json:
+            write_text_file(args.data_json, json_report)
+
+        if args.dashboard and html_dashboard is not None:
+            write_text_file(args.dashboard, html_dashboard)
+
+        if not args.quiet:
+            print(json_report if args.json else report)
+
+        if args.watch_minutes <= 0:
+            return 0
+        if args.max_cycles and cycle >= args.max_cycles:
+            return 0
+
+        time.sleep(args.watch_minutes * 60)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

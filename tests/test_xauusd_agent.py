@@ -26,6 +26,11 @@ class HeadlineScoringTests(unittest.TestCase):
         self.assertLess(score, 0)
         self.assertTrue(reasons)
 
+    def test_keyword_scoring_avoids_substring_false_positive(self) -> None:
+        score, reasons = score_headline("Brent crude backwardation points to physical market tightness")
+        self.assertEqual(score, 0)
+        self.assertEqual(reasons, [])
+
     def test_bias_buckets(self) -> None:
         self.assertEqual(classify_bias(6), "bullish")
         self.assertEqual(classify_bias(2), "slightly bullish")

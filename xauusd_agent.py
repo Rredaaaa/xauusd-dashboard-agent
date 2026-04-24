@@ -47,6 +47,12 @@ NEWS_QUERIES = [
     ("physical_demand", '(China gold demand OR India gold demand OR "central bank gold buying") when:30d'),
 ]
 
+FALLBACK_RSS_FEEDS = [
+    ("gold", "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GC=F&region=US&lang=en-US"),
+    ("commodities", "https://www.investing.com/rss/commodities.rss"),
+    ("markets", "https://www.investing.com/rss/news_25.rss"),
+]
+
 SYSTEM_PROMPT = """
 You are a disciplined XAUUSD market briefing assistant.
 Use only the supplied market data and headlines.
@@ -389,6 +395,15 @@ def should_skip_headline(title: str, source: str) -> bool:
         "horoscope",
     ]
     return any(pattern in text for pattern in blocked_patterns)
+
+
+def keyword_matches(text: str, keyword: str) -> bool:
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    normalized_keyword = re.sub(r"[^a-z0-9]+", " ", keyword.lower()).strip()
+    if keyword == "geopolit":
+        return "geopolit" in normalized_text
+    pattern = rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])"
+    return re.search(pattern, normalized_text) is not None
 
 
 def iso_now() -> str:
@@ -1120,16 +1135,59 @@ def score_headline(title: str) -> tuple[int, list[str]]:
     reasons: list[str] = []
 
     for keyword, weight in BULLISH_KEYWORDS.items():
-        if keyword in text:
+        if keyword_matches(text, keyword):
             score += weight
             reasons.append(f"bullish:{keyword}")
 
     for keyword, weight in BEARISH_KEYWORDS.items():
-        if keyword in text:
+        if keyword_matches(text, keyword):
             score += weight
             reasons.append(f"bearish:{keyword}")
 
     return max(-3, min(3, score)), reasons
+
+
+def append_rss_items(
+    root: ET.Element,
+    category: str,
+    items: list[NewsItem],
+    seen_titles: set[str],
+    result_limit: int,
+) -> None:
+    channel_title = compact_whitespace(root.findtext("./channel/title", default="RSS"))
+    for item in root.findall("./channel/item"):
+        source = compact_whitespace(item.findtext("source", default="")) or channel_title
+        raw_title = compact_whitespace(item.findtext("title", default=""))
+        title = strip_source_suffix(raw_title, source)
+        dedupe_key = normalize_title_for_dedupe(title)
+        if not title or dedupe_key in seen_titles or should_skip_headline(title, source):
+            continue
+
+        score, reasons = score_headline(title)
+        published_raw = item.findtext("pubDate", default="")
+        try:
+            published_at = (
+                parsedate_to_datetime(published_raw).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+                if published_raw
+                else iso_now()
+            )
+        except Exception:
+            published_at = iso_now()
+
+        items.append(
+            NewsItem(
+                title=title,
+                source=source,
+                link=compact_whitespace(item.findtext("link", default="")),
+                published_at=published_at,
+                category=category,
+                score=score,
+                score_reasons=reasons,
+            )
+        )
+        seen_titles.add(dedupe_key)
+        if len(items) >= result_limit:
+            return
 
 
 def fetch_news(top_n: int) -> list[NewsItem]:
@@ -1154,37 +1212,21 @@ def fetch_news(top_n: int) -> list[NewsItem]:
         except Exception:
             continue
 
-        for item in root.findall("./channel/item"):
-            source = compact_whitespace(item.findtext("source", default="Unknown source"))
-            raw_title = compact_whitespace(item.findtext("title", default=""))
-            title = strip_source_suffix(raw_title, source)
-            dedupe_key = normalize_title_for_dedupe(title)
-            if not title or dedupe_key in seen_titles or should_skip_headline(title, source):
+        append_rss_items(root, category, items, seen_titles, result_limit)
+        if len(items) >= result_limit:
+            items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
+            return items[:result_limit]
+
+    if len(items) < top_n:
+        for category, url in FALLBACK_RSS_FEEDS:
+            try:
+                xml_text = http_get_text(url)
+                root = ET.fromstring(xml_text)
+            except Exception:
                 continue
-
-            score, reasons = score_headline(title)
-            published_raw = item.findtext("pubDate", default="")
-            published_at = (
-                parsedate_to_datetime(published_raw).astimezone(timezone.utc).replace(microsecond=0).isoformat()
-                if published_raw
-                else iso_now()
-            )
-
-            items.append(
-                NewsItem(
-                    title=title,
-                    source=source,
-                    link=compact_whitespace(item.findtext("link", default="")),
-                    published_at=published_at,
-                    category=category,
-                    score=score,
-                    score_reasons=reasons,
-                )
-            )
-            seen_titles.add(dedupe_key)
+            append_rss_items(root, category, items, seen_titles, result_limit)
             if len(items) >= result_limit:
-                items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
-                return items[:result_limit]
+                break
 
     items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
     return items[:result_limit]
@@ -1246,7 +1288,7 @@ def count_keyword_matches(items: list[NewsItem], keywords: set[str]) -> int:
     total = 0
     for item in items:
         text = f"{item.title} {' '.join(item.score_reasons)}".lower()
-        if any(keyword in text for keyword in keywords):
+        if any(keyword_matches(text, keyword) for keyword in keywords):
             total += 1
     return total
 
@@ -1555,7 +1597,7 @@ def headline_sort_key(item: NewsItem) -> tuple[int, datetime]:
 
 
 def text_contains_any(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(pattern in text for pattern in patterns)
+    return any(keyword_matches(text, pattern) for pattern in patterns)
 
 
 def explain_headline_reason(item: NewsItem) -> str:

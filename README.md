@@ -8,6 +8,7 @@ Le projet est pense pour etre partage et developpe a deux. Les fichiers de code,
 
 - Prix spot `XAU/USD` depuis Investing.com.
 - Dashboard local live sur `http://127.0.0.1:8787/`.
+- Dashboard web Vercel dans `public/index.html` avec API serverless `api/xauusd.py`.
 - Chandeliers intraday avec ligne de prix live.
 - Analyse fondamentale, technique et geopolitique.
 - Scores `/100`, verdict intraday, `SL`, `TP1`, `TP2`.
@@ -47,13 +48,28 @@ Generer les artefacts:
 python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .\reports\xauusd_data.json --dashboard .\reports\xauusd_dashboard.html
 ```
 
+## Version Vercel
+
+La version web se trouve dans `public/index.html` et appelle l'endpoint `api/xauusd.py`.
+
+- Un refresh de la page Vercel relance une requete API et actualise les donnees si les sources repondent.
+- Le dashboard se met aussi a jour automatiquement toutes les 60 secondes en mode rapide.
+- Le bouton `Analyse complete` recharge les actualites, le geopolitique, le sentiment et les flux.
+
+Voir [docs/VERCEL.md](docs/VERCEL.md) pour le deploiement.
+
 ## Structure
 
 ```text
 .
 |-- xauusd_agent.py                 # Agent, dashboard, serveur live et analyses
+|-- api/
+|   `-- xauusd.py                   # API serverless Vercel
+|-- public/
+|   `-- index.html                  # Dashboard web Vercel
 |-- Lancer-Agent-XAUUSD.bat         # Lance le dashboard live
 |-- Surveiller-Agent-XAUUSD-15min.bat
+|-- vercel.json
 |-- requirements.txt
 |-- .env.example
 |-- tests/

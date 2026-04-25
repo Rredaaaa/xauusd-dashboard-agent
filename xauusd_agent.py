@@ -337,6 +337,7 @@ class BriefingBundle:
     geopolitical_analysis: GeopoliticalAnalysis | None = None
     fundamental_recommendation: "TradeRecommendation | None" = None
     technical_recommendation: "TradeRecommendation | None" = None
+    global_recommendation: "TradeRecommendation | None" = None
     technical_timeframes: list["TechnicalReading"] | None = None
     executive_summary: str = ""
     real_yield: SymbolSnapshot | None = None
@@ -1229,6 +1230,126 @@ def build_technical_recommendation(
         take_profit_1=tp1,
         take_profit_2=tp2,
         source_note="Indicateurs calcules sur GC=F (proxy futures COMEX) pour obtenir les bougies multi-timeframes et le volume, puis alignes sur le spot XAU/USD.",
+    )
+
+
+def recommendation_bullish_score(recommendation: TradeRecommendation) -> float:
+    if recommendation.verdict.upper() == "BUY":
+        return float(recommendation.score)
+    return float(100 - recommendation.score)
+
+
+def collect_directional_levels(
+    price: float,
+    verdict: str,
+    recommendations: list[TradeRecommendation],
+) -> tuple[list[float], list[float], list[float]]:
+    stop_losses: list[float] = []
+    take_profit_1: list[float] = []
+    take_profit_2: list[float] = []
+
+    for recommendation in recommendations:
+        if recommendation.verdict != verdict:
+            continue
+        if verdict == "BUY":
+            if recommendation.stop_loss < price:
+                stop_losses.append(recommendation.stop_loss)
+            if recommendation.take_profit_1 > price:
+                take_profit_1.append(recommendation.take_profit_1)
+            if recommendation.take_profit_2 > price:
+                take_profit_2.append(recommendation.take_profit_2)
+        else:
+            if recommendation.stop_loss > price:
+                stop_losses.append(recommendation.stop_loss)
+            if recommendation.take_profit_1 < price:
+                take_profit_1.append(recommendation.take_profit_1)
+            if recommendation.take_profit_2 < price:
+                take_profit_2.append(recommendation.take_profit_2)
+
+    return stop_losses, take_profit_1, take_profit_2
+
+
+def average_or_default(values: list[float], default: float) -> float:
+    return sum(values) / len(values) if values else default
+
+
+def build_global_recommendation(
+    gold: SymbolSnapshot,
+    analysis: AnalysisResult,
+    fundamental: TradeRecommendation,
+    technical: TradeRecommendation,
+    geopolitical: GeopoliticalAnalysis | None = None,
+    cross_asset: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
+) -> TradeRecommendation:
+    fundamental_bullish = recommendation_bullish_score(fundamental)
+    technical_bullish = recommendation_bullish_score(technical)
+    geopolitical_bullish = float(geopolitical.score) if geopolitical is not None else 50.0
+    cross_asset_bullish = float(cross_asset.score) if cross_asset is not None else 50.0
+    heuristic_bullish = clamp(50 + (analysis.score * 4), 0, 100)
+
+    bullish_score = (
+        technical_bullish * 0.34
+        + fundamental_bullish * 0.28
+        + geopolitical_bullish * 0.16
+        + cross_asset_bullish * 0.14
+        + heuristic_bullish * 0.08
+    )
+    verdict = "BUY" if bullish_score >= 50 else "SELL"
+    conviction = bullish_score if verdict == "BUY" else 100 - bullish_score
+    score = round(clamp(conviction, 52, 92))
+
+    stop_default, tp1_default, tp2_default = build_trade_levels(
+        gold.price,
+        atr=max(abs(fundamental.take_profit_1 - gold.price), abs(technical.take_profit_1 - gold.price), 6.0),
+        verdict=verdict,
+        stop_multiplier=1.0,
+        tp1_multiplier=1.0,
+        tp2_multiplier=2.0,
+    )
+    stop_losses, take_profit_1, take_profit_2 = collect_directional_levels(
+        gold.price,
+        verdict,
+        [fundamental, technical],
+    )
+    stop_loss = average_or_default(stop_losses, stop_default)
+    tp1 = average_or_default(take_profit_1, tp1_default)
+    tp2 = average_or_default(take_profit_2, tp2_default)
+
+    reasons = [
+        f"Technique {technical.verdict} a {technical.score}/100.",
+        f"Fondamental {fundamental.verdict} a {fundamental.score}/100.",
+    ]
+    if geopolitical is not None:
+        reasons.append(f"Geopolitique/sentiment/flux a {geopolitical.score}/100.")
+    if cross_asset is not None:
+        reasons.append(f"Confluence inter-marches a {cross_asset.score}/100 ({cross_asset.status}).")
+    reasons.append(f"Biais heuristique global: {format_bias_label(analysis.bias)} ({analysis.score:+d}).")
+
+    if fundamental.verdict == technical.verdict == verdict:
+        summary = f"Signal global aligne: le fondamental et la technique pointent tous les deux vers {verdict}."
+    elif verdict == technical.verdict:
+        summary = f"Signal global {verdict}: la technique domine, avec validation partielle du contexte global."
+    elif verdict == fundamental.verdict:
+        summary = f"Signal global {verdict}: le contexte fondamental domine, mais le timing technique demande prudence."
+    else:
+        summary = f"Signal global {verdict}: la moyenne des scores penche de ce cote, mais la confluence reste partagee."
+
+    if event_mode is not None and event_mode.active:
+        score = min(score, 62)
+        summary = f"{summary} Mode event actif: attendre une confirmation propre avant toute entree aggressive."
+        reasons.insert(0, f"Mode event actif ({event_mode.score}/100): risque de volatilite eleve.")
+
+    return TradeRecommendation(
+        mode="Global",
+        verdict=verdict,
+        score=score,
+        summary=summary,
+        reasons=reasons[:6],
+        stop_loss=stop_loss,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        source_note="Score global pondere: technique, fondamental, geopolitique/sentiment/flux, correlations et biais heuristique.",
     )
 
 
@@ -2434,6 +2555,7 @@ def build_payload(
     geopolitical_analysis: GeopoliticalAnalysis | None = None,
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
+    global_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
@@ -2513,6 +2635,8 @@ def build_payload(
         payload["fundamental_recommendation"] = asdict(fundamental_recommendation)
     if technical_recommendation:
         payload["technical_recommendation"] = asdict(technical_recommendation)
+    if global_recommendation:
+        payload["global_recommendation"] = asdict(global_recommendation)
     if geopolitical_analysis:
         payload["geopolitical_analysis"] = asdict(geopolitical_analysis)
     if technical_timeframes:
@@ -2695,6 +2819,22 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         if isinstance(technical_payload, dict)
         else None
     )
+    global_payload = payload.get("global_recommendation")
+    global_recommendation = (
+        TradeRecommendation(
+            mode=str(global_payload.get("mode", "Global")),
+            verdict=str(global_payload.get("verdict", "BUY")),
+            score=int(global_payload.get("score", 50) or 50),
+            summary=str(global_payload.get("summary", "Lecture globale indisponible.")),
+            reasons=list(global_payload.get("reasons", [])),
+            stop_loss=float(global_payload.get("stop_loss", gold_price) or gold_price),
+            take_profit_1=float(global_payload.get("take_profit_1", gold_price) or gold_price),
+            take_profit_2=float(global_payload.get("take_profit_2", gold_price) or gold_price),
+            source_note=str(global_payload.get("source_note", "Snapshot precedent re-utilise.")),
+        )
+        if isinstance(global_payload, dict)
+        else None
+    )
     technical_timeframes = [
         TechnicalReading(
             timeframe=str(item.get("timeframe", "")),
@@ -2727,6 +2867,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
     )
@@ -2761,6 +2902,7 @@ def render_report(
     geopolitical_analysis: GeopoliticalAnalysis | None = None,
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
+    global_recommendation: TradeRecommendation | None = None,
     executive_summary: str | None = None,
     real_yield: SymbolSnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
@@ -2795,6 +2937,20 @@ def render_report(
         f"- Confiance heuristique: {analysis.confidence}/100",
         f"- {heuristic_decision_sentence(analysis)}",
     ]
+
+    if global_recommendation:
+        lines.extend(
+            [
+                "",
+                "## Scoring Global Prioritaire",
+                f"- Score: {global_recommendation.score}/100",
+                f"- Position conseillee: {global_recommendation.verdict}",
+                f"- SL: {global_recommendation.stop_loss:.2f}",
+                f"- TP1: {global_recommendation.take_profit_1:.2f}",
+                f"- TP2: {global_recommendation.take_profit_2:.2f}",
+                f"- Resume: {global_recommendation.summary}",
+            ]
+        )
 
     if cross_asset_analysis:
         lines.extend(
@@ -3117,8 +3273,11 @@ def render_trade_compact(recommendation: TradeRecommendation) -> str:
 def render_trade_card(recommendation: TradeRecommendation) -> str:
     badge_class = recommendation_css_class(recommendation.verdict)
     reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in recommendation.reasons[:3])
+    mode_key = recommendation.mode.lower()
+    card_id = "fundamental" if mode_key.startswith("fond") else "technical-card" if mode_key.startswith("tech") else ""
+    id_attr = f' id="{card_id}"' if card_id else ""
     return f"""
-    <article class="trade-card {badge_class}">
+    <article{id_attr} class="trade-card {badge_class} anchor-target">
       <div class="trade-card-head">
         <div>
           <div class="section-kicker">{html.escape(recommendation.mode)}</div>
@@ -4362,6 +4521,15 @@ def render_dashboard_clarity(
         take_profit_2=gold.price + 20,
         source_note="Mode de secours du dashboard.",
     )
+    global_recommendation = bundle.global_recommendation or build_global_recommendation(
+        gold,
+        analysis,
+        fundamental,
+        technical,
+        geopolitical=geopolitical_analysis,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
     price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
@@ -4430,33 +4598,41 @@ def render_dashboard_clarity(
   <meta name="viewport" content="width=device-width, initial-scale=1">
 {meta_refresh}  <meta name="color-scheme" content="dark">
   <title>Dashboard XAUUSD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <style>
     :root {{
-      --bg: #05070b;
-      --bg-2: #080c13;
-      --panel: #0d1119;
-      --panel-alt: #111722;
-      --text: #e7ebf3;
-      --soft: #98a3b8;
-      --muted: #263044;
-      --line: #1b2534;
-      --bull: #00d084;
-      --bear: #ff4d6d;
-      --amber: #f3b35c;
-      --blue: #79b8ff;
+      --bg: #020617;
+      --bg-2: #060e20;
+      --panel: rgba(15, 23, 42, 0.76);
+      --panel-alt: rgba(19, 27, 46, 0.9);
+      --panel-bright: #222a3d;
+      --text: #dae2fd;
+      --soft: #9aa4b8;
+      --muted: #2d3449;
+      --line: #1e293b;
+      --bull: #4edea3;
+      --bear: #ffb4ab;
+      --amber: #d4af37;
+      --gold: #f2ca50;
+      --blue: #8ab4ff;
     }}
     * {{
       box-sizing: border-box;
-      font-family: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
     }}
     html, body {{
       margin: 0;
       min-height: 100vh;
-      background:
-        radial-gradient(circle at 20% 0%, rgba(243, 179, 92, 0.08), transparent 28%),
-        radial-gradient(circle at 100% 18%, rgba(0, 208, 132, 0.06), transparent 26%),
-        linear-gradient(180deg, var(--bg), var(--bg-2) 45%, var(--bg));
+      background: var(--bg);
       color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+    body {{
+      background:
+        radial-gradient(circle at 18% 0%, rgba(212, 175, 55, 0.11), transparent 27%),
+        radial-gradient(circle at 96% 12%, rgba(78, 222, 163, 0.08), transparent 22%),
+        linear-gradient(180deg, #020617 0%, #071020 45%, #020617 100%);
     }}
     a {{
       color: var(--blue);
@@ -4469,8 +4645,147 @@ def render_dashboard_clarity(
       margin: 0;
     }}
     .page {{
-      width: min(1580px, calc(100% - 20px));
-      margin: 10px auto 24px;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+    }}
+    .terminal-shell {{
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }}
+    .side-rail {{
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      border-right: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.88);
+      backdrop-filter: blur(18px);
+    }}
+    .brand {{
+      color: var(--amber);
+      font-size: 24px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      text-transform: uppercase;
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.35);
+    }}
+    .rail-card {{
+      margin-top: 28px;
+      padding: 14px;
+      border: 1px solid rgba(153, 144, 124, 0.34);
+      border-radius: 8px;
+      background: rgba(19, 27, 46, 0.72);
+    }}
+    .rail-card strong {{
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }}
+    .rail-card span {{
+      display: block;
+      margin-top: 6px;
+      color: var(--soft);
+      font-size: 13px;
+    }}
+    .rail-status {{
+      margin-top: 12px;
+      padding: 9px 10px;
+      border: 1px solid rgba(78, 222, 163, 0.32);
+      border-radius: 4px;
+      color: var(--bull);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      background: rgba(78, 222, 163, 0.08);
+    }}
+    .rail-nav {{
+      display: grid;
+      gap: 6px;
+      margin-top: 28px;
+    }}
+    .rail-link {{
+      padding: 13px 14px;
+      border-left: 3px solid transparent;
+      border-radius: 0 5px 5px 0;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }}
+    .rail-link.active {{
+      color: var(--amber);
+      border-left-color: var(--amber);
+      background: rgba(212, 175, 55, 0.08);
+    }}
+    .workspace {{
+      min-width: 0;
+      padding: 22px 24px 28px;
+    }}
+    .topbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      min-height: 58px;
+      margin: -22px -24px 22px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(18px);
+    }}
+    .topbar-title {{
+      color: var(--amber);
+      font-family: "Space Grotesk", monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.26em;
+      text-transform: uppercase;
+    }}
+    .topbar-meta {{
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }}
+    .terminal-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 14px;
+    }}
+    .terminal-header h1 {{
+      color: var(--text);
+      font-size: clamp(28px, 3.6vw, 44px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }}
+    .terminal-header p {{
+      margin-top: 5px;
+      color: var(--soft);
+      font-size: 13px;
+    }}
+    .sync-pill {{
+      padding: 8px 11px;
+      border: 1px solid rgba(78, 222, 163, 0.25);
+      border-radius: 999px;
+      color: var(--bull);
+      background: rgba(78, 222, 163, 0.08);
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
     }}
     .hero-grid,
     .summary-grid,
@@ -4968,7 +5283,36 @@ def render_dashboard_clarity(
 </head>
 <body>
   <main class="page" id="dashboard-app">
-    <section class="hero-grid">
+    <div class="terminal-shell">
+      <aside class="side-rail">
+        <div class="brand">AUREUM<br>FLUX</div>
+        <div class="rail-card">
+          <strong>Terminal XAUUSD</strong>
+          <span>Gold/USD intraday intelligence</span>
+          <div class="rail-status">Live analysis</div>
+        </div>
+        <nav class="rail-nav" aria-label="Sections dashboard">
+          <a class="rail-link active" href="#market">Market</a>
+          <a class="rail-link" href="#scores">Scores</a>
+          <a class="rail-link" href="#technical">Technical</a>
+          <a class="rail-link" href="#fundamental">Fundamental</a>
+          <a class="rail-link" href="#sentiment">Sentiment</a>
+        </nav>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">XAUUSD Intelligence Terminal</div>
+          <div class="topbar-meta">System online | {html.escape(generated_at)}</div>
+        </header>
+        <section class="terminal-header">
+          <div>
+            <div class="section-kicker">Institutional analytics package</div>
+            <h1>XAU/USD Market Dashboard</h1>
+            <p>Scoring global, plan BUY/SELL, niveaux de risque et contexte marche live.</p>
+          </div>
+          <div class="sync-pill">Ready for export</div>
+        </section>
+    <section class="hero-grid anchor-target" id="market">
       <article class="panel hero-price">
         <div class="section-kicker">Tableau de bord intraday</div>
         <div class="ticker-symbol">XAU/USD spot | live</div>
@@ -4980,6 +5324,21 @@ def render_dashboard_clarity(
           Mis a jour {html.escape(generated_at)}<br>
           Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
           Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+        </div>
+        <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
+          <div class="global-signal-head">
+            <div>
+              <div class="section-kicker">Scoring global prioritaire</div>
+              <h2>Position conseillee</h2>
+            </div>
+            <div class="global-score">{global_recommendation.score}<small>/100</small></div>
+          </div>
+          <div class="global-position">
+            <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
+            <span>SL {global_recommendation.stop_loss:.2f} | TP1 {global_recommendation.take_profit_1:.2f} | TP2 {global_recommendation.take_profit_2:.2f}</span>
+          </div>
+          <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
+          {render_trade_levels(global_recommendation)}
         </div>
         <div class="metrics-grid">
           <div class="metric-chip">
@@ -5014,7 +5373,7 @@ def render_dashboard_clarity(
       {render_trade_card(technical)}
     </section>
 
-    <section class="summary-grid">
+    <section class="summary-grid anchor-target" id="scores">
       <article class="summary-box">
         <div class="section-kicker">Ce qui se passe reellement</div>
         <h2>Lecture du jour</h2>
@@ -5160,6 +5519,15 @@ def render_dashboard_clarity_v2(
         take_profit_2=gold.price + 20,
         source_note="Mode de secours du dashboard.",
     )
+    global_recommendation = bundle.global_recommendation or build_global_recommendation(
+        gold,
+        analysis,
+        fundamental,
+        technical,
+        geopolitical=geopolitical_analysis,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
     price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
@@ -5228,33 +5596,42 @@ def render_dashboard_clarity_v2(
   <meta name="viewport" content="width=device-width, initial-scale=1">
 {meta_refresh}  <meta name="color-scheme" content="dark">
   <title>Dashboard XAUUSD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <style>
     :root {{
-      --bg: #05070b;
-      --bg-2: #080c13;
-      --panel: #0d1119;
-      --panel-alt: #111722;
-      --text: #e7ebf3;
-      --soft: #98a3b8;
-      --muted: #263044;
-      --line: #1b2534;
-      --bull: #00d084;
-      --bear: #ff4d6d;
-      --amber: #f3b35c;
-      --blue: #79b8ff;
+      --bg: #020617;
+      --bg-2: #060e20;
+      --panel: rgba(15, 23, 42, 0.76);
+      --panel-alt: rgba(19, 27, 46, 0.9);
+      --panel-bright: #222a3d;
+      --text: #dae2fd;
+      --soft: #9aa4b8;
+      --muted: #2d3449;
+      --line: #1e293b;
+      --bull: #4edea3;
+      --bear: #ffb4ab;
+      --amber: #d4af37;
+      --gold: #f2ca50;
+      --blue: #8ab4ff;
     }}
     * {{
       box-sizing: border-box;
-      font-family: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
     }}
     html, body {{
       margin: 0;
       min-height: 100vh;
-      background:
-        radial-gradient(circle at 20% 0%, rgba(243, 179, 92, 0.08), transparent 28%),
-        radial-gradient(circle at 100% 18%, rgba(0, 208, 132, 0.06), transparent 26%),
-        linear-gradient(180deg, var(--bg), var(--bg-2) 45%, var(--bg));
       color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      scroll-behavior: smooth;
+    }}
+    body {{
+      background:
+        radial-gradient(circle at 18% 0%, rgba(212, 175, 55, 0.11), transparent 27%),
+        radial-gradient(circle at 96% 12%, rgba(78, 222, 163, 0.08), transparent 22%),
+        linear-gradient(180deg, #020617 0%, #071020 45%, #020617 100%);
     }}
     a {{
       color: var(--blue);
@@ -5267,8 +5644,158 @@ def render_dashboard_clarity_v2(
       margin: 0;
     }}
     .page {{
-      width: min(1580px, calc(100% - 20px));
-      margin: 10px auto 24px;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+    }}
+    .terminal-shell {{
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }}
+    .side-rail {{
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      border-right: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.9);
+      backdrop-filter: blur(18px);
+    }}
+    .brand {{
+      color: var(--amber);
+      font-size: 24px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.35);
+    }}
+    .rail-card {{
+      margin-top: 28px;
+      padding: 14px;
+      border: 1px solid rgba(153, 144, 124, 0.34);
+      border-radius: 8px;
+      background: rgba(19, 27, 46, 0.72);
+    }}
+    .rail-card strong {{
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }}
+    .rail-card span {{
+      display: block;
+      margin-top: 6px;
+      color: var(--soft);
+      font-size: 13px;
+    }}
+    .rail-status {{
+      margin-top: 12px;
+      padding: 9px 10px;
+      border: 1px solid rgba(78, 222, 163, 0.32);
+      border-radius: 4px;
+      color: var(--bull);
+      background: rgba(78, 222, 163, 0.08);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }}
+    .rail-nav {{
+      display: grid;
+      gap: 6px;
+      margin-top: 28px;
+    }}
+    .rail-link {{
+      display: block;
+      padding: 13px 14px;
+      border-left: 3px solid transparent;
+      border-radius: 0 5px 5px 0;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      text-decoration: none;
+      cursor: pointer;
+    }}
+    .rail-link:hover {{
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+      text-decoration: none;
+    }}
+    .rail-link.active {{
+      color: var(--amber);
+      border-left-color: var(--amber);
+      background: rgba(212, 175, 55, 0.08);
+    }}
+    .anchor-target {{
+      scroll-margin-top: 72px;
+    }}
+    .workspace {{
+      min-width: 0;
+      padding: 22px 24px 28px;
+    }}
+    .topbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      min-height: 58px;
+      margin: -22px -24px 22px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(18px);
+    }}
+    .topbar-title {{
+      color: var(--amber);
+      font-family: "Space Grotesk", monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.26em;
+      text-transform: uppercase;
+    }}
+    .topbar-meta {{
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }}
+    .terminal-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 14px;
+    }}
+    .terminal-header h1 {{
+      color: var(--text);
+      font-size: clamp(28px, 3.6vw, 44px);
+      font-weight: 800;
+      letter-spacing: 0;
+    }}
+    .terminal-header p {{
+      margin-top: 5px;
+      color: var(--soft);
+      font-size: 13px;
+    }}
+    .sync-pill {{
+      padding: 8px 11px;
+      border: 1px solid rgba(78, 222, 163, 0.25);
+      border-radius: 999px;
+      color: var(--bull);
+      background: rgba(78, 222, 163, 0.08);
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
     }}
     .hero-grid,
     .summary-grid,
@@ -5285,8 +5812,8 @@ def render_dashboard_clarity_v2(
       gap: 10px;
     }}
     .hero-grid {{
-      grid-template-columns: minmax(420px, 1.18fr) minmax(300px, 0.9fr) minmax(300px, 0.9fr);
-      margin-bottom: 10px;
+      grid-template-columns: minmax(520px, 1.55fr) minmax(280px, 0.72fr) minmax(280px, 0.72fr);
+      margin-bottom: 12px;
     }}
     .summary-grid {{
       grid-template-columns: minmax(0, 1.38fr) minmax(330px, 0.82fr);
@@ -5332,8 +5859,10 @@ def render_dashboard_clarity_v2(
     .level-chip,
     .scenario {{
       background: var(--panel);
-      border: 1px solid var(--muted);
-      border-radius: 6px;
+      border: 1px solid rgba(45, 52, 73, 0.88);
+      border-radius: 8px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 60px rgba(0, 0, 0, 0.16);
+      backdrop-filter: blur(18px);
     }}
     .panel,
     .trade-card,
@@ -5349,13 +5878,16 @@ def render_dashboard_clarity_v2(
     .span-12 {{ grid-column: span 12; }}
     .section-kicker {{
       color: var(--amber);
+      font-family: "Space Grotesk", monospace;
       font-size: 11px;
-      letter-spacing: 0.12em;
+      font-weight: 700;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
       margin-bottom: 6px;
     }}
     .hero-price {{
-      background: var(--panel);
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(6, 14, 32, 0.9));
+      border-left: 5px solid var(--amber);
     }}
     .ticker-symbol {{
       color: var(--amber);
@@ -5372,12 +5904,14 @@ def render_dashboard_clarity_v2(
     }}
     .ticker-price {{
       font-size: clamp(46px, 6vw, 74px);
+      font-family: "Space Grotesk", monospace;
       font-weight: 700;
       line-height: 0.95;
-      letter-spacing: -0.05em;
+      letter-spacing: 0;
       white-space: nowrap;
     }}
     .ticker-delta {{
+      font-family: "Space Grotesk", monospace;
       font-size: 22px;
       font-weight: 700;
     }}
@@ -5417,6 +5951,68 @@ def render_dashboard_clarity_v2(
       font-size: 12px;
       line-height: 1.55;
     }}
+    .global-signal {{
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid rgba(212, 175, 55, 0.26);
+      border-left: 5px solid var(--muted);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(212, 175, 55, 0.09), transparent 44%),
+        rgba(19, 27, 46, 0.92);
+    }}
+    .global-signal.bullish {{
+      border-left-color: rgba(78, 222, 163, 0.9);
+    }}
+    .global-signal.bearish {{
+      border-left-color: rgba(255, 180, 171, 0.9);
+    }}
+    .global-signal-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 10px;
+    }}
+    .global-signal h2 {{
+      font-size: 18px;
+      margin-top: 3px;
+    }}
+    .global-position {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 10px;
+    }}
+    .global-position strong {{
+      font-family: "Space Grotesk", monospace;
+      font-size: 42px;
+      line-height: 1;
+      letter-spacing: 0.02em;
+    }}
+    .global-position span {{
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.45;
+    }}
+    .global-score {{
+      color: var(--amber);
+      font-family: "Space Grotesk", monospace;
+      font-size: 36px;
+      font-weight: 700;
+      white-space: nowrap;
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.34);
+    }}
+    .global-score small {{
+      color: var(--soft);
+      font-size: 15px;
+    }}
+    .global-summary {{
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.55;
+      margin-top: 8px;
+    }}
     .metric-chip,
     .level-chip {{
       padding: 10px 11px;
@@ -5436,6 +6032,7 @@ def render_dashboard_clarity_v2(
       font-size: 20px;
       font-weight: 700;
       color: var(--text);
+      font-family: "Space Grotesk", monospace;
     }}
     .metric-chip small {{
       display: block;
@@ -5446,10 +6043,10 @@ def render_dashboard_clarity_v2(
     }}
     .trade-card {{
       border-left: 5px solid var(--muted);
-      background: var(--panel);
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(19, 27, 46, 0.88));
     }}
-    .trade-card.bullish {{ border-left-color: rgba(0, 208, 132, 0.65); }}
-    .trade-card.bearish {{ border-left-color: rgba(255, 77, 109, 0.65); }}
+    .trade-card.bullish {{ border-left-color: rgba(78, 222, 163, 0.75); }}
+    .trade-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.75); }}
     .trade-card-head {{
       display: flex;
       justify-content: space-between;
@@ -5464,6 +6061,7 @@ def render_dashboard_clarity_v2(
     }}
     .trade-score {{
       color: var(--amber);
+      font-family: "Space Grotesk", monospace;
       font-size: 28px;
       font-weight: 700;
       white-space: nowrap;
@@ -5477,6 +6075,8 @@ def render_dashboard_clarity_v2(
       padding: 6px 10px;
       background: var(--panel-alt);
       border: 1px solid var(--line);
+      border-radius: 4px;
+      font-family: "Space Grotesk", monospace;
       font-size: 14px;
       font-weight: 700;
       letter-spacing: 0.08em;
@@ -5497,7 +6097,7 @@ def render_dashboard_clarity_v2(
     .trade-levels div {{
       background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 5px;
+      border-radius: 4px;
       padding: 8px 10px;
     }}
     .trade-levels span {{
@@ -5511,6 +6111,7 @@ def render_dashboard_clarity_v2(
       display: block;
       margin-top: 4px;
       font-size: 18px;
+      font-family: "Space Grotesk", monospace;
       color: var(--text);
     }}
     .trade-reasons,
@@ -5583,7 +6184,7 @@ def render_dashboard_clarity_v2(
       padding: 10px;
       background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 5px;
+      border-radius: 4px;
     }}
     .decision-item strong {{
       display: block;
@@ -5607,13 +6208,14 @@ def render_dashboard_clarity_v2(
       width: {confidence_width}%;
       height: 100%;
       background: linear-gradient(90deg, var(--amber), var(--bull));
+      box-shadow: 0 0 14px rgba(78, 222, 163, 0.26);
     }}
     .chart-wrap {{
       margin-top: 10px;
       border: 1px solid var(--line);
-      border-radius: 5px;
+      border-radius: 6px;
       overflow: hidden;
-      background: #0b0f17;
+      background: #060e20;
     }}
     .chart-wrap svg {{
       display: block;
@@ -5669,8 +6271,9 @@ def render_dashboard_clarity_v2(
       color: var(--text);
     }}
     .technical-table th {{
-      background: #141c2a;
+      background: #0f172a;
       color: var(--amber);
+      font-family: "Space Grotesk", monospace;
       font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
@@ -5747,6 +6350,12 @@ def render_dashboard_clarity_v2(
       padding: 10px 0;
     }}
     @media (max-width: 1180px) {{
+      .terminal-shell {{
+        grid-template-columns: 1fr;
+      }}
+      .side-rail {{
+        display: none;
+      }}
       .hero-grid,
       .summary-grid,
       .digest-grid,
@@ -5765,8 +6374,19 @@ def render_dashboard_clarity_v2(
     }}
     @media (max-width: 900px) {{
       .page {{
-        width: min(100%, calc(100% - 18px));
-        margin: 9px auto 18px;
+        width: 100%;
+        margin: 0;
+      }}
+      .workspace {{
+        padding: 14px 10px 18px;
+      }}
+      .topbar {{
+        margin: -14px -10px 14px;
+        padding: 0 10px;
+      }}
+      .terminal-header {{
+        align-items: flex-start;
+        flex-direction: column;
       }}
       .hero-grid,
       .trade-levels,
@@ -5782,7 +6402,36 @@ def render_dashboard_clarity_v2(
 </head>
 <body>
   <main class="page" id="dashboard-app">
-    <section class="hero-grid">
+    <div class="terminal-shell">
+      <aside class="side-rail">
+        <div class="brand">AUREUM<br>FLUX</div>
+        <div class="rail-card">
+          <strong>Terminal XAUUSD</strong>
+          <span>Gold/USD intraday intelligence</span>
+          <div class="rail-status">Live analysis</div>
+        </div>
+        <nav class="rail-nav" aria-label="Sections dashboard">
+          <a class="rail-link active" href="#market">Market</a>
+          <a class="rail-link" href="#scores">Scores</a>
+          <a class="rail-link" href="#technical">Technical</a>
+          <a class="rail-link" href="#fundamental">Fundamental</a>
+          <a class="rail-link" href="#sentiment">Sentiment</a>
+        </nav>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">XAUUSD Intelligence Terminal</div>
+          <div class="topbar-meta">System online | {html.escape(generated_at)}</div>
+        </header>
+        <section class="terminal-header">
+          <div>
+            <div class="section-kicker">Institutional analytics package</div>
+            <h1>XAU/USD Market Dashboard</h1>
+            <p>Scoring global, plan BUY/SELL, niveaux de risque et contexte marche live.</p>
+          </div>
+          <div class="sync-pill">Ready for export</div>
+        </section>
+    <section class="hero-grid anchor-target" id="market">
       <article class="panel hero-price">
         <div class="section-kicker">Tableau de bord intraday</div>
         <div class="ticker-symbol">XAU/USD spot | live</div>
@@ -5794,6 +6443,21 @@ def render_dashboard_clarity_v2(
           Mis a jour {html.escape(generated_at)}<br>
           Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
           Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+        </div>
+        <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
+          <div class="global-signal-head">
+            <div>
+              <div class="section-kicker">Scoring global prioritaire</div>
+              <h2>Position conseillee</h2>
+            </div>
+            <div class="global-score">{global_recommendation.score}<small>/100</small></div>
+          </div>
+          <div class="global-position">
+            <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
+            <span>SL {global_recommendation.stop_loss:.2f} | TP1 {global_recommendation.take_profit_1:.2f} | TP2 {global_recommendation.take_profit_2:.2f}</span>
+          </div>
+          <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
+          {render_trade_levels(global_recommendation)}
         </div>
         <div class="metrics-grid">
           <div class="metric-chip">
@@ -5823,7 +6487,7 @@ def render_dashboard_clarity_v2(
       {render_trade_card(technical)}
     </section>
 
-    <section class="summary-grid">
+    <section class="summary-grid anchor-target" id="scores">
       <article class="summary-box">
         <div class="section-kicker">Synthese prioritaire</div>
         <h2>Ce qui compte maintenant</h2>
@@ -5835,6 +6499,10 @@ def render_dashboard_clarity_v2(
         <div class="section-kicker">Decision & prudence</div>
         <h2>Lecture des scores</h2>
         <div class="decision-grid">
+          <div class="decision-item">
+            <strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong>
+            <span>{html.escape(global_recommendation.summary)}</span>
+          </div>
           <div class="decision-item">
             <strong class="{recommendation_css_class(fundamental.verdict)}">Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
             <span>{html.escape(fundamental.summary)}</span>
@@ -5891,7 +6559,7 @@ def render_dashboard_clarity_v2(
       </article>
     </section>
 
-    <section class="content-grid">
+    <section class="content-grid anchor-target" id="technical">
       <article class="panel span-7">
         <div class="section-kicker">Technique multi-timeframe</div>
         <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
@@ -5905,7 +6573,7 @@ def render_dashboard_clarity_v2(
       </article>
     </section>
 
-    <section class="content-grid">
+    <section class="content-grid anchor-target" id="sentiment">
       <article class="panel span-7">
         <div class="section-kicker">Geopolitique | sentiment | flux</div>
         <h2>Risque externe qui soutient ou freine l'or</h2>
@@ -5945,6 +6613,8 @@ def render_dashboard_clarity_v2(
         Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
       </div>
     </section>
+      </div>
+    </div>
   </main>
 {live_script}
 </body>
@@ -6080,6 +6750,15 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         proxy_price,
         event_mode=event_mode,
     )
+    global_recommendation = build_global_recommendation(
+        gold,
+        analysis,
+        fundamental_recommendation,
+        technical_recommendation,
+        geopolitical=geopolitical_analysis,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
     executive_summary = build_executive_summary(
         fundamental_recommendation,
         technical_recommendation,
@@ -6094,6 +6773,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         cross_asset_analysis=cross_asset_analysis,
@@ -6111,6 +6791,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.geopolitical_analysis = geopolitical_analysis
     live_bundle.fundamental_recommendation = fundamental_recommendation
     live_bundle.technical_recommendation = technical_recommendation
+    live_bundle.global_recommendation = global_recommendation
     live_bundle.technical_timeframes = technical_readings
     live_bundle.executive_summary = executive_summary
     live_bundle.real_yield = real_yield
@@ -6154,6 +6835,15 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         proxy_price,
         event_mode=event_mode,
     )
+    global_recommendation = build_global_recommendation(
+        gold,
+        analysis,
+        fundamental_recommendation,
+        technical_recommendation,
+        geopolitical=geopolitical_analysis,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
     executive_summary = build_executive_summary(
         fundamental_recommendation,
         technical_recommendation,
@@ -6168,6 +6858,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         cross_asset_analysis=cross_asset_analysis,
@@ -6190,6 +6881,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         executive_summary=executive_summary,
         real_yield=real_yield,
@@ -6220,6 +6912,7 @@ def render_artifacts(
         bundle.geopolitical_analysis,
         bundle.fundamental_recommendation,
         bundle.technical_recommendation,
+        bundle.global_recommendation,
         bundle.executive_summary,
         bundle.real_yield,
         bundle.cross_asset_analysis,
@@ -6290,7 +6983,11 @@ class DashboardLiveCache:
                 bundle.geopolitical_analysis,
                 bundle.fundamental_recommendation,
                 bundle.technical_recommendation,
+                bundle.global_recommendation,
                 bundle.executive_summary,
+                bundle.real_yield,
+                bundle.cross_asset_analysis,
+                bundle.event_mode,
             )
             write_text_file(self.save_path, report)
 

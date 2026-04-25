@@ -3,12 +3,15 @@ import unittest
 from xauusd_agent import (
     AnalysisResult,
     BriefingBundle,
+    EventModeAnalysis,
     GeopoliticalAnalysis,
     NewsItem,
     PricePoint,
     SymbolSnapshot,
     TechnicalReading,
     TradeRecommendation,
+    build_cross_asset_analysis,
+    build_event_mode_analysis,
     classify_bias,
     render_dashboard,
     score_headline,
@@ -204,6 +207,67 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Ce qui se passe reellement", dashboard)
         self.assertIn("Actualites expliquees", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
+
+
+class LocalFreeContextTests(unittest.TestCase):
+    def snapshot(self, symbol: str, price: float, previous: float) -> SymbolSnapshot:
+        points = [
+            PricePoint(timestamp=1, close=previous),
+            PricePoint(timestamp=2, close=price),
+        ]
+        return SymbolSnapshot(
+            symbol=symbol,
+            label=symbol,
+            price=price,
+            previous_close=previous,
+            change_abs=price - previous,
+            change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            period_change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            day_high=max(price, previous),
+            day_low=min(price, previous),
+            support=min(price, previous),
+            resistance=max(price, previous),
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
+
+    def test_cross_asset_context_scores_favorable_gold_setup(self) -> None:
+        dxy = self.snapshot("DXY", 99.0, 100.0)
+        tips = self.snapshot("DFII10", 1.90, 1.95)
+        usdjpy = self.snapshot("JPY=X", 150.0, 151.0)
+        silver = self.snapshot("SI=F", 30.5, 30.0)
+        gvz = self.snapshot("^GVZ", 25.0, 24.0)
+        vix = self.snapshot("^VIX", 20.0, 18.0)
+        context = build_cross_asset_analysis(dxy, tips, usdjpy, silver, gvz, vix)
+        self.assertGreaterEqual(context.score, 62)
+        self.assertEqual(context.status, "favorable")
+        self.assertTrue(context.confirmations)
+
+    def test_event_mode_activates_on_volume_spike(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2398.0)
+        readings = [
+            TechnicalReading(
+                timeframe="5m",
+                close=2400.0,
+                ema20=2399.0,
+                ema50=2398.0,
+                ema100=2397.0,
+                ema200=2396.0,
+                rsi7=70.0,
+                macd_line=1.0,
+                macd_signal=0.4,
+                macd_histogram=0.6,
+                volume_ratio=2.5,
+                atr14=6.0,
+                score=4.0,
+                verdict="BUY",
+                reasons=["Test"],
+            )
+        ]
+        event = build_event_mode_analysis(gold, readings, None, None)
+        self.assertIsInstance(event, EventModeAnalysis)
+        self.assertTrue(event.active)
+        self.assertEqual(event.stop_multiplier, 1.5)
 
 
 if __name__ == "__main__":

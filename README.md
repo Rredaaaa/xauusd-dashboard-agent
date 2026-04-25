@@ -10,6 +10,8 @@ Le projet est pense pour etre partage et developpe a deux. Les fichiers de code,
 - Dashboard local live sur `http://127.0.0.1:8787/`.
 - Chandeliers intraday avec ligne de prix live.
 - Analyse fondamentale, technique et geopolitique.
+- Confirmations gratuites locales: 10Y reel FRED, USD/JPY, silver, GVZ et VIX.
+- Mode event volatilite/volume pour signaler les regimes dangereux.
 - Scores `/100`, verdict intraday, `SL`, `TP1`, `TP2`.
 - Rapport Markdown et payload JSON.
 - Mode de repli sur le dernier snapshot si une source externe retourne une erreur temporaire.

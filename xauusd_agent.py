@@ -53,6 +53,16 @@ FALLBACK_RSS_FEEDS = [
     ("markets", "https://www.investing.com/rss/news_25.rss"),
 ]
 
+FRED_DFII10_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
+CROSS_ASSET_SYMBOLS = {
+    "usdjpy": ("JPY=X", "USD/JPY"),
+    "silver": ("SI=F", "Silver Futures"),
+    "gvz": ("^GVZ", "Gold Volatility Index"),
+    "vix": ("^VIX", "VIX"),
+}
+LOCAL_CONTEXT_CACHE_SECONDS = 300
+LOCAL_CONTEXT_SNAPSHOT_CACHE: dict[str, tuple[float, SymbolSnapshot | None]] = {}
+
 SYSTEM_PROMPT = """
 You are a disciplined XAUUSD market briefing assistant.
 Use only the supplied market data and headlines.
@@ -272,6 +282,26 @@ class GeopoliticalAnalysis:
 
 
 @dataclass
+class CrossAssetAnalysis:
+    score: int
+    status: str
+    summary: str
+    confirmations: list[str]
+    contradictions: list[str]
+    drivers: dict[str, dict[str, Any]]
+
+
+@dataclass
+class EventModeAnalysis:
+    active: bool
+    score: int
+    status: str
+    action: str
+    stop_multiplier: float
+    reasons: list[str]
+
+
+@dataclass
 class BriefingBundle:
     gold: SymbolSnapshot
     dxy: SymbolSnapshot
@@ -285,6 +315,9 @@ class BriefingBundle:
     technical_recommendation: "TradeRecommendation | None" = None
     technical_timeframes: list["TechnicalReading"] | None = None
     executive_summary: str = ""
+    real_yield: SymbolSnapshot | None = None
+    cross_asset_analysis: CrossAssetAnalysis | None = None
+    event_mode: EventModeAnalysis | None = None
 
 
 @dataclass
@@ -592,6 +625,65 @@ def fetch_symbol_snapshot(symbol: str, label: str, interval: str, data_range: st
         resistance=resistance,
         fetched_at=iso_now(),
         points=points,
+    )
+
+
+def fetch_optional_symbol_snapshot(symbol: str, label: str, interval: str, data_range: str) -> SymbolSnapshot | None:
+    try:
+        return fetch_symbol_snapshot(symbol, label, interval, data_range)
+    except Exception:
+        return None
+
+
+def parse_fred_date_to_timestamp(date_text: str) -> int:
+    return int(datetime.strptime(date_text, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+
+
+def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
+    try:
+        with urllib.request.urlopen(FRED_DFII10_CSV_URL, timeout=15) as response:
+            csv_text = response.read().decode("utf-8", "ignore")
+    except Exception:
+        return None
+
+    points: list[PricePoint] = []
+    for raw_line in csv_text.splitlines()[1:]:
+        if "," not in raw_line:
+            continue
+        date_text, value_text = raw_line.split(",", 1)
+        value = parse_float(value_text)
+        if value is None:
+            continue
+        try:
+            timestamp = parse_fred_date_to_timestamp(date_text)
+        except ValueError:
+            continue
+        points.append(PricePoint(timestamp=timestamp, close=value))
+
+    if len(points) < 2:
+        return None
+
+    recent_points = points[-120:]
+    current = recent_points[-1].close
+    previous = recent_points[-2].close
+    support, resistance = compute_support_resistance(recent_points, lookback=min(60, len(recent_points)))
+
+    return SymbolSnapshot(
+        symbol="DFII10",
+        label="US 10Y Real Yield",
+        price=current,
+        previous_close=previous,
+        change_abs=current - previous,
+        change_pct=((current - previous) / abs(previous) * 100) if previous else 0.0,
+        period_change_pct=((current - recent_points[0].close) / abs(recent_points[0].close) * 100)
+        if recent_points[0].close
+        else 0.0,
+        day_high=max(point.close for point in recent_points[-20:]),
+        day_low=min(point.close for point in recent_points[-20:]),
+        support=support,
+        resistance=resistance,
+        fetched_at=iso_now(),
+        points=recent_points,
     )
 
 
@@ -904,12 +996,31 @@ def build_trade_levels(price: float, atr: float, verdict: str, stop_multiplier: 
     )
 
 
+def build_mtf_alignment_note(readings: list[TechnicalReading], verdict: str) -> tuple[int, str]:
+    higher_timeframes = [reading for reading in readings if reading.timeframe in {"1D", "4H", "1H"}]
+    if not higher_timeframes:
+        return 50, "Alignement multi-timeframe indisponible."
+
+    aligned = [reading.timeframe for reading in higher_timeframes if reading.verdict == verdict]
+    conflicting = [reading.timeframe for reading in higher_timeframes if reading.verdict != verdict]
+    score = round((len(aligned) / len(higher_timeframes)) * 100)
+
+    if score >= 67:
+        return score, f"Alignement multi-timeframe valide: {', '.join(aligned)} confirment le {verdict}."
+    if score <= 33:
+        return score, f"Signal fragile: timeframes superieurs en contradiction ({', '.join(conflicting)})."
+    return score, f"Alignement partiel: {', '.join(aligned) or 'aucun'} confirme, {', '.join(conflicting) or 'aucun'} contredit."
+
+
 def build_fundamental_recommendation(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
     us10y: SymbolSnapshot,
     analysis: AnalysisResult,
     atr_15m: float,
+    real_yield: SymbolSnapshot | None = None,
+    cross_asset: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
 ) -> TradeRecommendation:
     bullish_score = 50.0
     reasons: list[str] = []
@@ -943,6 +1054,25 @@ def build_fundamental_recommendation(
         bullish_score -= clamp(abs(yield_change_bps) * 1.4, 6, 18)
         reasons.append("Les rendements US montent, ce qui penalise l'or.")
 
+    if real_yield is not None:
+        real_yield_change_bps = real_yield.change_abs * 100
+        if real_yield_change_bps < 0:
+            bullish_score += clamp(abs(real_yield_change_bps) * 2.2, 5, 18)
+            reasons.append("Le 10Y reel FRED baisse, driver macro majeur favorable a l'or.")
+        elif real_yield_change_bps > 0:
+            bullish_score -= clamp(abs(real_yield_change_bps) * 2.2, 5, 18)
+            reasons.append("Le 10Y reel FRED monte, ce qui durcit le contexte pour l'or.")
+
+    if cross_asset is not None:
+        cross_tilt = clamp((cross_asset.score - 50) / 2.0, -14, 14)
+        bullish_score += cross_tilt
+        if cross_tilt > 0:
+            reasons.append("Les confirmations cross-asset soutiennent le biais haussier de l'or.")
+        elif cross_tilt < 0:
+            reasons.append("Les confirmations cross-asset contredisent le biais haussier de l'or.")
+        else:
+            reasons.append("Les confirmations cross-asset restent neutres.")
+
     news_tilt = clamp((analysis.score * 4), -16, 16)
     bullish_score += news_tilt
     if news_tilt >= 0:
@@ -972,14 +1102,19 @@ def build_fundamental_recommendation(
     verdict = "BUY" if bullish_score >= 50 else "SELL"
     conviction = bullish_score if verdict == "BUY" else 100 - bullish_score
     score = round(clamp(conviction, 55, 90))
+    event_multiplier = event_mode.stop_multiplier if event_mode is not None else 1.0
     stop_loss, tp1, tp2 = build_trade_levels(
         gold.price,
-        atr=max(atr_15m, 6.0),
+        atr=max(atr_15m, 6.0) * event_multiplier,
         verdict=verdict,
         stop_multiplier=1.15,
         tp1_multiplier=1.0,
         tp2_multiplier=2.0,
     )
+
+    if event_mode is not None and event_mode.active:
+        score = min(score, 62)
+        reasons.insert(0, f"Mode event actif ({event_mode.score}/100): eviter une entree impulsive.")
 
     summary = (
         "Lecture fondamentale intraday positive: dollar et taux se detendent, "
@@ -997,7 +1132,7 @@ def build_fundamental_recommendation(
         stop_loss=stop_loss,
         take_profit_1=tp1,
         take_profit_2=tp2,
-        source_note="Spot XAU/USD Investing.com + contexte macro DXY/10Y + actualites + geopol/sentiment/flux.",
+        source_note="Spot XAU/USD Investing.com + DXY/10Y nominal + 10Y reel FRED + cross-assets gratuits + actualites.",
     )
 
 
@@ -1005,6 +1140,7 @@ def build_technical_recommendation(
     spot: SymbolSnapshot,
     readings: list[TechnicalReading],
     proxy_price: float,
+    event_mode: EventModeAnalysis | None = None,
 ) -> TradeRecommendation:
     weights = {"1D": 0.28, "4H": 0.24, "1H": 0.20, "15m": 0.18, "5m": 0.10}
     weighted_score = 0.0
@@ -1020,11 +1156,18 @@ def build_technical_recommendation(
 
     verdict = "BUY" if weighted_score >= 0 else "SELL"
     score = round(clamp(55 + (abs(weighted_score) * 30), 55, 88))
+    alignment_score, alignment_note = build_mtf_alignment_note(readings, verdict)
+    reasons.insert(0, alignment_note)
+    if alignment_score <= 33:
+        score = max(55, score - 12)
+    elif alignment_score >= 67:
+        score = min(90, score + 5)
 
     support_15m = next(reading for reading in readings if reading.timeframe == "15m")
     resistance_4h = next(reading for reading in readings if reading.timeframe == "4H")
 
-    atr_for_levels = max(atr_15m, 6.0)
+    event_multiplier = event_mode.stop_multiplier if event_mode is not None else 1.0
+    atr_for_levels = max(atr_15m, 6.0) * event_multiplier
     stop_loss, tp1, tp2 = build_trade_levels(
         spot.price,
         atr=atr_for_levels,
@@ -1049,6 +1192,11 @@ def build_technical_recommendation(
         tp1 = min(tp1, spot.day_low or tp1)
         tp2 = min(tp2, adjusted_support)
         summary = "Structure technique intraday fragile: le poids des timeframes superieurs garde un risque vendeur dominant."
+
+    if event_mode is not None and event_mode.active:
+        score = min(score, 62)
+        reasons.insert(0, f"Mode event actif ({event_mode.score}/100): signal technique a traiter en attente/confirmation.")
+        summary = f"{summary} Attention: regime volatil, ne pas chasser le mouvement."
 
     return TradeRecommendation(
         mode="Technique",
@@ -1268,6 +1416,187 @@ def build_market_reasons(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: Symbo
     return score, reasons
 
 
+def snapshot_driver(snapshot: SymbolSnapshot | None) -> dict[str, Any]:
+    if snapshot is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "symbol": snapshot.symbol,
+        "label": snapshot.label,
+        "price": round(snapshot.price, 4),
+        "change_pct": round(snapshot.change_pct, 2),
+        "change_abs": round(snapshot.change_abs, 4),
+        "last_update": snapshot.fetched_at,
+    }
+
+
+def average_close(points: list[PricePoint], lookback: int) -> float | None:
+    closes = [point.close for point in points[-lookback:] if point.close is not None]
+    if not closes:
+        return None
+    return sum(closes) / len(closes)
+
+
+def build_cross_asset_analysis(
+    dxy: SymbolSnapshot,
+    real_yield: SymbolSnapshot | None,
+    usdjpy: SymbolSnapshot | None,
+    silver: SymbolSnapshot | None,
+    gvz: SymbolSnapshot | None,
+    vix: SymbolSnapshot | None,
+) -> CrossAssetAnalysis:
+    score = 50.0
+    confirmations: list[str] = []
+    contradictions: list[str] = []
+    drivers = {
+        "dxy": snapshot_driver(dxy),
+        "real_yield_10y": snapshot_driver(real_yield),
+        "usdjpy": snapshot_driver(usdjpy),
+        "silver": snapshot_driver(silver),
+        "gvz": snapshot_driver(gvz),
+        "vix": snapshot_driver(vix),
+    }
+
+    if dxy.change_pct <= -0.10:
+        score += 14
+        confirmations.append(f"DXY en baisse ({dxy.change_pct:+.2f}%): vent favorable pour XAU/USD.")
+    elif dxy.change_pct >= 0.10:
+        score -= 14
+        contradictions.append(f"DXY en hausse ({dxy.change_pct:+.2f}%): pression dollar contre l'or.")
+
+    if real_yield is not None:
+        real_yield_bps = real_yield.change_abs * 100
+        if real_yield_bps <= -1.0:
+            score += 18
+            confirmations.append(f"10Y reel FRED en baisse ({real_yield_bps:+.1f} bps): soutien macro majeur.")
+        elif real_yield_bps >= 1.0:
+            score -= 18
+            contradictions.append(f"10Y reel FRED en hausse ({real_yield_bps:+.1f} bps): frein macro majeur.")
+
+    if usdjpy is not None:
+        if usdjpy.change_pct <= -0.10:
+            score += 8
+            confirmations.append(f"USD/JPY baisse ({usdjpy.change_pct:+.2f}%): yen plus fort, lecture risk-off.")
+        elif usdjpy.change_pct >= 0.10:
+            score -= 8
+            contradictions.append(f"USD/JPY monte ({usdjpy.change_pct:+.2f}%): dollar/yen confirme mal l'or.")
+
+    if silver is not None:
+        if silver.change_pct >= 0.10:
+            score += 8
+            confirmations.append(f"Argent SI=F en hausse ({silver.change_pct:+.2f}%): confirmation metaux precieux.")
+        elif silver.change_pct <= -0.10:
+            score -= 8
+            contradictions.append(f"Argent SI=F en baisse ({silver.change_pct:+.2f}%): divergence metaux precieux.")
+
+    if gvz is not None:
+        gvz_average = average_close(gvz.points, 20)
+        if gvz_average:
+            gvz_ratio = gvz.price / gvz_average
+            drivers["gvz"]["avg20"] = round(gvz_average, 2)
+            drivers["gvz"]["ratio_to_avg20"] = round(gvz_ratio, 2)
+            if gvz_ratio >= 1.15:
+                score += 5
+                confirmations.append("GVZ au-dessus de sa moyenne 20j: demande de protection sur l'or.")
+            elif gvz_ratio <= 0.90:
+                score -= 3
+                contradictions.append("GVZ sous sa moyenne 20j: stress specifique or en reflux.")
+
+    if vix is not None:
+        if vix.change_pct >= 5.0:
+            score += 4
+            confirmations.append(f"VIX en hausse ({vix.change_pct:+.2f}%): contexte plus risk-off.")
+        elif vix.change_pct <= -5.0:
+            score -= 3
+            contradictions.append(f"VIX en baisse ({vix.change_pct:+.2f}%): stress actions en reflux.")
+
+    score_int = round(clamp(score, 0, 100))
+    if score_int >= 62:
+        status = "favorable"
+        summary = "Les actifs lies au dollar, aux taux reels et au risk-off confirment plutot un biais porteur pour l'or."
+    elif score_int <= 38:
+        status = "defavorable"
+        summary = "Les confirmations cross-asset manquent ou contredisent le biais haussier de l'or."
+    else:
+        status = "mitige"
+        summary = "Le contexte cross-asset reste partage: mieux vaut exiger un signal technique propre avant d'agir."
+
+    return CrossAssetAnalysis(
+        score=score_int,
+        status=status,
+        summary=summary,
+        confirmations=confirmations[:5],
+        contradictions=contradictions[:5],
+        drivers=drivers,
+    )
+
+
+def build_event_mode_analysis(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    gvz: SymbolSnapshot | None,
+    vix: SymbolSnapshot | None,
+) -> EventModeAnalysis:
+    score = 0.0
+    reasons: list[str] = []
+
+    max_volume_ratio = max((reading.volume_ratio for reading in readings), default=0.0)
+    if max_volume_ratio >= 2.0:
+        score += 35
+        reasons.append(f"Volume proxy tres eleve: x{max_volume_ratio:.2f} vs moyenne.")
+    elif max_volume_ratio >= 1.5:
+        score += 20
+        reasons.append(f"Volume proxy au-dessus de la normale: x{max_volume_ratio:.2f}.")
+
+    if gvz is not None:
+        gvz_average = average_close(gvz.points, 20)
+        if gvz_average:
+            gvz_ratio = gvz.price / gvz_average
+            if gvz_ratio >= 1.35:
+                score += 35
+                reasons.append(f"GVZ tres eleve vs moyenne 20j: x{gvz_ratio:.2f}.")
+            elif gvz_ratio >= 1.15:
+                score += 20
+                reasons.append(f"GVZ au-dessus de sa moyenne 20j: x{gvz_ratio:.2f}.")
+
+    if vix is not None and vix.change_pct >= 10:
+        score += 18
+        reasons.append(f"VIX en acceleration ({vix.change_pct:+.2f}%).")
+
+    intraday_points = gold.intraday_points or gold.points
+    if len(intraday_points) >= 4:
+        reference = intraday_points[-4].close
+        if reference:
+            short_move = ((gold.price - reference) / reference) * 100
+            if abs(short_move) >= 0.35:
+                score += 30
+                reasons.append(f"Deplacement court terme violent sur XAU/USD ({short_move:+.2f}%).")
+            elif abs(short_move) >= 0.20:
+                score += 15
+                reasons.append(f"Deplacement court terme notable sur XAU/USD ({short_move:+.2f}%).")
+
+    score_int = round(clamp(score, 0, 100))
+    active = score_int >= 45 or max_volume_ratio >= 2.0
+    if active:
+        return EventModeAnalysis(
+            active=True,
+            score=score_int,
+            status="ACTIF",
+            action="Gel prudent des nouvelles entrees: attendre stabilisation ou confirmation forte.",
+            stop_multiplier=1.5,
+            reasons=reasons[:5],
+        )
+
+    return EventModeAnalysis(
+        active=False,
+        score=score_int,
+        status="normal",
+        action="Pas de gel automatique: appliquer le plan de risque habituel.",
+        stop_multiplier=1.0,
+        reasons=reasons[:5] or ["Volatilite et volumes dans un regime exploitable."],
+    )
+
+
 def classify_bias(score: int) -> str:
     if score >= 5:
         return "bullish"
@@ -1479,8 +1808,36 @@ def build_geopolitical_analysis(news: list[NewsItem]) -> GeopoliticalAnalysis:
     )
 
 
-def analyze_market(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnapshot, news: list[NewsItem]) -> AnalysisResult:
+def analyze_market(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    real_yield: SymbolSnapshot | None = None,
+    cross_asset: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
+) -> AnalysisResult:
     market_score, market_reasons = build_market_reasons(gold, dxy, us10y)
+    if real_yield is not None:
+        real_yield_bps = real_yield.change_abs * 100
+        if real_yield_bps <= -1:
+            market_score += 2
+            market_reasons.append(f"Le 10Y reel FRED baisse ({real_yield_bps:+.1f} bps), soutien important pour l'or.")
+        elif real_yield_bps >= 1:
+            market_score -= 2
+            market_reasons.append(f"Le 10Y reel FRED monte ({real_yield_bps:+.1f} bps), frein important pour l'or.")
+
+    if cross_asset is not None:
+        if cross_asset.score >= 62:
+            market_score += 2
+            market_reasons.append("Les confirmations cross-asset valident plutot le contexte haussier de l'or.")
+        elif cross_asset.score <= 38:
+            market_score -= 2
+            market_reasons.append("Les confirmations cross-asset contredisent le contexte haussier de l'or.")
+
+    if event_mode is not None and event_mode.active:
+        market_reasons.append("Mode event actif: les signaux directionnels doivent etre geles ou fortement confirmes.")
+
     category_scores: dict[str, int] = {}
     for item in news:
         category_scores[item.category] = category_scores.get(item.category, 0) + item.score
@@ -1492,6 +1849,8 @@ def analyze_market(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnaps
     total_score = market_score + news_score + geopolitical_tilt
     bias = classify_bias(total_score)
     confidence = max(35, min(82, 40 + (abs(total_score) * 4) + (3 if geopolitical.event_watch else 0)))
+    if event_mode is not None and event_mode.active:
+        confidence = min(confidence, 45)
 
     bullish_news = [item for item in news if item.score > 0]
     bearish_news = [item for item in news if item.score < 0]
@@ -1885,6 +2244,9 @@ def build_payload(
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
+    real_yield: SymbolSnapshot | None = None,
+    cross_asset_analysis: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -1964,6 +2326,18 @@ def build_payload(
         payload["geopolitical_analysis"] = asdict(geopolitical_analysis)
     if technical_timeframes:
         payload["technical_timeframes"] = [asdict(reading) for reading in technical_timeframes]
+    if real_yield:
+        payload["market_snapshot"]["real_yield_10y"] = {
+            "symbol": real_yield.symbol,
+            "source": "FRED DFII10",
+            "price": round(real_yield.price, 3),
+            "change_bps": round(real_yield.change_abs * 100, 1),
+            "last_update": real_yield.fetched_at,
+        }
+    if cross_asset_analysis:
+        payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
+    if event_mode:
+        payload["event_mode"] = asdict(event_mode)
 
     return payload
 
@@ -2197,6 +2571,9 @@ def render_report(
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
     executive_summary: str | None = None,
+    real_yield: SymbolSnapshot | None = None,
+    cross_asset_analysis: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -2215,6 +2592,11 @@ def render_report(
         format_price_line(gold),
         format_price_line(dxy),
         format_yield_line(us10y),
+        (
+            f"- 10Y reel US FRED DFII10: {real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)"
+            if real_yield
+            else "- 10Y reel US FRED DFII10: indisponible"
+        ),
         f"- Zone technique courte: support ~ {support} / resistance ~ {resistance}",
         "",
         "## Lecture Rapide",
@@ -2222,6 +2604,31 @@ def render_report(
         f"- Confiance heuristique: {analysis.confidence}/100",
         f"- {heuristic_decision_sentence(analysis)}",
     ]
+
+    if cross_asset_analysis:
+        lines.extend(
+            [
+                "",
+                "## Confirmation Cross-Asset",
+                f"- Score: {cross_asset_analysis.score}/100 ({cross_asset_analysis.status})",
+                f"- Lecture: {cross_asset_analysis.summary}",
+                "- Confirmations: "
+                + ("; ".join(cross_asset_analysis.confirmations) if cross_asset_analysis.confirmations else "aucune confirmation nette"),
+                "- Contradictions: "
+                + ("; ".join(cross_asset_analysis.contradictions) if cross_asset_analysis.contradictions else "aucune contradiction nette"),
+            ]
+        )
+
+    if event_mode:
+        lines.extend(
+            [
+                "",
+                "## Mode Event / Volatilite",
+                f"- Statut: {event_mode.status} ({event_mode.score}/100)",
+                f"- Action: {event_mode.action}",
+                "- Raisons: " + "; ".join(event_mode.reasons),
+            ]
+        )
 
     if fundamental_recommendation:
         lines.extend(
@@ -2587,6 +2994,48 @@ def render_geopolitical_panel(analysis: GeopoliticalAnalysis | None) -> str:
         f'<div><div class="section-kicker">Evenements du jour</div><ul class="reason-list">{events}</ul></div>'
         f"</div>"
     )
+
+
+def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: SymbolSnapshot | None) -> str:
+    if analysis is None:
+        return '<div class="footer-note">Confirmations cross-asset indisponibles.</div>'
+
+    tips_line = (
+        f"10Y reel FRED: {real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)"
+        if real_yield
+        else "10Y reel FRED indisponible"
+    )
+    confirmations = "".join(f"<li>{html.escape(item)}</li>" for item in analysis.confirmations[:5]) or "<li>Aucune confirmation nette.</li>"
+    contradictions = "".join(f"<li>{html.escape(item)}</li>" for item in analysis.contradictions[:5]) or "<li>Aucune contradiction nette.</li>"
+
+    return f"""
+    <div class="metric-footnote" style="margin-top:0;">Score cross-asset: {analysis.score}/100 · {html.escape(analysis.status)}</div>
+    <p class="trade-summary" style="margin-top:8px;">{html.escape(analysis.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>TIPS</strong><span>{html.escape(tips_line)}</span></div>
+      <div class="geo-stat"><strong>DXY</strong><span>{html.escape(str(analysis.drivers.get("dxy", {}).get("change_pct", "n/a")))}%</span></div>
+      <div class="geo-stat"><strong>USD/JPY</strong><span>{html.escape(str(analysis.drivers.get("usdjpy", {}).get("change_pct", "n/a")))}%</span></div>
+      <div class="geo-stat"><strong>Silver</strong><span>{html.escape(str(analysis.drivers.get("silver", {}).get("change_pct", "n/a")))}%</span></div>
+    </div>
+    <div class="geo-columns">
+      <div><div class="section-kicker">Confirmations</div><ul class="reason-list">{confirmations}</ul></div>
+      <div><div class="section-kicker">Contradictions</div><ul class="reason-list">{contradictions}</ul></div>
+    </div>
+    """.strip()
+
+
+def render_event_mode_panel(event_mode: EventModeAnalysis | None) -> str:
+    if event_mode is None:
+        return '<div class="footer-note">Mode event indisponible.</div>'
+
+    badge_class = "bearish" if event_mode.active else "bullish"
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in event_mode.reasons[:5])
+    return f"""
+    <div class="trade-verdict {badge_class}">{html.escape(event_mode.status)} · {event_mode.score}/100</div>
+    <p class="trade-summary">{html.escape(event_mode.action)}</p>
+    <ul class="reason-list">{reasons}</ul>
+    <div class="metric-footnote">Multiplicateur SL en regime event: x{event_mode.stop_multiplier:.1f}</div>
+    """.strip()
 
 
 def render_headlines_grid(news: list[NewsItem]) -> str:
@@ -3639,6 +4088,9 @@ def render_dashboard_clarity(
     ai_analysis = bundle.ai_analysis
     geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
     technical_readings = bundle.technical_timeframes or []
+    real_yield = bundle.real_yield
+    cross_asset_analysis = bundle.cross_asset_analysis
+    event_mode = bundle.event_mode
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -3671,6 +4123,13 @@ def render_dashboard_clarity(
     price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
     dxy_class = "bullish" if dxy.change_pct < 0 else "bearish" if dxy.change_pct > 0 else "neutral"
     us10y_class = "bullish" if us10y.change_abs < 0 else "bearish" if us10y.change_abs > 0 else "neutral"
+    real_yield_class = (
+        "bullish"
+        if real_yield is not None and real_yield.change_abs < 0
+        else "bearish"
+        if real_yield is not None and real_yield.change_abs > 0
+        else "neutral"
+    )
     geo_class = (
         "bullish"
         if geopolitical_analysis is not None and geopolitical_analysis.score >= 55
@@ -4296,6 +4755,11 @@ def render_dashboard_clarity(
             <span class="{us10y_class}">{us10y.price:.2f}%</span>
             <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
           </div>
+          <div class="metric-chip">
+            <strong>10Y reel FRED</strong>
+            <span class="{real_yield_class}">{f'{real_yield.price:.2f}%' if real_yield else 'n/a'}</span>
+            <small>{f'{real_yield.change_abs * 100:+.1f} bps' if real_yield else 'source indisponible'}</small>
+          </div>
         </div>
       </article>
 
@@ -4419,6 +4883,9 @@ def render_dashboard_clarity_v2(
     ai_analysis = bundle.ai_analysis
     geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
     technical_readings = bundle.technical_timeframes or []
+    real_yield = bundle.real_yield
+    cross_asset_analysis = bundle.cross_asset_analysis
+    event_mode = bundle.event_mode
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -4451,6 +4918,13 @@ def render_dashboard_clarity_v2(
     price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
     dxy_class = "bullish" if dxy.change_pct < 0 else "bearish" if dxy.change_pct > 0 else "neutral"
     us10y_class = "bullish" if us10y.change_abs < 0 else "bearish" if us10y.change_abs > 0 else "neutral"
+    real_yield_class = (
+        "bullish"
+        if real_yield is not None and real_yield.change_abs < 0
+        else "bearish"
+        if real_yield is not None and real_yield.change_abs > 0
+        else "neutral"
+    )
     geo_class = (
         "bullish"
         if geopolitical_analysis is not None and geopolitical_analysis.score >= 55
@@ -5128,6 +5602,20 @@ def render_dashboard_clarity_v2(
       </div>
     </section>
 
+    <section class="content-grid">
+      <article class="panel span-7">
+        <div class="section-kicker">Confirmations gratuites locales</div>
+        <h2>DXY · 10Y reel · USD/JPY · Silver · GVZ/VIX</h2>
+        {render_cross_asset_panel(cross_asset_analysis, real_yield)}
+      </article>
+
+      <article class="panel span-5">
+        <div class="section-kicker">Mode event / volatilite</div>
+        <h2>Gel prudent des signaux si le marche devient violent</h2>
+        {render_event_mode_panel(event_mode)}
+      </article>
+    </section>
+
     <section class="panel">
       <div class="section-kicker">Actualites expliquees</div>
       <h2>Pourquoi ces infos comptent aujourd'hui</h2>
@@ -5211,6 +5699,42 @@ def extract_dashboard_main_inner(html_document: str) -> str:
     return html_document[start:end]
 
 
+def fetch_local_free_context(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    technical_readings: list[TechnicalReading],
+) -> tuple[SymbolSnapshot | None, CrossAssetAnalysis, EventModeAnalysis]:
+    def cached_snapshot(key: str, loader: Any) -> SymbolSnapshot | None:
+        now = time.time()
+        cached = LOCAL_CONTEXT_SNAPSHOT_CACHE.get(key)
+        if cached and (now - cached[0]) < LOCAL_CONTEXT_CACHE_SECONDS:
+            return copy.deepcopy(cached[1])
+        snapshot = loader()
+        LOCAL_CONTEXT_SNAPSHOT_CACHE[key] = (now, copy.deepcopy(snapshot))
+        return snapshot
+
+    real_yield = cached_snapshot("fred_dfii10", fetch_real_yield_snapshot)
+    usdjpy = cached_snapshot(
+        "usdjpy",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["usdjpy"], interval="1d", data_range="1mo"),
+    )
+    silver = cached_snapshot(
+        "silver",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["silver"], interval="1d", data_range="1mo"),
+    )
+    gvz = cached_snapshot(
+        "gvz",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gvz"], interval="1d", data_range="3mo"),
+    )
+    vix = cached_snapshot(
+        "vix",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["vix"], interval="1d", data_range="3mo"),
+    )
+    cross_asset = build_cross_asset_analysis(dxy, real_yield, usdjpy, silver, gvz, vix)
+    event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
+    return real_yield, cross_asset, event_mode
+
+
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle = copy.deepcopy(base_bundle)
     gold = fetch_investing_xauusd_snapshot(include_historical=False)
@@ -5218,11 +5742,34 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    analysis = analyze_market(gold, dxy, us10y, live_bundle.news)
+    real_yield, cross_asset_analysis, event_mode = fetch_local_free_context(gold, dxy, technical_readings)
+    analysis = analyze_market(
+        gold,
+        dxy,
+        us10y,
+        live_bundle.news,
+        real_yield=real_yield,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
     geopolitical_analysis = analysis.geopolitical
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
-    fundamental_recommendation = build_fundamental_recommendation(gold, dxy, us10y, analysis, atr_15m)
-    technical_recommendation = build_technical_recommendation(gold, technical_readings, proxy_price)
+    fundamental_recommendation = build_fundamental_recommendation(
+        gold,
+        dxy,
+        us10y,
+        analysis,
+        atr_15m,
+        real_yield=real_yield,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
+    technical_recommendation = build_technical_recommendation(
+        gold,
+        technical_readings,
+        proxy_price,
+        event_mode=event_mode,
+    )
     executive_summary = build_executive_summary(
         fundamental_recommendation,
         technical_recommendation,
@@ -5238,6 +5785,9 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
         technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -5253,6 +5803,9 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.technical_recommendation = technical_recommendation
     live_bundle.technical_timeframes = technical_readings
     live_bundle.executive_summary = executive_summary
+    live_bundle.real_yield = real_yield
+    live_bundle.cross_asset_analysis = cross_asset_analysis
+    live_bundle.event_mode = event_mode
     return live_bundle
 
 
@@ -5261,13 +5814,36 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     news = fetch_news(top_news)
-    analysis = analyze_market(gold, dxy, us10y, news)
-    geopolitical_analysis = analysis.geopolitical
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
+    real_yield, cross_asset_analysis, event_mode = fetch_local_free_context(gold, dxy, technical_readings)
+    analysis = analyze_market(
+        gold,
+        dxy,
+        us10y,
+        news,
+        real_yield=real_yield,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
+    geopolitical_analysis = analysis.geopolitical
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
-    fundamental_recommendation = build_fundamental_recommendation(gold, dxy, us10y, analysis, atr_15m)
-    technical_recommendation = build_technical_recommendation(gold, technical_readings, proxy_price)
+    fundamental_recommendation = build_fundamental_recommendation(
+        gold,
+        dxy,
+        us10y,
+        analysis,
+        atr_15m,
+        real_yield=real_yield,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+    )
+    technical_recommendation = build_technical_recommendation(
+        gold,
+        technical_readings,
+        proxy_price,
+        event_mode=event_mode,
+    )
     executive_summary = build_executive_summary(
         fundamental_recommendation,
         technical_recommendation,
@@ -5283,6 +5859,9 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
         technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -5303,6 +5882,9 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_recommendation=technical_recommendation,
         technical_timeframes=technical_readings,
         executive_summary=executive_summary,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
     )
 
 
@@ -5329,6 +5911,9 @@ def render_artifacts(
         bundle.fundamental_recommendation,
         bundle.technical_recommendation,
         bundle.executive_summary,
+        bundle.real_yield,
+        bundle.cross_asset_analysis,
+        bundle.event_mode,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (

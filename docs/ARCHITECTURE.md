@@ -4,11 +4,13 @@ Le projet est actuellement concentre dans `xauusd_agent.py` pour rester simple a
 
 ## Modules Logiques
 
-- Collecte marche: prix spot XAU/USD, DXY, 10Y US, bougies proxy.
+- Collecte marche: prix spot XAU/USD, DXY, 10Y US nominal, 10Y reel FRED DFII10, bougies proxy.
+- Confirmations cross-asset gratuites: USD/JPY, silver futures, GVZ et VIX via Yahoo Finance.
 - Collecte news: Google News RSS et categories macro/geopolitique/flux.
 - Analyse fondamentale: dollar, taux, prix, headlines.
-- Analyse technique: EMA 20/50/100/200, RSI7, MACD 5/34/5, volume.
+- Analyse technique: EMA 20/50/100/200, RSI7, MACD 5/34/5, volume et alignement multi-timeframe.
 - Analyse geopolitique: risk-off, banques centrales, flux physiques, ETF, COT, VIX.
+- Mode event: detection gratuite de regime volatil via GVZ, VIX, volume proxy et mouvement court terme.
 - Rendu: rapport Markdown, JSON, dashboard HTML.
 - Serveur live: `http.server.ThreadingHTTPServer`.
 

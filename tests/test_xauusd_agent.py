@@ -5,12 +5,14 @@ from xauusd_agent import (
     BriefingBundle,
     EventModeAnalysis,
     GeopoliticalAnalysis,
+    MarketRegimeAnalysis,
     NewsItem,
     PricePoint,
     SymbolSnapshot,
     TechnicalReading,
     TradeRecommendation,
     WeekendGoldSnapshot,
+    build_market_regime_analysis,
     build_cross_asset_analysis,
     build_event_mode_analysis,
     classify_bias,
@@ -231,6 +233,14 @@ class AnalysisShapeTests(unittest.TestCase):
                 short_pct=58,
                 fetched_at="2026-04-24T00:00:00+00:00",
             ),
+            market_regime=MarketRegimeAnalysis(
+                name="Hormuz / Oil Shock",
+                status="ACTIF",
+                score=72,
+                gold_impact="mixte/baissier court terme",
+                summary="Regime Hormuz/Oil Shock test.",
+                reasons=["WTI/Brent montent", "Gold ne confirme pas"],
+            ),
         )
         dashboard = render_dashboard(bundle)
         self.assertIn("Dashboard XAUUSD", dashboard)
@@ -241,6 +251,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Investing.com XAU/USD", dashboard)
         self.assertIn("Proxy week-end IG", dashboard)
         self.assertIn("IG Weekend Gold", dashboard)
+        self.assertIn("Regime Hormuz/Oil Shock test.", dashboard)
         self.assertIn("Synthese prioritaire", dashboard)
         self.assertIn("Headlines expliquees", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)
@@ -283,6 +294,28 @@ class LocalFreeContextTests(unittest.TestCase):
         self.assertTrue(context.confirmations)
         self.assertTrue(context.signals)
         self.assertTrue(any(signal.instrument == "DXY" and signal.signal == "BUY" for signal in context.signals))
+
+    def test_hormuz_oil_shock_regime_detects_oil_dollar_pressure(self) -> None:
+        gold = self.snapshot("XAU/USD", 2388.0, 2400.0)
+        dxy = self.snapshot("DXY", 100.6, 100.0)
+        us10y = self.snapshot("^TNX", 4.26, 4.20)
+        wti = self.snapshot("CL=F", 84.0, 80.0)
+        brent = self.snapshot("BZ=F", 88.0, 84.0)
+        news = [
+            NewsItem(
+                title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
+                source="Example",
+                link="https://example.com",
+                published_at="2026-04-25T00:00:00+00:00",
+                category="geopolitical",
+                score=2,
+                score_reasons=["bullish:geopolitical risk"],
+            )
+        ]
+        regime = build_market_regime_analysis(gold, dxy, us10y, news, wti=wti, brent=brent)
+        self.assertEqual(regime.name, "Hormuz / Oil Shock")
+        self.assertEqual(regime.status, "ACTIF")
+        self.assertIn("oil", regime.summary.lower())
 
     def test_event_mode_activates_on_volume_spike(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2398.0)

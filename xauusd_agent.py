@@ -67,6 +67,8 @@ CROSS_ASSET_SYMBOLS = {
     "spx": ("^GSPC", "S&P 500"),
     "gvz": ("^GVZ", "Gold Volatility Index"),
     "vix": ("^VIX", "VIX"),
+    "wti": ("CL=F", "WTI Crude Oil"),
+    "brent": ("BZ=F", "Brent Crude Oil"),
 }
 LOCAL_CONTEXT_CACHE_SECONDS = 300
 LOCAL_CONTEXT_SNAPSHOT_CACHE: dict[str, tuple[float, SymbolSnapshot | None]] = {}
@@ -221,6 +223,22 @@ VIX_RISK_ON_KEYWORDS = {
     "volatility eases",
     "risk appetite",
 }
+OIL_SHOCK_KEYWORDS = {
+    "hormuz",
+    "strait of hormuz",
+    "iran",
+    "oil shipping",
+    "shipping lane",
+    "blockade",
+    "mine",
+    "mines",
+    "navy",
+    "tanker",
+    "sanctions",
+    "crude",
+    "brent",
+    "wti",
+}
 
 
 @dataclass
@@ -344,6 +362,16 @@ class EventModeAnalysis:
 
 
 @dataclass
+class MarketRegimeAnalysis:
+    name: str
+    status: str
+    score: int
+    gold_impact: str
+    summary: str
+    reasons: list[str]
+
+
+@dataclass
 class BriefingBundle:
     gold: SymbolSnapshot
     dxy: SymbolSnapshot
@@ -362,6 +390,7 @@ class BriefingBundle:
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
+    market_regime: MarketRegimeAnalysis | None = None
 
 
 @dataclass
@@ -1822,6 +1851,8 @@ def build_cross_asset_analysis(
     usdchf: SymbolSnapshot | None = None,
     tip: SymbolSnapshot | None = None,
     spx: SymbolSnapshot | None = None,
+    wti: SymbolSnapshot | None = None,
+    brent: SymbolSnapshot | None = None,
 ) -> CrossAssetAnalysis:
     score = 50.0
     confirmations: list[str] = []
@@ -1840,6 +1871,8 @@ def build_cross_asset_analysis(
         "spx": snapshot_driver(spx),
         "gvz": snapshot_driver(gvz),
         "vix": snapshot_driver(vix),
+        "wti": snapshot_driver(wti),
+        "brent": snapshot_driver(brent),
     }
 
     specs = [
@@ -1981,6 +2014,123 @@ def build_event_mode_analysis(
         action="Pas de gel automatique: appliquer le plan de risque habituel.",
         stop_multiplier=1.0,
         reasons=reasons[:5] or ["Volatilite et volumes dans un regime exploitable."],
+    )
+
+
+def count_oil_shock_headlines(news: list[NewsItem]) -> int:
+    count = 0
+    for item in news:
+        text = f"{item.title} {' '.join(item.score_reasons)}".lower()
+        if any(keyword_matches(text, keyword) for keyword in OIL_SHOCK_KEYWORDS):
+            count += 1
+    return count
+
+
+def build_market_regime_analysis(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    wti: SymbolSnapshot | None = None,
+    brent: SymbolSnapshot | None = None,
+    event_mode: EventModeAnalysis | None = None,
+) -> MarketRegimeAnalysis:
+    oil_shock_headlines = count_oil_shock_headlines(news)
+    oil_changes = [snapshot.change_pct for snapshot in (wti, brent) if snapshot is not None]
+    oil_change = max(oil_changes, default=0.0)
+    oil_available = bool(oil_changes)
+    dxy_strong = dxy.change_pct >= 0.20
+    yields_up = (us10y.change_abs * 100) >= 3
+    gold_weak = gold.change_pct <= -0.20
+    gold_strong = gold.change_pct >= 0.20
+
+    oil_shock_score = 0.0
+    reasons: list[str] = []
+    if oil_shock_headlines:
+        oil_shock_score += min(35, 15 + (oil_shock_headlines * 8))
+        reasons.append(f"{oil_shock_headlines} headline(s) liees a Iran/Hormuz/petrole detectees.")
+    if oil_available and oil_change >= 1.0:
+        oil_shock_score += 25
+        reasons.append(f"WTI/Brent montent nettement: variation max {oil_change:+.2f}%.")
+    elif oil_available and oil_change >= 0.35:
+        oil_shock_score += 12
+        reasons.append(f"WTI/Brent gardent une prime de risque: variation max {oil_change:+.2f}%.")
+    elif oil_available:
+        reasons.append(f"WTI/Brent ne confirment pas encore un choc petrole fort ({oil_change:+.2f}%).")
+    else:
+        reasons.append("WTI/Brent indisponibles: regime oil shock moins fiable.")
+
+    if dxy_strong:
+        oil_shock_score += 12
+        reasons.append(f"DXY en hausse ({dxy.change_pct:+.2f}%): recherche de liquidite dollar possible.")
+    if yields_up:
+        oil_shock_score += 8
+        reasons.append(f"10Y US en hausse ({us10y.change_abs * 100:+.1f} bps): choc inflation/taux possible.")
+    if gold_weak:
+        oil_shock_score += 15
+        reasons.append(f"Gold recule ({gold.change_pct:+.2f}%) pendant le stress: flux pas automatiquement refuge.")
+    if event_mode is not None and event_mode.active:
+        oil_shock_score += 6
+        reasons.append("Mode event actif: prudence renforcee sur les entrees gold.")
+
+    oil_shock_score = round(clamp(oil_shock_score, 0, 100))
+    if oil_shock_score >= 58:
+        return MarketRegimeAnalysis(
+            name="Hormuz / Oil Shock",
+            status="ACTIF",
+            score=oil_shock_score,
+            gold_impact="mixte/baissier court terme",
+            summary=(
+                "Regime Hormuz/Oil Shock detecte: la tension politique soutient d'abord oil et dollar. "
+                "Gold peut etre vendu pour liquidite tant que Brent/WTI, DXY ou les taux dominent."
+            ),
+            reasons=reasons[:6],
+        )
+
+    if oil_shock_headlines and oil_change <= -0.35:
+        return MarketRegimeAnalysis(
+            name="De-escalation / Oil Relief",
+            status="SURVEILLANCE",
+            score=round(clamp(45 + oil_shock_headlines * 5, 0, 100)),
+            gold_impact="prime de risque en reflux",
+            summary=(
+                "Le theme Iran/Hormuz existe, mais le petrole ne confirme pas un choc. "
+                "La prime de risque peut sortir de gold si oil et volatilite se detendent."
+            ),
+            reasons=reasons[:6],
+        )
+
+    if dxy_strong and gold_weak:
+        return MarketRegimeAnalysis(
+            name="Dollar Liquidity Squeeze",
+            status="ACTIF",
+            score=round(clamp(52 + abs(dxy.change_pct) * 10 + abs(gold.change_pct) * 8, 0, 100)),
+            gold_impact="baissier court terme",
+            summary=(
+                "Le marche cherche surtout de la liquidite dollar: gold peut baisser meme si le contexte reste stressant."
+            ),
+            reasons=reasons[:6] or [f"DXY monte ({dxy.change_pct:+.2f}%) pendant que gold recule ({gold.change_pct:+.2f}%)."],
+        )
+
+    if oil_shock_headlines and gold_strong and not dxy_strong:
+        return MarketRegimeAnalysis(
+            name="Safe-Haven Gold",
+            status="ACTIF",
+            score=round(clamp(55 + oil_shock_headlines * 5 + max(gold.change_pct, 0) * 8, 0, 100)),
+            gold_impact="haussier",
+            summary=(
+                "Le risque politique se transmet surtout par la demande de couverture sur l'or: gold confirme mieux que dollar/oil."
+            ),
+            reasons=reasons[:6] or ["Gold confirme le role refuge pendant que le dollar ne domine pas."],
+        )
+
+    return MarketRegimeAnalysis(
+        name="Normal Macro",
+        status="NORMAL",
+        score=oil_shock_score,
+        gold_impact="neutre",
+        summary="Pas de regime Hormuz/Oil Shock confirme: le gold reste surtout pilote par DXY, taux, technique et headlines.",
+        reasons=reasons[:6] or ["Aucun choc petrole/geopolitique suffisamment confirme."],
     )
 
 
@@ -2203,6 +2353,7 @@ def analyze_market(
     real_yield: SymbolSnapshot | None = None,
     cross_asset: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
 ) -> AnalysisResult:
     market_score, market_reasons = build_market_reasons(gold, dxy, us10y)
     if real_yield is not None:
@@ -2224,6 +2375,9 @@ def analyze_market(
 
     if event_mode is not None and event_mode.active:
         market_reasons.append("Mode event actif: les signaux directionnels doivent etre geles ou fortement confirmes.")
+    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
+        market_score -= 2
+        market_reasons.append("Regime Hormuz/Oil Shock: la tension politique peut peser sur gold si oil/dollar captent la liquidite.")
 
     category_scores: dict[str, int] = {}
     for item in news:
@@ -2232,6 +2386,17 @@ def analyze_market(
     normalized_news_score = sum(clamp(value, -2, 2) for value in category_scores.values())
     news_score = round(clamp(normalized_news_score / 2, -4, 4))
     geopolitical = build_geopolitical_analysis(news)
+    if market_regime is not None:
+        if market_regime.name == "Hormuz / Oil Shock" and market_regime.score >= 58:
+            geopolitical.score = round(clamp(geopolitical.score - 12, 20, 85))
+            geopolitical.summary = (
+                "Le risque politique est actif, mais le regime Hormuz/Oil Shock change la transmission: "
+                "la prime va d'abord vers oil/dollar et peut peser sur gold a court terme."
+            )
+            geopolitical.reasons.insert(0, market_regime.summary)
+        elif market_regime.name == "Safe-Haven Gold":
+            geopolitical.score = round(clamp(geopolitical.score + 8, 20, 85))
+            geopolitical.reasons.insert(0, market_regime.summary)
     geopolitical_tilt = round(clamp((geopolitical.score - 50) / 12, -3, 3))
     total_score = market_score + news_score + geopolitical_tilt
     bias = classify_bias(total_score)
@@ -2636,6 +2801,7 @@ def build_payload(
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -2729,6 +2895,8 @@ def build_payload(
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
         payload["event_mode"] = asdict(event_mode)
+    if market_regime:
+        payload["market_regime"] = asdict(market_regime)
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
             "symbol": "Weekend Gold",
@@ -2889,6 +3057,19 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         if isinstance(geopolitical_payload, dict)
         else None
     )
+    market_regime_payload = payload.get("market_regime")
+    market_regime = (
+        MarketRegimeAnalysis(
+            name=str(market_regime_payload.get("name", "Normal Macro")),
+            status=str(market_regime_payload.get("status", "NORMAL")),
+            score=int(market_regime_payload.get("score", 0) or 0),
+            gold_impact=str(market_regime_payload.get("gold_impact", "neutre")),
+            summary=str(market_regime_payload.get("summary", "Regime de marche indisponible.")),
+            reasons=list(market_regime_payload.get("reasons", [])),
+        )
+        if isinstance(market_regime_payload, dict)
+        else None
+    )
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -2985,6 +3166,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
         weekend_gold=weekend_gold,
+        market_regime=market_regime,
     )
 
 
@@ -3023,6 +3205,7 @@ def render_report(
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -3108,6 +3291,22 @@ def render_report(
             change = "n/a" if signal.change is None else f"{signal.change:+.2f}{signal.change_unit}"
             corr_30 = "n/a" if signal.corr_30 is None else f"{signal.corr_30:+.2f}"
             lines.append(f"- {signal.instrument}: {signal.signal} | var {change} | corr30 {corr_30} | {signal.reason}")
+
+    if market_regime:
+        lines.extend(
+            [
+                "",
+                "## Regime de Marche",
+                f"- Regime: {market_regime.name}",
+                f"- Statut: {market_regime.status} ({market_regime.score}/100)",
+                f"- Impact gold: {market_regime.gold_impact}",
+                f"- Lecture: {market_regime.summary}",
+            ]
+        )
+        if market_regime.reasons:
+            lines.append("- Pourquoi:")
+            for reason in market_regime.reasons:
+                lines.append(f"  - {reason}")
 
     if event_mode:
         lines.extend(
@@ -3623,6 +3822,37 @@ def render_event_mode_panel(event_mode: EventModeAnalysis | None) -> str:
     <p class="trade-summary">{html.escape(event_mode.action)}</p>
     <ul class="reason-list">{reasons}</ul>
     <div class="metric-footnote">Multiplicateur SL en regime event: x{event_mode.stop_multiplier:.1f}</div>
+    """.strip()
+
+
+def render_market_regime_panel(regime: MarketRegimeAnalysis | None, cross_asset: CrossAssetAnalysis | None = None) -> str:
+    if regime is None:
+        return '<div class="footer-note">Regime de marche indisponible.</div>'
+
+    badge_class = "bearish" if regime.name in {"Hormuz / Oil Shock", "Dollar Liquidity Squeeze"} else "bullish" if regime.name == "Safe-Haven Gold" else "neutral"
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in regime.reasons[:5]) or "<li>Aucune raison dominante.</li>"
+    drivers = cross_asset.drivers if cross_asset else {}
+
+    def oil_cell(key: str, label: str) -> str:
+        driver = drivers.get(key, {})
+        if not driver.get("available"):
+            return f'<div class="geo-stat"><strong>{label}</strong><span>indisponible</span></div>'
+        return (
+            f'<div class="geo-stat"><strong>{label}</strong>'
+            f'<span>{driver.get("price", "n/a")} · {driver.get("change_pct", 0):+.2f}%</span></div>'
+        )
+
+    return f"""
+    <div class="trade-verdict {badge_class}">{html.escape(regime.name)} · {regime.score}/100</div>
+    <p class="trade-summary">{html.escape(regime.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Statut</strong><span>{html.escape(regime.status)}</span></div>
+      <div class="geo-stat"><strong>Impact gold</strong><span>{html.escape(regime.gold_impact)}</span></div>
+      {oil_cell("wti", "WTI")}
+      {oil_cell("brent", "Brent")}
+    </div>
+    <div class="section-kicker" style="margin-top:10px;">Pourquoi ce regime</div>
+    <ul class="reason-list">{reasons}</ul>
     """.strip()
 
 
@@ -4680,6 +4910,7 @@ def render_dashboard_clarity(
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
+    market_regime = bundle.market_regime
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -5682,6 +5913,7 @@ def render_dashboard_clarity_v2(
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
+    market_regime = bundle.market_regime
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -6837,6 +7069,12 @@ def render_dashboard_clarity_v2(
         <h2>Mode event et prudence SL</h2>
         {render_event_mode_panel(event_mode)}
       </article>
+
+      <article class="panel span-12">
+        <div class="section-kicker">Regime politique / petrole</div>
+        <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
+        {render_market_regime_panel(market_regime, cross_asset_analysis)}
+      </article>
     </section>
 
     <section class="panel module-block">
@@ -6888,8 +7126,10 @@ def extract_dashboard_main_inner(html_document: str) -> str:
 def fetch_local_free_context(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
     technical_readings: list[TechnicalReading],
-) -> tuple[SymbolSnapshot | None, CrossAssetAnalysis, EventModeAnalysis]:
+) -> tuple[SymbolSnapshot | None, CrossAssetAnalysis, EventModeAnalysis, MarketRegimeAnalysis]:
     def cached_snapshot(key: str, loader: Any) -> SymbolSnapshot | None:
         now = time.time()
         cached = LOCAL_CONTEXT_SNAPSHOT_CACHE.get(key)
@@ -6948,6 +7188,14 @@ def fetch_local_free_context(
         "vix",
         lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["vix"], interval="1d", data_range="6mo"),
     )
+    wti = cached_snapshot(
+        "wti",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["wti"], interval="1d", data_range="6mo"),
+    )
+    brent = cached_snapshot(
+        "brent",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["brent"], interval="1d", data_range="6mo"),
+    )
     cross_asset = build_cross_asset_analysis(
         dxy_cross or dxy,
         real_yield,
@@ -6962,9 +7210,12 @@ def fetch_local_free_context(
         usdchf=usdchf,
         tip=tip,
         spx=spx,
+        wti=wti,
+        brent=brent,
     )
     event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
-    return real_yield, cross_asset, event_mode
+    market_regime = build_market_regime_analysis(gold, dxy, us10y, news, wti=wti, brent=brent, event_mode=event_mode)
+    return real_yield, cross_asset, event_mode, market_regime
 
 
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
@@ -6975,7 +7226,13 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, cross_asset_analysis, event_mode = fetch_local_free_context(gold, dxy, technical_readings)
+    real_yield, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+        gold,
+        dxy,
+        us10y,
+        live_bundle.news,
+        technical_readings,
+    )
     analysis = analyze_market(
         gold,
         dxy,
@@ -6984,6 +7241,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         real_yield=real_yield,
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
+        market_regime=market_regime,
     )
     geopolitical_analysis = analysis.geopolitical
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
@@ -7032,6 +7290,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
+        market_regime=market_regime,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -7052,6 +7311,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
+    live_bundle.market_regime = market_regime
     return live_bundle
 
 
@@ -7063,7 +7323,13 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     news = fetch_news(top_news)
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, cross_asset_analysis, event_mode = fetch_local_free_context(gold, dxy, technical_readings)
+    real_yield, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+        gold,
+        dxy,
+        us10y,
+        news,
+        technical_readings,
+    )
     analysis = analyze_market(
         gold,
         dxy,
@@ -7072,6 +7338,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
+        market_regime=market_regime,
     )
     geopolitical_analysis = analysis.geopolitical
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
@@ -7120,6 +7387,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
+        market_regime=market_regime,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -7145,6 +7413,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
+        market_regime=market_regime,
     )
 
 
@@ -7176,6 +7445,7 @@ def render_artifacts(
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,
+        bundle.market_regime,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (
@@ -7248,6 +7518,7 @@ class DashboardLiveCache:
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
                 bundle.weekend_gold,
+                bundle.market_regime,
             )
             write_text_file(self.save_path, report)
 

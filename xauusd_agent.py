@@ -55,8 +55,15 @@ FALLBACK_RSS_FEEDS = [
 
 FRED_DFII10_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
 CROSS_ASSET_SYMBOLS = {
+    "gold_proxy": ("GC=F", "Gold Futures Proxy"),
     "usdjpy": ("JPY=X", "USD/JPY"),
     "silver": ("SI=F", "Silver Futures"),
+    "gdx": ("GDX", "Gold Miners ETF"),
+    "gdxj": ("GDXJ", "Junior Gold Miners ETF"),
+    "audusd": ("AUDUSD=X", "AUD/USD"),
+    "usdchf": ("CHF=X", "USD/CHF"),
+    "tip": ("TIP", "TIPS ETF"),
+    "spx": ("^GSPC", "S&P 500"),
     "gvz": ("^GVZ", "Gold Volatility Index"),
     "vix": ("^VIX", "VIX"),
 }
@@ -282,13 +289,30 @@ class GeopoliticalAnalysis:
 
 
 @dataclass
+class CorrelationSignal:
+    instrument: str
+    symbol: str
+    expected_relation: str
+    price: float | None
+    change: float | None
+    change_unit: str
+    corr_30: float | None
+    corr_90: float | None
+    signal: str
+    impact: int
+    reason: str
+
+
+@dataclass
 class CrossAssetAnalysis:
     score: int
     status: str
+    verdict: str
     summary: str
     confirmations: list[str]
     contradictions: list[str]
     drivers: dict[str, dict[str, Any]]
+    signals: list[CorrelationSignal]
 
 
 @dataclass
@@ -597,11 +621,8 @@ def fetch_symbol_snapshot(symbol: str, label: str, interval: str, data_range: st
         raise RuntimeError(f"Not enough market data returned for {symbol}.")
 
     price = float(meta.get("regularMarketPrice") or points[-1].close)
-    previous_close = float(
-        meta.get("previousClose")
-        or meta.get("chartPreviousClose")
-        or points[-2].close
-    )
+    previous_close_source = meta.get("previousClose") or meta.get("regularMarketPreviousClose")
+    previous_close = float(previous_close_source if previous_close_source is not None else points[-2].close)
     change_abs = price - previous_close
     change_pct = (change_abs / previous_close) * 100 if previous_close else 0.0
     period_reference = points[0].close
@@ -1437,6 +1458,160 @@ def average_close(points: list[PricePoint], lookback: int) -> float | None:
     return sum(closes) / len(closes)
 
 
+def series_changes(points: list[PricePoint], lookback: int, absolute: bool = False) -> list[float]:
+    closes = [point.close for point in points if point.close is not None]
+    if len(closes) < lookback + 1:
+        return []
+
+    selected = closes[-(lookback + 1):]
+    changes: list[float] = []
+    for previous, current in zip(selected, selected[1:]):
+        if absolute:
+            changes.append(current - previous)
+        elif previous:
+            changes.append(((current - previous) / abs(previous)) * 100)
+    return changes
+
+
+def pearson_correlation(left: list[float], right: list[float]) -> float | None:
+    size = min(len(left), len(right))
+    if size < 8:
+        return None
+
+    left_values = left[-size:]
+    right_values = right[-size:]
+    left_mean = sum(left_values) / size
+    right_mean = sum(right_values) / size
+    left_centered = [value - left_mean for value in left_values]
+    right_centered = [value - right_mean for value in right_values]
+    numerator = sum(a * b for a, b in zip(left_centered, right_centered))
+    left_denominator = sum(value * value for value in left_centered) ** 0.5
+    right_denominator = sum(value * value for value in right_centered) ** 0.5
+    denominator = left_denominator * right_denominator
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def rolling_correlation(
+    gold_proxy: SymbolSnapshot | None,
+    other: SymbolSnapshot | None,
+    lookback: int,
+    other_absolute: bool = False,
+) -> float | None:
+    if gold_proxy is None or other is None:
+        return None
+    gold_changes = series_changes(gold_proxy.points, lookback)
+    other_changes = series_changes(other.points, lookback, absolute=other_absolute)
+    correlation = pearson_correlation(gold_changes, other_changes)
+    return round(correlation, 2) if correlation is not None else None
+
+
+def correlation_multiplier(expected_relation: str, corr_30: float | None, corr_90: float | None) -> tuple[float, str]:
+    values = [value for value in (corr_30, corr_90) if value is not None]
+    if not values:
+        return 0.60, "Correlation historique insuffisante: poids reduit."
+
+    expected_sign = -1 if expected_relation == "inverse" else 1
+    aligned_correlation = expected_sign * (sum(values) / len(values))
+    if aligned_correlation >= 0.45:
+        return 1.00, "Correlation historique forte: poids complet."
+    if aligned_correlation >= 0.20:
+        return 0.75, "Correlation historique correcte: poids partiel."
+    if aligned_correlation >= 0.05:
+        return 0.50, "Correlation historique faible mais dans le bon sens: poids reduit."
+    if aligned_correlation >= -0.10:
+        return 0.25, "Correlation historique tres faible: poids minimal."
+    return 0.00, "Correlation historique contraire a la relation attendue: signal non score."
+
+
+def make_correlation_signal(
+    key: str,
+    instrument: str,
+    symbol: str,
+    expected_relation: str,
+    snapshot: SymbolSnapshot | None,
+    gold_proxy: SymbolSnapshot | None,
+    weight: int,
+    threshold: float,
+    change_unit: str = "%",
+    use_bps: bool = False,
+) -> tuple[CorrelationSignal, float, str | None, str | None]:
+    if snapshot is None:
+        signal = CorrelationSignal(
+            instrument=instrument,
+            symbol=symbol,
+            expected_relation=expected_relation,
+            price=None,
+            change=None,
+            change_unit=change_unit,
+            corr_30=None,
+            corr_90=None,
+            signal="INDISPONIBLE",
+            impact=0,
+            reason="Source indisponible pour cette verification.",
+        )
+        return signal, 0.0, None, None
+
+    change = snapshot.change_abs * 100 if use_bps else snapshot.change_pct
+    corr_30 = rolling_correlation(gold_proxy, snapshot, 30, other_absolute=use_bps)
+    corr_90 = rolling_correlation(gold_proxy, snapshot, 90, other_absolute=use_bps)
+
+    signal_value = "NEUTRE"
+    impact = 0
+    if expected_relation == "inverse":
+        if change <= -threshold:
+            signal_value = "BUY"
+            impact = weight
+        elif change >= threshold:
+            signal_value = "SELL"
+            impact = -weight
+    else:
+        if change >= threshold:
+            signal_value = "BUY"
+            impact = weight
+        elif change <= -threshold:
+            signal_value = "SELL"
+            impact = -weight
+
+    multiplier, correlation_note = correlation_multiplier(expected_relation, corr_30, corr_90)
+    effective_impact = int(round(impact * multiplier)) if impact else 0
+    relation_text = "inverse" if expected_relation == "inverse" else "positive"
+    if signal_value == "BUY":
+        reason = (
+            f"{instrument} confirme plutot un biais BUY gold ({change:+.2f}{change_unit}, "
+            f"relation {relation_text}, poids {effective_impact:+d}). {correlation_note}"
+        )
+        confirmation = reason if effective_impact > 0 else None
+        contradiction = None
+    elif signal_value == "SELL":
+        reason = (
+            f"{instrument} confirme plutot un biais SELL gold ({change:+.2f}{change_unit}, "
+            f"relation {relation_text}, poids {effective_impact:+d}). {correlation_note}"
+        )
+        confirmation = None
+        contradiction = reason if effective_impact < 0 else None
+    else:
+        reason = f"{instrument} reste neutre pour l'or ({change:+.2f}{change_unit})."
+        confirmation = None
+        contradiction = None
+
+    signal = CorrelationSignal(
+        instrument=instrument,
+        symbol=symbol,
+        expected_relation=expected_relation,
+        price=round(snapshot.price, 4),
+        change=round(change, 2),
+        change_unit=change_unit,
+        corr_30=corr_30,
+        corr_90=corr_90,
+        signal=signal_value,
+        impact=effective_impact,
+        reason=reason,
+    )
+    return signal, float(effective_impact), confirmation, contradiction
+
+
 def build_cross_asset_analysis(
     dxy: SymbolSnapshot,
     real_yield: SymbolSnapshot | None,
@@ -1444,90 +1619,106 @@ def build_cross_asset_analysis(
     silver: SymbolSnapshot | None,
     gvz: SymbolSnapshot | None,
     vix: SymbolSnapshot | None,
+    gold_proxy: SymbolSnapshot | None = None,
+    gdx: SymbolSnapshot | None = None,
+    gdxj: SymbolSnapshot | None = None,
+    audusd: SymbolSnapshot | None = None,
+    usdchf: SymbolSnapshot | None = None,
+    tip: SymbolSnapshot | None = None,
+    spx: SymbolSnapshot | None = None,
 ) -> CrossAssetAnalysis:
     score = 50.0
     confirmations: list[str] = []
     contradictions: list[str] = []
     drivers = {
+        "gold_proxy": snapshot_driver(gold_proxy),
         "dxy": snapshot_driver(dxy),
         "real_yield_10y": snapshot_driver(real_yield),
         "usdjpy": snapshot_driver(usdjpy),
         "silver": snapshot_driver(silver),
+        "gdx": snapshot_driver(gdx),
+        "gdxj": snapshot_driver(gdxj),
+        "audusd": snapshot_driver(audusd),
+        "usdchf": snapshot_driver(usdchf),
+        "tip": snapshot_driver(tip),
+        "spx": snapshot_driver(spx),
         "gvz": snapshot_driver(gvz),
         "vix": snapshot_driver(vix),
     }
 
-    if dxy.change_pct <= -0.10:
-        score += 14
-        confirmations.append(f"DXY en baisse ({dxy.change_pct:+.2f}%): vent favorable pour XAU/USD.")
-    elif dxy.change_pct >= 0.10:
-        score -= 14
-        contradictions.append(f"DXY en hausse ({dxy.change_pct:+.2f}%): pression dollar contre l'or.")
+    specs = [
+        ("dxy", "DXY", dxy.symbol, "inverse", dxy, 14, 0.10, "%", False),
+        ("real_yield_10y", "10Y reel FRED", "DFII10", "inverse", real_yield, 18, 1.0, " bps", True),
+        ("usdjpy", "USD/JPY", CROSS_ASSET_SYMBOLS["usdjpy"][0], "inverse", usdjpy, 8, 0.10, "%", False),
+        ("silver", "Silver", CROSS_ASSET_SYMBOLS["silver"][0], "positive", silver, 9, 0.10, "%", False),
+        ("gdx", "GDX miners", CROSS_ASSET_SYMBOLS["gdx"][0], "positive", gdx, 8, 0.15, "%", False),
+        ("gdxj", "GDXJ juniors", CROSS_ASSET_SYMBOLS["gdxj"][0], "positive", gdxj, 6, 0.20, "%", False),
+        ("audusd", "AUD/USD", CROSS_ASSET_SYMBOLS["audusd"][0], "positive", audusd, 5, 0.10, "%", False),
+        ("usdchf", "USD/CHF", CROSS_ASSET_SYMBOLS["usdchf"][0], "inverse", usdchf, 5, 0.10, "%", False),
+        ("tip", "TIP ETF", CROSS_ASSET_SYMBOLS["tip"][0], "positive", tip, 5, 0.10, "%", False),
+        ("spx", "S&P 500", CROSS_ASSET_SYMBOLS["spx"][0], "inverse", spx, 4, 0.25, "%", False),
+        ("gvz", "GVZ", CROSS_ASSET_SYMBOLS["gvz"][0], "positive", gvz, 5, 5.0, "%", False),
+        ("vix", "VIX", CROSS_ASSET_SYMBOLS["vix"][0], "positive", vix, 4, 5.0, "%", False),
+    ]
 
-    if real_yield is not None:
-        real_yield_bps = real_yield.change_abs * 100
-        if real_yield_bps <= -1.0:
-            score += 18
-            confirmations.append(f"10Y reel FRED en baisse ({real_yield_bps:+.1f} bps): soutien macro majeur.")
-        elif real_yield_bps >= 1.0:
-            score -= 18
-            contradictions.append(f"10Y reel FRED en hausse ({real_yield_bps:+.1f} bps): frein macro majeur.")
-
-    if usdjpy is not None:
-        if usdjpy.change_pct <= -0.10:
-            score += 8
-            confirmations.append(f"USD/JPY baisse ({usdjpy.change_pct:+.2f}%): yen plus fort, lecture risk-off.")
-        elif usdjpy.change_pct >= 0.10:
-            score -= 8
-            contradictions.append(f"USD/JPY monte ({usdjpy.change_pct:+.2f}%): dollar/yen confirme mal l'or.")
-
-    if silver is not None:
-        if silver.change_pct >= 0.10:
-            score += 8
-            confirmations.append(f"Argent SI=F en hausse ({silver.change_pct:+.2f}%): confirmation metaux precieux.")
-        elif silver.change_pct <= -0.10:
-            score -= 8
-            contradictions.append(f"Argent SI=F en baisse ({silver.change_pct:+.2f}%): divergence metaux precieux.")
+    signals: list[CorrelationSignal] = []
+    for key, instrument, symbol, relation, snapshot, weight, threshold, unit, use_bps in specs:
+        signal, impact, confirmation, contradiction = make_correlation_signal(
+            key,
+            instrument,
+            symbol,
+            relation,
+            snapshot,
+            gold_proxy,
+            weight,
+            threshold,
+            change_unit=unit,
+            use_bps=use_bps,
+        )
+        signals.append(signal)
+        score += impact
+        if confirmation:
+            confirmations.append(confirmation)
+        if contradiction:
+            contradictions.append(contradiction)
 
     if gvz is not None:
         gvz_average = average_close(gvz.points, 20)
         if gvz_average:
-            gvz_ratio = gvz.price / gvz_average
             drivers["gvz"]["avg20"] = round(gvz_average, 2)
-            drivers["gvz"]["ratio_to_avg20"] = round(gvz_ratio, 2)
-            if gvz_ratio >= 1.15:
-                score += 5
-                confirmations.append("GVZ au-dessus de sa moyenne 20j: demande de protection sur l'or.")
-            elif gvz_ratio <= 0.90:
-                score -= 3
-                contradictions.append("GVZ sous sa moyenne 20j: stress specifique or en reflux.")
-
-    if vix is not None:
-        if vix.change_pct >= 5.0:
-            score += 4
-            confirmations.append(f"VIX en hausse ({vix.change_pct:+.2f}%): contexte plus risk-off.")
-        elif vix.change_pct <= -5.0:
-            score -= 3
-            contradictions.append(f"VIX en baisse ({vix.change_pct:+.2f}%): stress actions en reflux.")
+            drivers["gvz"]["ratio_to_avg20"] = round(gvz.price / gvz_average, 2)
 
     score_int = round(clamp(score, 0, 100))
-    if score_int >= 62:
+    if score_int >= 70:
         status = "favorable"
-        summary = "Les actifs lies au dollar, aux taux reels et au risk-off confirment plutot un biais porteur pour l'or."
-    elif score_int <= 38:
+        verdict = "BUY renforce"
+        summary = "Les correlations renforcent le BUY gold: dollar/taux reels/refuges/metaux ou miners convergent suffisamment."
+    elif score_int >= 55:
+        status = "plutot favorable"
+        verdict = "BUY accepte"
+        summary = "Les correlations soutiennent le gold, mais pas assez pour oublier le prix et le timing technique."
+    elif score_int <= 30:
         status = "defavorable"
-        summary = "Les confirmations cross-asset manquent ou contredisent le biais haussier de l'or."
+        verdict = "SELL renforce"
+        summary = "Les correlations renforcent un biais SELL gold ou rejettent clairement un BUY impulsif."
+    elif score_int <= 45:
+        status = "plutot defavorable"
+        verdict = "BUY fragile"
+        summary = "Les correlations ne confirment pas assez le BUY gold: prudence ou attente d'une meilleure confluence."
     else:
         status = "mitige"
+        verdict = "neutre"
         summary = "Le contexte cross-asset reste partage: mieux vaut exiger un signal technique propre avant d'agir."
 
     return CrossAssetAnalysis(
         score=score_int,
         status=status,
+        verdict=verdict,
         summary=summary,
         confirmations=confirmations[:5],
         contradictions=contradictions[:5],
         drivers=drivers,
+        signals=signals,
     )
 
 
@@ -2610,7 +2801,7 @@ def render_report(
             [
                 "",
                 "## Confirmation Cross-Asset",
-                f"- Score: {cross_asset_analysis.score}/100 ({cross_asset_analysis.status})",
+                f"- Score: {cross_asset_analysis.score}/100 ({cross_asset_analysis.verdict}, {cross_asset_analysis.status})",
                 f"- Lecture: {cross_asset_analysis.summary}",
                 "- Confirmations: "
                 + ("; ".join(cross_asset_analysis.confirmations) if cross_asset_analysis.confirmations else "aucune confirmation nette"),
@@ -2618,6 +2809,10 @@ def render_report(
                 + ("; ".join(cross_asset_analysis.contradictions) if cross_asset_analysis.contradictions else "aucune contradiction nette"),
             ]
         )
+        for signal in cross_asset_analysis.signals[:8]:
+            change = "n/a" if signal.change is None else f"{signal.change:+.2f}{signal.change_unit}"
+            corr_30 = "n/a" if signal.corr_30 is None else f"{signal.corr_30:+.2f}"
+            lines.append(f"- {signal.instrument}: {signal.signal} | var {change} | corr30 {corr_30} | {signal.reason}")
 
     if event_mode:
         lines.extend(
@@ -3000,7 +3195,55 @@ def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: Sy
     if analysis is None:
         return '<div class="footer-note">Confirmations cross-asset indisponibles.</div>'
 
-    tips_line = (
+    def signal_class(signal: str) -> str:
+        if signal == "BUY":
+            return "bullish"
+        if signal == "SELL":
+            return "bearish"
+        return "neutral"
+
+    def format_change(signal: CorrelationSignal) -> str:
+        if signal.change is None:
+            return "n/a"
+        return f"{signal.change:+.2f}{signal.change_unit}"
+
+    def format_corr(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:+.2f}"
+
+    def format_price(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        if abs(value) >= 100:
+            return f"{value:.2f}"
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+
+    rows = []
+    for signal in analysis.signals:
+        css_class = signal_class(signal.signal)
+        relation = "Inverse gold" if signal.expected_relation == "inverse" else "Suit gold"
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(signal.instrument)}</strong><br><small>{html.escape(signal.symbol)}</small></td>
+              <td>{html.escape(format_price(signal.price))}</td>
+              <td class="{css_class}">{html.escape(format_change(signal))}</td>
+              <td>{html.escape(relation)}</td>
+              <td>{html.escape(format_corr(signal.corr_30))}</td>
+              <td>{html.escape(format_corr(signal.corr_90))}</td>
+              <td class="{css_class}"><strong>{html.escape(signal.signal)}</strong></td>
+              <td>{signal.impact:+d}</td>
+              <td>{html.escape(signal.reason)}</td>
+            </tr>
+            """.strip()
+        )
+
+    table = (
+        '<div class="table-wrap"><table class="technical-table">'
+        "<thead><tr><th>Instrument</th><th>Prix</th><th>Var</th><th>Relation</th><th>Corr 30j</th><th>Corr 90j</th><th>Signal</th><th>Poids</th><th>Lecture</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+    real_yield_line = (
         f"10Y reel FRED: {real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)"
         if real_yield
         else "10Y reel FRED indisponible"
@@ -3009,14 +3252,15 @@ def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: Sy
     contradictions = "".join(f"<li>{html.escape(item)}</li>" for item in analysis.contradictions[:5]) or "<li>Aucune contradiction nette.</li>"
 
     return f"""
-    <div class="metric-footnote" style="margin-top:0;">Score cross-asset: {analysis.score}/100 · {html.escape(analysis.status)}</div>
+    <div class="metric-footnote" style="margin-top:0;">Score correlations: {analysis.score}/100 &middot; {html.escape(analysis.verdict)} &middot; {html.escape(analysis.status)}</div>
     <p class="trade-summary" style="margin-top:8px;">{html.escape(analysis.summary)}</p>
     <div class="geo-grid">
-      <div class="geo-stat"><strong>TIPS</strong><span>{html.escape(tips_line)}</span></div>
-      <div class="geo-stat"><strong>DXY</strong><span>{html.escape(str(analysis.drivers.get("dxy", {}).get("change_pct", "n/a")))}%</span></div>
-      <div class="geo-stat"><strong>USD/JPY</strong><span>{html.escape(str(analysis.drivers.get("usdjpy", {}).get("change_pct", "n/a")))}%</span></div>
-      <div class="geo-stat"><strong>Silver</strong><span>{html.escape(str(analysis.drivers.get("silver", {}).get("change_pct", "n/a")))}%</span></div>
+      <div class="geo-stat"><strong>Verdict confluence</strong><span>{html.escape(analysis.verdict)}</span></div>
+      <div class="geo-stat"><strong>10Y reel</strong><span>{html.escape(real_yield_line)}</span></div>
+      <div class="geo-stat"><strong>Methode</strong><span>Relations attendues + variation du jour + correlations 30/90j.</span></div>
+      <div class="geo-stat"><strong>Usage</strong><span>Renforce ou rejette le signal principal, sans remplacer le timing technique.</span></div>
     </div>
+    {table}
     <div class="geo-columns">
       <div><div class="section-kicker">Confirmations</div><ul class="reason-list">{confirmations}</ul></div>
       <div><div class="section-kicker">Contradictions</div><ul class="reason-list">{contradictions}</ul></div>
@@ -5604,8 +5848,8 @@ def render_dashboard_clarity_v2(
 
     <section class="content-grid">
       <article class="panel span-7">
-        <div class="section-kicker">Confirmations gratuites locales</div>
-        <h2>DXY · 10Y reel · USD/JPY · Silver · GVZ/VIX</h2>
+        <div class="section-kicker">Paires / instruments correles</div>
+        <h2>Score correlation / confluence pour renforcer ou rejeter le signal</h2>
         {render_cross_asset_panel(cross_asset_analysis, real_yield)}
       </article>
 
@@ -5714,23 +5958,69 @@ def fetch_local_free_context(
         return snapshot
 
     real_yield = cached_snapshot("fred_dfii10", fetch_real_yield_snapshot)
+    dxy_cross = cached_snapshot(
+        "dxy_cross",
+        lambda: fetch_optional_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="6mo"),
+    )
+    gold_proxy = cached_snapshot(
+        "gold_proxy",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gold_proxy"], interval="1d", data_range="6mo"),
+    )
     usdjpy = cached_snapshot(
         "usdjpy",
-        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["usdjpy"], interval="1d", data_range="1mo"),
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["usdjpy"], interval="1d", data_range="6mo"),
     )
     silver = cached_snapshot(
         "silver",
-        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["silver"], interval="1d", data_range="1mo"),
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["silver"], interval="1d", data_range="6mo"),
+    )
+    gdx = cached_snapshot(
+        "gdx",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gdx"], interval="1d", data_range="6mo"),
+    )
+    gdxj = cached_snapshot(
+        "gdxj",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gdxj"], interval="1d", data_range="6mo"),
+    )
+    audusd = cached_snapshot(
+        "audusd",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["audusd"], interval="1d", data_range="6mo"),
+    )
+    usdchf = cached_snapshot(
+        "usdchf",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["usdchf"], interval="1d", data_range="6mo"),
+    )
+    tip = cached_snapshot(
+        "tip",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["tip"], interval="1d", data_range="6mo"),
+    )
+    spx = cached_snapshot(
+        "spx",
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["spx"], interval="1d", data_range="6mo"),
     )
     gvz = cached_snapshot(
         "gvz",
-        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gvz"], interval="1d", data_range="3mo"),
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["gvz"], interval="1d", data_range="6mo"),
     )
     vix = cached_snapshot(
         "vix",
-        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["vix"], interval="1d", data_range="3mo"),
+        lambda: fetch_optional_symbol_snapshot(*CROSS_ASSET_SYMBOLS["vix"], interval="1d", data_range="6mo"),
     )
-    cross_asset = build_cross_asset_analysis(dxy, real_yield, usdjpy, silver, gvz, vix)
+    cross_asset = build_cross_asset_analysis(
+        dxy_cross or dxy,
+        real_yield,
+        usdjpy,
+        silver,
+        gvz,
+        vix,
+        gold_proxy=gold_proxy,
+        gdx=gdx,
+        gdxj=gdxj,
+        audusd=audusd,
+        usdchf=usdchf,
+        tip=tip,
+        spx=spx,
+    )
     event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
     return real_yield, cross_asset, event_mode
 

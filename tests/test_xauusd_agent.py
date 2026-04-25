@@ -241,7 +241,10 @@ class LocalFreeContextTests(unittest.TestCase):
         context = build_cross_asset_analysis(dxy, tips, usdjpy, silver, gvz, vix)
         self.assertGreaterEqual(context.score, 62)
         self.assertEqual(context.status, "favorable")
+        self.assertEqual(context.verdict, "BUY renforce")
         self.assertTrue(context.confirmations)
+        self.assertTrue(context.signals)
+        self.assertTrue(any(signal.instrument == "DXY" and signal.signal == "BUY" for signal in context.signals))
 
     def test_event_mode_activates_on_volume_spike(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2398.0)

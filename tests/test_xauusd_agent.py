@@ -204,8 +204,9 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Verdict: BUY", dashboard)
         self.assertIn("Verdict: SELL", dashboard)
         self.assertIn("Investing.com XAU/USD", dashboard)
-        self.assertIn("Ce qui se passe reellement", dashboard)
-        self.assertIn("Actualites expliquees", dashboard)
+        self.assertIn("Synthese prioritaire", dashboard)
+        self.assertIn("Headlines expliquees", dashboard)
+        self.assertIn("Confluence inter-marches", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
 
 

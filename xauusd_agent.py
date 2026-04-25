@@ -3007,8 +3007,8 @@ def candlestick_svg(points: list[PricePoint], current_price: float) -> str:
     if len(candles) < 2:
         return (
             '<svg viewBox="0 0 940 320" role="img" aria-label="Bougies indisponibles">'
-            '<rect width="940" height="320" fill="#fffdf8"></rect>'
-            '<text x="470" y="164" text-anchor="middle" fill="#8a5b12" font-size="16"'
+            '<rect width="940" height="320" fill="#0b0f17"></rect>'
+            '<text x="470" y="164" text-anchor="middle" fill="#f3b35c" font-size="16"'
             ' font-family="JetBrains Mono, IBM Plex Mono, Courier New, monospace">'
             "Bougies intraday indisponibles"
             "</text></svg>"
@@ -3032,7 +3032,7 @@ def candlestick_svg(points: list[PricePoint], current_price: float) -> str:
     for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
         y = padding_top + (inner_height * fraction)
         grid_lines.append(
-            f'<line x1="{padding_left}" y1="{y:.2f}" x2="{width - padding_right}" y2="{y:.2f}" stroke="#e7dccd" stroke-width="1"></line>'
+            f'<line x1="{padding_left}" y1="{y:.2f}" x2="{width - padding_right}" y2="{y:.2f}" stroke="#202a3a" stroke-width="1"></line>'
         )
 
     candle_nodes: list[str] = []
@@ -3058,16 +3058,16 @@ def candlestick_svg(points: list[PricePoint], current_price: float) -> str:
     label_y = max(padding_top + 12, min(height - padding_bottom - 4, price_y - 6))
     price_line = (
         f'<line x1="{padding_left}" y1="{price_y:.2f}" x2="{width - padding_right}" y2="{price_y:.2f}" '
-        'stroke="#8a5b12" stroke-width="1" stroke-dasharray="6 5"></line>'
-        f'<rect x="{width - padding_right + 8:.2f}" y="{price_y - 11:.2f}" width="54" height="18" fill="#fffdf8" stroke="#8a5b12" stroke-width="1"></rect>'
-        f'<text x="{width - padding_right + 35:.2f}" y="{label_y:.2f}" text-anchor="middle" fill="#8a5b12" font-size="12"'
+        'stroke="#f3b35c" stroke-width="1" stroke-dasharray="6 5"></line>'
+        f'<rect x="{width - padding_right + 8:.2f}" y="{price_y - 11:.2f}" width="54" height="18" fill="#101722" stroke="#f3b35c" stroke-width="1"></rect>'
+        f'<text x="{width - padding_right + 35:.2f}" y="{label_y:.2f}" text-anchor="middle" fill="#f3b35c" font-size="12"'
         ' font-family="JetBrains Mono, IBM Plex Mono, Courier New, monospace">'
         f"{current_price:.2f}</text>"
     )
 
     return f"""
 <svg viewBox="0 0 {width} {height}" role="img" aria-label="Bougies intraday XAU/USD avec ligne de prix en temps reel">
-  <rect width="{width}" height="{height}" fill="#fffdf8"></rect>
+  <rect width="{width}" height="{height}" fill="#0b0f17"></rect>
   {''.join(grid_lines)}
   {''.join(candle_nodes)}
   {price_line}
@@ -4428,22 +4428,22 @@ def render_dashboard_clarity(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-{meta_refresh}  <meta name="color-scheme" content="light">
+{meta_refresh}  <meta name="color-scheme" content="dark">
   <title>Dashboard XAUUSD</title>
   <style>
     :root {{
-      --bg: #f6f1e8;
-      --bg-2: #efe6d7;
-      --panel: #fffdf9;
-      --panel-alt: #f8f2e7;
-      --text: #1f2933;
-      --soft: #667085;
-      --muted: #d8ccb8;
-      --line: #e7dccd;
-      --bull: #127a48;
-      --bear: #b93a32;
-      --amber: #8b5e18;
-      --blue: #1e4fd6;
+      --bg: #05070b;
+      --bg-2: #080c13;
+      --panel: #0d1119;
+      --panel-alt: #111722;
+      --text: #e7ebf3;
+      --soft: #98a3b8;
+      --muted: #263044;
+      --line: #1b2534;
+      --bull: #00d084;
+      --bear: #ff4d6d;
+      --amber: #f3b35c;
+      --blue: #79b8ff;
     }}
     * {{
       box-sizing: border-box;
@@ -4452,7 +4452,10 @@ def render_dashboard_clarity(
     html, body {{
       margin: 0;
       min-height: 100vh;
-      background: linear-gradient(180deg, var(--bg), var(--bg-2));
+      background:
+        radial-gradient(circle at 20% 0%, rgba(243, 179, 92, 0.08), transparent 28%),
+        radial-gradient(circle at 100% 18%, rgba(0, 208, 132, 0.06), transparent 26%),
+        linear-gradient(180deg, var(--bg), var(--bg-2) 45%, var(--bg));
       color: var(--text);
     }}
     a {{
@@ -4466,8 +4469,8 @@ def render_dashboard_clarity(
       margin: 0;
     }}
     .page {{
-      width: min(1500px, calc(100% - 28px));
-      margin: 14px auto 28px;
+      width: min(1580px, calc(100% - 20px));
+      margin: 10px auto 24px;
     }}
     .hero-grid,
     .summary-grid,
@@ -4967,8 +4970,8 @@ def render_dashboard_clarity(
   <main class="page" id="dashboard-app">
     <section class="hero-grid">
       <article class="panel hero-price">
-        <div class="section-kicker">Vue instantanee</div>
-        <div class="ticker-symbol">XAU/USD spot intraday</div>
+        <div class="section-kicker">Tableau de bord intraday</div>
+        <div class="ticker-symbol">XAU/USD spot | live</div>
         <div class="ticker-row">
           <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
           <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
@@ -5223,22 +5226,22 @@ def render_dashboard_clarity_v2(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-{meta_refresh}  <meta name="color-scheme" content="light">
+{meta_refresh}  <meta name="color-scheme" content="dark">
   <title>Dashboard XAUUSD</title>
   <style>
     :root {{
-      --bg: #f6f1e8;
-      --bg-2: #efe6d7;
-      --panel: #fffdf9;
-      --panel-alt: #f8f2e7;
-      --text: #1f2933;
-      --soft: #667085;
-      --muted: #d8ccb8;
-      --line: #e7dccd;
-      --bull: #127a48;
-      --bear: #b93a32;
-      --amber: #8b5e18;
-      --blue: #1e4fd6;
+      --bg: #05070b;
+      --bg-2: #080c13;
+      --panel: #0d1119;
+      --panel-alt: #111722;
+      --text: #e7ebf3;
+      --soft: #98a3b8;
+      --muted: #263044;
+      --line: #1b2534;
+      --bull: #00d084;
+      --bear: #ff4d6d;
+      --amber: #f3b35c;
+      --blue: #79b8ff;
     }}
     * {{
       box-sizing: border-box;
@@ -5247,7 +5250,10 @@ def render_dashboard_clarity_v2(
     html, body {{
       margin: 0;
       min-height: 100vh;
-      background: linear-gradient(180deg, var(--bg), var(--bg-2));
+      background:
+        radial-gradient(circle at 20% 0%, rgba(243, 179, 92, 0.08), transparent 28%),
+        radial-gradient(circle at 100% 18%, rgba(0, 208, 132, 0.06), transparent 26%),
+        linear-gradient(180deg, var(--bg), var(--bg-2) 45%, var(--bg));
       color: var(--text);
     }}
     a {{
@@ -5261,8 +5267,8 @@ def render_dashboard_clarity_v2(
       margin: 0;
     }}
     .page {{
-      width: min(1500px, calc(100% - 28px));
-      margin: 14px auto 28px;
+      width: min(1580px, calc(100% - 20px));
+      margin: 10px auto 24px;
     }}
     .hero-grid,
     .summary-grid,
@@ -5276,31 +5282,31 @@ def render_dashboard_clarity_v2(
     .geo-grid,
     .geo-columns {{
       display: grid;
-      gap: 14px;
+      gap: 10px;
     }}
     .hero-grid {{
-      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr) minmax(320px, 1fr);
-      margin-bottom: 14px;
+      grid-template-columns: minmax(420px, 1.18fr) minmax(300px, 0.9fr) minmax(300px, 0.9fr);
+      margin-bottom: 10px;
     }}
     .summary-grid {{
-      grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.9fr);
-      margin-bottom: 14px;
+      grid-template-columns: minmax(0, 1.38fr) minmax(330px, 0.82fr);
+      margin-bottom: 10px;
     }}
     .digest-grid {{
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      margin-top: 10px;
     }}
     .content-grid {{
       grid-template-columns: repeat(12, minmax(0, 1fr));
-      margin-top: 14px;
+      margin-top: 10px;
     }}
     .headline-grid {{
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      margin-top: 10px;
     }}
     .metrics-grid {{
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-top: 10px;
     }}
     .trade-levels,
     .key-levels {{
@@ -5310,11 +5316,11 @@ def render_dashboard_clarity_v2(
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }}
     .geo-grid {{
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
     }}
     .geo-columns {{
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      margin-top: 14px;
+      margin-top: 10px;
     }}
     .panel,
     .trade-card,
@@ -5327,15 +5333,15 @@ def render_dashboard_clarity_v2(
     .scenario {{
       background: var(--panel);
       border: 1px solid var(--muted);
-      border-radius: 10px;
+      border-radius: 6px;
     }}
     .panel,
     .trade-card,
     .summary-box {{
-      padding: 18px 18px 16px;
+      padding: 14px;
     }}
     .digest-card {{
-      padding: 16px;
+      padding: 12px;
       background: var(--panel-alt);
     }}
     .span-5 {{ grid-column: span 5; }}
@@ -5346,7 +5352,7 @@ def render_dashboard_clarity_v2(
       font-size: 11px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }}
     .hero-price {{
       background: var(--panel);
@@ -5361,18 +5367,18 @@ def render_dashboard_clarity_v2(
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
-      gap: 16px;
-      margin-top: 8px;
+      gap: 12px;
+      margin-top: 6px;
     }}
     .ticker-price {{
-      font-size: clamp(48px, 7vw, 78px);
+      font-size: clamp(46px, 6vw, 74px);
       font-weight: 700;
       line-height: 0.95;
       letter-spacing: -0.05em;
       white-space: nowrap;
     }}
     .ticker-delta {{
-      font-size: 24px;
+      font-size: 22px;
       font-weight: 700;
     }}
     .ticker-price.bullish,
@@ -5406,14 +5412,14 @@ def render_dashboard_clarity_v2(
       50% {{ opacity: 0; }}
     }}
     .ticker-meta {{
-      margin-top: 12px;
+      margin-top: 10px;
       color: var(--soft);
       font-size: 12px;
-      line-height: 1.7;
+      line-height: 1.55;
     }}
     .metric-chip,
     .level-chip {{
-      padding: 12px 14px;
+      padding: 10px 11px;
     }}
     .metric-chip strong,
     .level-chip strong {{
@@ -5422,43 +5428,43 @@ def render_dashboard_clarity_v2(
       font-size: 11px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
     }}
     .metric-chip span,
     .level-chip span {{
       display: block;
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 700;
       color: var(--text);
     }}
     .metric-chip small {{
       display: block;
-      margin-top: 6px;
+      margin-top: 5px;
       color: var(--soft);
       font-size: 12px;
-      line-height: 1.5;
+      line-height: 1.45;
     }}
     .trade-card {{
-      border-top: 6px solid var(--muted);
+      border-left: 5px solid var(--muted);
       background: var(--panel);
     }}
-    .trade-card.bullish {{ border-top-color: rgba(19, 138, 82, 0.35); }}
-    .trade-card.bearish {{ border-top-color: rgba(201, 59, 59, 0.35); }}
+    .trade-card.bullish {{ border-left-color: rgba(0, 208, 132, 0.65); }}
+    .trade-card.bearish {{ border-left-color: rgba(255, 77, 109, 0.65); }}
     .trade-card-head {{
       display: flex;
       justify-content: space-between;
-      gap: 14px;
+      gap: 10px;
       align-items: flex-start;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }}
     .trade-card h2 {{
       color: var(--text);
-      font-size: 24px;
+      font-size: 19px;
       margin-top: 2px;
     }}
     .trade-score {{
       color: var(--amber);
-      font-size: 34px;
+      font-size: 28px;
       font-weight: 700;
       white-space: nowrap;
     }}
@@ -5468,30 +5474,31 @@ def render_dashboard_clarity_v2(
     }}
     .trade-verdict {{
       display: inline-block;
-      padding: 8px 12px;
+      padding: 6px 10px;
       background: var(--panel-alt);
-      font-size: 15px;
+      border: 1px solid var(--line);
+      font-size: 14px;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }}
     .trade-summary,
     .story-text,
     .headline-brief p,
     .footer-note {{
       color: var(--text);
-      font-size: 14px;
-      line-height: 1.7;
+      font-size: 13px;
+      line-height: 1.55;
     }}
     .trade-levels {{
-      margin: 12px 0;
+      margin: 9px 0;
     }}
     .trade-levels div {{
       background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px 12px;
+      border-radius: 5px;
+      padding: 8px 10px;
     }}
     .trade-levels span {{
       display: block;
@@ -5502,43 +5509,43 @@ def render_dashboard_clarity_v2(
     }}
     .trade-levels strong {{
       display: block;
-      margin-top: 6px;
-      font-size: 24px;
+      margin-top: 4px;
+      font-size: 18px;
       color: var(--text);
     }}
     .trade-reasons,
     .reason-list {{
       margin: 0;
       padding-left: 18px;
-      line-height: 1.65;
-      font-size: 13px;
+      line-height: 1.5;
+      font-size: 12px;
       color: var(--text);
     }}
     .trade-footer {{
-      margin-top: 12px;
-      padding-top: 12px;
+      margin-top: 9px;
+      padding-top: 9px;
       border-top: 1px solid var(--line);
       color: var(--soft);
       font-size: 12px;
-      line-height: 1.6;
+      line-height: 1.45;
       display: grid;
       gap: 4px;
     }}
     .summary-box h2,
     .panel h2 {{
-      font-size: 24px;
+      font-size: 21px;
       color: var(--text);
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }}
     .summary-box .lead {{
       color: var(--text);
-      font-size: 15px;
-      line-height: 1.75;
-      margin-bottom: 14px;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 10px;
     }}
     .story-row {{
-      padding: 13px 14px;
-      margin-top: 10px;
+      padding: 10px 11px;
+      margin-top: 8px;
       background: var(--panel-alt);
     }}
     .digest-tag {{
@@ -5549,15 +5556,15 @@ def render_dashboard_clarity_v2(
       margin-bottom: 8px;
     }}
     .digest-card h3 {{
-      font-size: 15px;
-      line-height: 1.55;
-      margin-bottom: 8px;
+      font-size: 14px;
+      line-height: 1.45;
+      margin-bottom: 6px;
       color: var(--text);
     }}
     .digest-card p {{
       color: var(--soft);
-      font-size: 13px;
-      line-height: 1.7;
+      font-size: 12px;
+      line-height: 1.55;
       margin: 0;
     }}
     .story-label {{
@@ -5569,14 +5576,14 @@ def render_dashboard_clarity_v2(
     }}
     .decision-grid {{
       display: grid;
-      gap: 12px;
-      margin-top: 12px;
+      gap: 8px;
+      margin-top: 8px;
     }}
     .decision-item {{
-      padding: 14px;
+      padding: 10px;
       background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 5px;
     }}
     .decision-item strong {{
       display: block;
@@ -5591,7 +5598,7 @@ def render_dashboard_clarity_v2(
     .confidence-bar {{
       height: 10px;
       margin-top: 10px;
-      background: #eee4d7;
+      background: #172033;
       border-radius: 999px;
       overflow: hidden;
     }}
@@ -5599,14 +5606,14 @@ def render_dashboard_clarity_v2(
       display: block;
       width: {confidence_width}%;
       height: 100%;
-      background: linear-gradient(90deg, #e7b45e, #8a5b12);
+      background: linear-gradient(90deg, var(--amber), var(--bull));
     }}
     .chart-wrap {{
-      margin-top: 12px;
+      margin-top: 10px;
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 5px;
       overflow: hidden;
-      background: #fffdf8;
+      background: #0b0f17;
     }}
     .chart-wrap svg {{
       display: block;
@@ -5614,24 +5621,24 @@ def render_dashboard_clarity_v2(
       height: auto;
     }}
     .headline-brief {{
-      padding: 16px;
-      border-left: 6px solid var(--line);
+      padding: 12px;
+      border-left: 5px solid var(--line);
     }}
-    .headline-brief.bullish {{ border-left-color: rgba(19, 138, 82, 0.35); }}
-    .headline-brief.bearish {{ border-left-color: rgba(201, 59, 59, 0.35); }}
-    .headline-brief.neutral {{ border-left-color: rgba(138, 91, 18, 0.30); }}
+    .headline-brief.bullish {{ border-left-color: rgba(0, 208, 132, 0.55); }}
+    .headline-brief.bearish {{ border-left-color: rgba(255, 77, 109, 0.55); }}
+    .headline-brief.neutral {{ border-left-color: rgba(243, 179, 92, 0.45); }}
     .headline-brief-top {{
       display: flex;
       justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 10px;
+      gap: 10px;
+      margin-bottom: 8px;
       color: var(--soft);
       font-size: 12px;
     }}
     .headline-brief h3 {{
-      font-size: 17px;
-      line-height: 1.5;
-      margin-bottom: 10px;
+      font-size: 15px;
+      line-height: 1.4;
+      margin-bottom: 8px;
     }}
     .headline-brief p + p {{
       margin-top: 8px;
@@ -5645,8 +5652,8 @@ def render_dashboard_clarity_v2(
       overflow-x: auto;
       margin-top: 10px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fffdfa;
+      border-radius: 5px;
+      background: var(--panel-alt);
     }}
     .technical-table {{
       width: 100%;
@@ -5655,24 +5662,28 @@ def render_dashboard_clarity_v2(
     }}
     .technical-table th,
     .technical-table td {{
-      padding: 12px 14px;
+      padding: 9px 10px;
       border-bottom: 1px solid var(--line);
       text-align: left;
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text);
     }}
     .technical-table th {{
-      background: #f7efe2;
+      background: #141c2a;
       color: var(--amber);
       font-size: 11px;
       letter-spacing: 0.1em;
       text-transform: uppercase;
     }}
+    .technical-table small {{
+      color: var(--soft);
+      font-size: 11px;
+    }}
     .geo-stat {{
-      padding: 12px 14px;
+      padding: 10px 11px;
       background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 5px;
     }}
     .geo-stat strong {{
       display: block;
@@ -5685,21 +5696,21 @@ def render_dashboard_clarity_v2(
     .geo-stat span {{
       display: block;
       color: var(--text);
-      font-size: 16px;
-      line-height: 1.5;
+      font-size: 13px;
+      line-height: 1.45;
     }}
     .scenario {{
-      padding: 16px;
+      padding: 11px;
     }}
     .scenario h3 {{
-      font-size: 16px;
-      margin-bottom: 8px;
+      font-size: 14px;
+      margin-bottom: 6px;
     }}
     .scenario.positive h3 {{ color: var(--bull); }}
     .scenario.negative h3 {{ color: var(--bear); }}
     .scenario.neutral h3 {{ color: var(--amber); }}
     .ai-panel {{
-      margin-top: 14px;
+      margin-top: 10px;
     }}
     .terminal-line {{
       display: grid;
@@ -5720,8 +5731,15 @@ def render_dashboard_clarity_v2(
     }}
     .ai-copy {{
       color: var(--text);
-      line-height: 1.7;
-      font-size: 14px;
+      line-height: 1.55;
+      font-size: 13px;
+    }}
+    .scenario-stack {{
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }}
+    .module-block {{
+      margin-top: 10px;
     }}
     .empty-state {{
       color: var(--soft);
@@ -5766,8 +5784,8 @@ def render_dashboard_clarity_v2(
   <main class="page" id="dashboard-app">
     <section class="hero-grid">
       <article class="panel hero-price">
-        <div class="section-kicker">Vue instantanee</div>
-        <div class="ticker-symbol">XAU/USD spot intraday</div>
+        <div class="section-kicker">Tableau de bord intraday</div>
+        <div class="ticker-symbol">XAU/USD spot | live</div>
         <div class="ticker-row">
           <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
           <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
@@ -5807,15 +5825,15 @@ def render_dashboard_clarity_v2(
 
     <section class="summary-grid">
       <article class="summary-box">
-        <div class="section-kicker">Ce qui se passe reellement</div>
-        <h2>Le marche du jour en francais simple</h2>
+        <div class="section-kicker">Synthese prioritaire</div>
+        <h2>Ce qui compte maintenant</h2>
         <p class="lead">{html.escape(executive_summary)}</p>
         {render_what_happens_now(story_lines)}
       </article>
 
       <article class="summary-box">
-        <div class="section-kicker">Traduction simple des scores</div>
-        <h2>Comment lire BUY / SELL ici</h2>
+        <div class="section-kicker">Decision & prudence</div>
+        <h2>Lecture des scores</h2>
         <div class="decision-grid">
           <div class="decision-item">
             <strong class="{recommendation_css_class(fundamental.verdict)}">Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
@@ -5837,48 +5855,16 @@ def render_dashboard_clarity_v2(
       </article>
     </section>
 
-    <section class="panel">
-      <div class="section-kicker">Resume des infos du jour</div>
-      <h2>Les messages qui comptent vraiment</h2>
-      <p class="footer-note">Chaque bloc ci-dessous explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
-      <div class="digest-grid">
-        {render_information_digest(digest_items)}
-      </div>
-    </section>
-
     <section class="content-grid">
       <article class="panel span-7">
-        <div class="section-kicker">Paires / instruments correles</div>
-        <h2>Score correlation / confluence pour renforcer ou rejeter le signal</h2>
-        {render_cross_asset_panel(cross_asset_analysis, real_yield)}
-      </article>
-
-      <article class="panel span-5">
-        <div class="section-kicker">Mode event / volatilite</div>
-        <h2>Gel prudent des signaux si le marche devient violent</h2>
-        {render_event_mode_panel(event_mode)}
-      </article>
-    </section>
-
-    <section class="panel">
-      <div class="section-kicker">Actualites expliquees</div>
-      <h2>Pourquoi ces infos comptent aujourd'hui</h2>
-      <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
-      <div class="headline-grid">
-        {render_headline_reason_cards(bundle.news, limit=6)}
-      </div>
-    </section>
-
-    <section class="content-grid">
-      <article class="panel span-7">
-        <div class="section-kicker">Graphe intraday</div>
-        <h2>5m chandelles + ligne de prix live</h2>
+        <div class="section-kicker">Prix & niveaux</div>
+        <h2>Chandelles 5m + ligne de prix live</h2>
         <div class="chart-wrap">{chart_svg}</div>
         <div class="footer-note" style="margin-top:10px;">
           Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
           La ligne ambre montre le prix spot en temps reel.
         </div>
-        <div class="key-levels" style="margin-top:14px;">
+        <div class="key-levels" style="margin-top:10px;">
           <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
           <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
           <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
@@ -5886,21 +5872,9 @@ def render_dashboard_clarity_v2(
       </article>
 
       <article class="panel span-5">
-        <div class="section-kicker">Contexte geo / sentiment / flux</div>
-        <h2>Ce qui soutient ou freine l'or</h2>
-        {render_geopolitical_panel(geopolitical_analysis)}
-      </article>
-
-      <article class="panel span-12">
-        <div class="section-kicker">Lecture technique detaillee</div>
-        <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
-        {technical_matrix}
-      </article>
-
-      <article class="panel span-12">
-        <div class="section-kicker">Scenarios d'execution</div>
-        <h2>Comment lire le trade intraday</h2>
-        <div class="scenario-grid" style="margin-top:12px;">
+        <div class="section-kicker">Plan d'execution intraday</div>
+        <h2>Hausse | baisse | attente</h2>
+        <div class="scenario-grid scenario-stack" style="margin-top:10px;">
           <div class="scenario positive">
             <h3>Scenario hausse</h3>
             <p>{html.escape(bullish_case)}</p>
@@ -5915,15 +5889,61 @@ def render_dashboard_clarity_v2(
           </div>
         </div>
       </article>
+    </section>
 
-      {render_ai_summary(ai_analysis)}
+    <section class="content-grid">
+      <article class="panel span-7">
+        <div class="section-kicker">Technique multi-timeframe</div>
+        <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
+        {technical_matrix}
+      </article>
 
-      <section class="panel span-12">
-        <div class="section-kicker">Avertissement</div>
-        <div class="footer-note">
-          Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
-        </div>
-      </section>
+      <article class="panel span-5">
+        <div class="section-kicker">Confluence inter-marches</div>
+        <h2>Ce qui renforce ou affaiblit Gold</h2>
+        {render_cross_asset_panel(cross_asset_analysis, real_yield)}
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel span-7">
+        <div class="section-kicker">Geopolitique | sentiment | flux</div>
+        <h2>Risque externe qui soutient ou freine l'or</h2>
+        {render_geopolitical_panel(geopolitical_analysis)}
+      </article>
+
+      <article class="panel span-5">
+        <div class="section-kicker">Regime de volatilite</div>
+        <h2>Mode event et prudence SL</h2>
+        {render_event_mode_panel(event_mode)}
+      </article>
+    </section>
+
+    <section class="panel module-block">
+      <div class="section-kicker">Catalyseurs du jour</div>
+      <h2>Messages qui expliquent le mouvement</h2>
+      <p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
+      <div class="digest-grid">
+        {render_information_digest(digest_items)}
+      </div>
+    </section>
+
+    <section class="panel module-block">
+      <div class="section-kicker">Headlines expliquees</div>
+      <h2>Impact probable des actualites sur l'or</h2>
+      <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
+      <div class="headline-grid">
+        {render_headline_reason_cards(bundle.news, limit=6)}
+      </div>
+    </section>
+
+    {render_ai_summary(ai_analysis)}
+
+    <section class="panel module-block">
+      <div class="section-kicker">Avertissement</div>
+      <div class="footer-note">
+        Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
+      </div>
     </section>
   </main>
 {live_script}

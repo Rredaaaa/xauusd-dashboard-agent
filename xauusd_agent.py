@@ -31,6 +31,7 @@ HEADERS = {
 
 INVESTING_XAUUSD_URL = "https://www.investing.com/currencies/xau-usd"
 INVESTING_XAUUSD_HISTORICAL_URL = "https://www.investing.com/currencies/xau-usd-historical-data"
+IG_WEEKEND_GOLD_URL = "https://www.ig.com/en/indices/markets-indices/weekend-gold"
 
 NEWS_QUERIES = [
     ("gold", '"gold news today" OR XAUUSD when:2d'),
@@ -251,6 +252,23 @@ class SymbolSnapshot:
 
 
 @dataclass
+class WeekendGoldSnapshot:
+    source_name: str
+    source_url: str
+    sell: float
+    buy: float
+    mid: float
+    spread: float
+    change_abs: float | None
+    change_pct: float | None
+    day_high: float | None
+    day_low: float | None
+    long_pct: int | None
+    short_pct: int | None
+    fetched_at: str
+
+
+@dataclass
 class NewsItem:
     title: str
     source: str
@@ -343,6 +361,7 @@ class BriefingBundle:
     real_yield: SymbolSnapshot | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
+    weekend_gold: WeekendGoldSnapshot | None = None
 
 
 @dataclass
@@ -586,6 +605,62 @@ def fetch_investing_xauusd_snapshot(include_historical: bool = True) -> SymbolSn
         fetched_at=parse_epoch_millis_to_iso(price.get("lastUpdateTime")),
         points=points,
     )
+
+
+def strip_html_to_text(text: str) -> str:
+    without_scripts = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    without_styles = re.sub(r"<style\b[^>]*>.*?</style>", " ", without_scripts, flags=re.DOTALL | re.IGNORECASE)
+    without_tags = re.sub(r"<[^>]+>", " ", without_styles)
+    return compact_whitespace(html.unescape(without_tags))
+
+
+def parse_ig_weekend_gold_snapshot(page_text: str) -> WeekendGoldSnapshot:
+    text = strip_html_to_text(page_text)
+    price_match = re.search(
+        r"Weekend Gold\s+FFIH5.*?SELL\s+([\d,.]+)\s+BUY\s+([\d,.]+)\s+"
+        r"([+-]?[\d,.]+)\s*\(\s*([+-]?[\d,.]+)\s*%\s*\).*?"
+        r"High:\s*([\d,.]+)\s+Low:\s*([\d,.]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not price_match:
+        raise RuntimeError("Impossible de lire les prix IG Weekend Gold.")
+
+    sell = parse_float(price_match.group(1))
+    buy = parse_float(price_match.group(2))
+    change_abs = parse_float(price_match.group(3))
+    change_pct = parse_float(price_match.group(4))
+    day_high = parse_float(price_match.group(5))
+    day_low = parse_float(price_match.group(6))
+    if sell is None or buy is None:
+        raise RuntimeError("Prix IG Weekend Gold incomplets.")
+
+    sentiment_match = re.search(r"Long\s+Short\s+(\d+)%\s+(\d+)%\s+\d+% of client accounts are", text, flags=re.IGNORECASE)
+    long_pct = int(sentiment_match.group(1)) if sentiment_match else None
+    short_pct = int(sentiment_match.group(2)) if sentiment_match else None
+
+    return WeekendGoldSnapshot(
+        source_name="IG Weekend Gold",
+        source_url=IG_WEEKEND_GOLD_URL,
+        sell=sell,
+        buy=buy,
+        mid=(sell + buy) / 2,
+        spread=buy - sell,
+        change_abs=change_abs,
+        change_pct=change_pct,
+        day_high=day_high,
+        day_low=day_low,
+        long_pct=long_pct,
+        short_pct=short_pct,
+        fetched_at=iso_now(),
+    )
+
+
+def fetch_ig_weekend_gold_snapshot() -> WeekendGoldSnapshot | None:
+    try:
+        return parse_ig_weekend_gold_snapshot(http_get_text(IG_WEEKEND_GOLD_URL))
+    except Exception:
+        return None
 
 
 def fetch_symbol_snapshot(symbol: str, label: str, interval: str, data_range: str) -> SymbolSnapshot:
@@ -2560,6 +2635,7 @@ def build_payload(
     real_yield: SymbolSnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
+    weekend_gold: WeekendGoldSnapshot | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -2653,6 +2729,24 @@ def build_payload(
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
         payload["event_mode"] = asdict(event_mode)
+    if weekend_gold:
+        payload["market_snapshot"]["weekend_gold"] = {
+            "symbol": "Weekend Gold",
+            "source_name": weekend_gold.source_name,
+            "source_url": weekend_gold.source_url,
+            "sell": round(weekend_gold.sell, 2),
+            "buy": round(weekend_gold.buy, 2),
+            "mid": round(weekend_gold.mid, 2),
+            "spread": round(weekend_gold.spread, 2),
+            "change_abs": round(weekend_gold.change_abs, 2) if weekend_gold.change_abs is not None else None,
+            "change_pct": round(weekend_gold.change_pct, 2) if weekend_gold.change_pct is not None else None,
+            "day_high": round(weekend_gold.day_high, 2) if weekend_gold.day_high is not None else None,
+            "day_low": round(weekend_gold.day_low, 2) if weekend_gold.day_low is not None else None,
+            "long_pct": weekend_gold.long_pct,
+            "short_pct": weekend_gold.short_pct,
+            "last_update": weekend_gold.fetched_at,
+            "note": "Prix week-end IG: proxy indicatif, distinct du spot XAU/USD classique.",
+        }
 
     return payload
 
@@ -2680,6 +2774,7 @@ def build_price_points(entries: list[dict[str, Any]]) -> list[PricePoint]:
 def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     market_snapshot = payload.get("market_snapshot", {})
     gold_data = market_snapshot.get("xauusd_spot", {})
+    weekend_gold_data = market_snapshot.get("weekend_gold", {})
     dxy_data = market_snapshot.get("dxy", {})
     us10y_data = market_snapshot.get("us10y_yield", {})
     heuristic = payload.get("heuristic_bias", {})
@@ -2742,6 +2837,25 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         resistance=None,
         fetched_at=str(payload.get("generated_at", iso_now())),
         points=[PricePoint(timestamp=int(time.time()), close=us10y_price)],
+    )
+    weekend_gold = (
+        WeekendGoldSnapshot(
+            source_name=str(weekend_gold_data.get("source_name", "IG Weekend Gold")),
+            source_url=str(weekend_gold_data.get("source_url", IG_WEEKEND_GOLD_URL)),
+            sell=float(weekend_gold_data.get("sell", 0.0) or 0.0),
+            buy=float(weekend_gold_data.get("buy", 0.0) or 0.0),
+            mid=float(weekend_gold_data.get("mid", 0.0) or 0.0),
+            spread=float(weekend_gold_data.get("spread", 0.0) or 0.0),
+            change_abs=parse_float(weekend_gold_data.get("change_abs")),
+            change_pct=parse_float(weekend_gold_data.get("change_pct")),
+            day_high=parse_float(weekend_gold_data.get("day_high")),
+            day_low=parse_float(weekend_gold_data.get("day_low")),
+            long_pct=int(weekend_gold_data["long_pct"]) if weekend_gold_data.get("long_pct") is not None else None,
+            short_pct=int(weekend_gold_data["short_pct"]) if weekend_gold_data.get("short_pct") is not None else None,
+            fetched_at=str(weekend_gold_data.get("last_update", payload.get("generated_at", iso_now()))),
+        )
+        if isinstance(weekend_gold_data, dict) and weekend_gold_data.get("sell") and weekend_gold_data.get("buy")
+        else None
     )
 
     news = [
@@ -2870,6 +2984,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
+        weekend_gold=weekend_gold,
     )
 
 
@@ -2907,6 +3022,7 @@ def render_report(
     real_yield: SymbolSnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
+    weekend_gold: WeekendGoldSnapshot | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -2937,6 +3053,29 @@ def render_report(
         f"- Confiance heuristique: {analysis.confidence}/100",
         f"- {heuristic_decision_sentence(analysis)}",
     ]
+
+    if weekend_gold:
+        weekend_delta = (
+            f"{weekend_gold.change_abs:+.2f} / {weekend_gold.change_pct:+.2f}%"
+            if weekend_gold.change_abs is not None and weekend_gold.change_pct is not None
+            else "variation indisponible"
+        )
+        spot_gap = weekend_gold.mid - gold.price
+        lines.extend(
+            [
+                "",
+                "## Prix Week-end IG",
+                f"- Source: {weekend_gold.source_name} ({weekend_gold.source_url})",
+                f"- SELL: {weekend_gold.sell:.2f}",
+                f"- BUY: {weekend_gold.buy:.2f}",
+                f"- Mid indicatif: {weekend_gold.mid:.2f}",
+                f"- Spread: {weekend_gold.spread:.2f}",
+                f"- Variation IG: {weekend_delta}",
+                f"- Ecart mid IG vs spot Investing.com: {spot_gap:+.2f}",
+                f"- Range IG: {format_number(weekend_gold.day_low)} / {format_number(weekend_gold.day_high)}",
+                "- Note: prix week-end IG indicatif, distinct du spot officiel semaine.",
+            ]
+        )
 
     if global_recommendation:
         lines.extend(
@@ -3100,6 +3239,52 @@ def format_number(value: float | None, decimals: int = 2, suffix: str = "") -> s
     if value is None:
         return "n/a"
     return f"{value:.{decimals}f}{suffix}"
+
+
+def render_weekend_gold_proxy(snapshot: WeekendGoldSnapshot | None, spot: SymbolSnapshot) -> str:
+    if snapshot is None:
+        return ""
+
+    delta_class = (
+        "bullish"
+        if snapshot.change_pct is not None and snapshot.change_pct > 0
+        else "bearish"
+        if snapshot.change_pct is not None and snapshot.change_pct < 0
+        else "neutral"
+    )
+    variation = (
+        f"{snapshot.change_abs:+.2f} / {snapshot.change_pct:+.2f}%"
+        if snapshot.change_abs is not None and snapshot.change_pct is not None
+        else "variation n/a"
+    )
+    sentiment = (
+        f"{snapshot.long_pct}% long / {snapshot.short_pct}% short"
+        if snapshot.long_pct is not None and snapshot.short_pct is not None
+        else "sentiment clients n/a"
+    )
+    spot_gap = snapshot.mid - spot.price
+    return f"""
+    <div class="weekend-proxy">
+      <div class="weekend-proxy-head">
+        <div>
+          <div class="section-kicker">Proxy week-end IG</div>
+          <strong>{snapshot.mid:.2f}</strong>
+        </div>
+        <span class="{delta_class}">{variation}</span>
+      </div>
+      <div class="weekend-grid">
+        <div><small>SELL</small><b>{snapshot.sell:.2f}</b></div>
+        <div><small>BUY</small><b>{snapshot.buy:.2f}</b></div>
+        <div><small>Spread</small><b>{snapshot.spread:.2f}</b></div>
+        <div><small>Ecart spot</small><b>{spot_gap:+.2f}</b></div>
+      </div>
+      <div class="weekend-note">
+        Range IG {format_number(snapshot.day_low)} / {format_number(snapshot.day_high)} · {html.escape(sentiment)}.
+        Source <a href="{html.escape(snapshot.source_url)}" target="_blank" rel="noopener noreferrer">IG Weekend Gold</a>.
+        Prix week-end indicatif, distinct du spot classique.
+      </div>
+    </div>
+    """.strip()
 
 
 def sparkline_svg(points: list[PricePoint]) -> str:
@@ -4494,6 +4679,7 @@ def render_dashboard_clarity(
     real_yield = bundle.real_yield
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
+    weekend_gold = bundle.weekend_gold
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -4845,6 +5031,7 @@ def render_dashboard_clarity(
     .story-row,
     .metric-chip,
     .level-chip,
+    .weekend-proxy,
     .scenario {{
       background: var(--panel);
       border: 1px solid var(--muted);
@@ -5271,7 +5458,8 @@ def render_dashboard_clarity(
       }}
       .hero-grid,
       .trade-levels,
-      .key-levels {{
+      .key-levels,
+      .weekend-grid {{
         grid-template-columns: 1fr;
       }}
       .ticker-row {{
@@ -5325,6 +5513,7 @@ def render_dashboard_clarity(
           Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
           Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
         </div>
+        {render_weekend_gold_proxy(weekend_gold, gold)}
         <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
           <div class="global-signal-head">
             <div>
@@ -5492,6 +5681,7 @@ def render_dashboard_clarity_v2(
     real_yield = bundle.real_yield
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
+    weekend_gold = bundle.weekend_gold
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -5950,6 +6140,67 @@ def render_dashboard_clarity_v2(
       color: var(--soft);
       font-size: 12px;
       line-height: 1.55;
+    }}
+    .weekend-proxy {{
+      margin-top: 12px;
+      padding: 12px;
+      border-left: 5px solid rgba(212, 175, 55, 0.78);
+      background:
+        linear-gradient(135deg, rgba(212, 175, 55, 0.12), transparent 46%),
+        rgba(19, 27, 46, 0.84);
+    }}
+    .weekend-proxy-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }}
+    .weekend-proxy-head strong {{
+      display: block;
+      color: var(--text);
+      font-family: "Space Grotesk", monospace;
+      font-size: 30px;
+      line-height: 1;
+    }}
+    .weekend-proxy-head span {{
+      font-family: "Space Grotesk", monospace;
+      font-size: 14px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .weekend-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .weekend-grid div {{
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(45, 52, 73, 0.74);
+      border-radius: 6px;
+      background: rgba(6, 14, 32, 0.48);
+    }}
+    .weekend-grid small {{
+      display: block;
+      color: var(--amber);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .weekend-grid b {{
+      display: block;
+      margin-top: 3px;
+      color: var(--text);
+      font-family: "Space Grotesk", monospace;
+      font-size: 17px;
+    }}
+    .weekend-note {{
+      margin-top: 9px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.45;
     }}
     .global-signal {{
       margin-top: 14px;
@@ -6444,6 +6695,7 @@ def render_dashboard_clarity_v2(
           Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
           Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
         </div>
+        {render_weekend_gold_proxy(weekend_gold, gold)}
         <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
           <div class="global-signal-head">
             <div>
@@ -6718,6 +6970,7 @@ def fetch_local_free_context(
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle = copy.deepcopy(base_bundle)
     gold = fetch_investing_xauusd_snapshot(include_historical=False)
+    weekend_gold = fetch_ig_weekend_gold_snapshot()
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
@@ -6778,6 +7031,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         real_yield=real_yield,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
+        weekend_gold=weekend_gold,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -6797,11 +7051,13 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.real_yield = real_yield
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
+    live_bundle.weekend_gold = weekend_gold
     return live_bundle
 
 
 def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     gold = fetch_investing_xauusd_snapshot(include_historical=True)
+    weekend_gold = fetch_ig_weekend_gold_snapshot()
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     news = fetch_news(top_news)
@@ -6863,6 +7119,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
+        weekend_gold=weekend_gold,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -6887,6 +7144,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
+        weekend_gold=weekend_gold,
     )
 
 
@@ -6917,6 +7175,7 @@ def render_artifacts(
         bundle.real_yield,
         bundle.cross_asset_analysis,
         bundle.event_mode,
+        bundle.weekend_gold,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (
@@ -6988,6 +7247,7 @@ class DashboardLiveCache:
                 bundle.real_yield,
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
+                bundle.weekend_gold,
             )
             write_text_file(self.save_path, report)
 

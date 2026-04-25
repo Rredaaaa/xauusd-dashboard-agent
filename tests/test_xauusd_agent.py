@@ -10,9 +10,11 @@ from xauusd_agent import (
     SymbolSnapshot,
     TechnicalReading,
     TradeRecommendation,
+    WeekendGoldSnapshot,
     build_cross_asset_analysis,
     build_event_mode_analysis,
     classify_bias,
+    parse_ig_weekend_gold_snapshot,
     render_dashboard,
     score_headline,
 )
@@ -43,6 +45,24 @@ class HeadlineScoringTests(unittest.TestCase):
 
 
 class AnalysisShapeTests(unittest.TestCase):
+    def test_parse_ig_weekend_gold_snapshot(self) -> None:
+        html = """
+        <html><body>
+        <h1>Weekend Gold</h1>
+        <span>FFIH5</span>
+        <div>SELL 4682.3 BUY 4697.3 -19.2(-0.41%)</div>
+        <div>High: 4733.6 Low: 4674.0</div>
+        <div>Long Short 41% 59% 59% of client accounts are short on this market</div>
+        </body></html>
+        """
+        snapshot = parse_ig_weekend_gold_snapshot(html)
+        self.assertEqual(snapshot.source_name, "IG Weekend Gold")
+        self.assertAlmostEqual(snapshot.sell, 4682.3)
+        self.assertAlmostEqual(snapshot.buy, 4697.3)
+        self.assertAlmostEqual(snapshot.mid, 4689.8)
+        self.assertEqual(snapshot.long_pct, 41)
+        self.assertEqual(snapshot.short_pct, 59)
+
     def test_news_item_dataclass(self) -> None:
         item = NewsItem(
             title="Example",
@@ -196,6 +216,21 @@ class AnalysisShapeTests(unittest.TestCase):
                 )
             ],
             executive_summary="Resume executif test.",
+            weekend_gold=WeekendGoldSnapshot(
+                source_name="IG Weekend Gold",
+                source_url="https://www.ig.com/en/indices/markets-indices/weekend-gold",
+                sell=101.0,
+                buy=103.0,
+                mid=102.0,
+                spread=2.0,
+                change_abs=1.5,
+                change_pct=1.47,
+                day_high=104.0,
+                day_low=100.0,
+                long_pct=42,
+                short_pct=58,
+                fetched_at="2026-04-24T00:00:00+00:00",
+            ),
         )
         dashboard = render_dashboard(bundle)
         self.assertIn("Dashboard XAUUSD", dashboard)
@@ -204,6 +239,8 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Verdict: BUY", dashboard)
         self.assertIn("Verdict: SELL", dashboard)
         self.assertIn("Investing.com XAU/USD", dashboard)
+        self.assertIn("Proxy week-end IG", dashboard)
+        self.assertIn("IG Weekend Gold", dashboard)
         self.assertIn("Synthese prioritaire", dashboard)
         self.assertIn("Headlines expliquees", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)

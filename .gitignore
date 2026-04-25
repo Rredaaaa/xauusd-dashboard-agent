@@ -6,5 +6,3 @@ reports/*
 !reports/README.md
 .venv/
 .pytest_cache/
-
-.vercel

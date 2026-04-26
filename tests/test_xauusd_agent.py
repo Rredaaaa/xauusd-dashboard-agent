@@ -16,6 +16,7 @@ from xauusd_agent import (
     build_cross_asset_analysis,
     build_event_mode_analysis,
     classify_bias,
+    build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
     render_dashboard,
     score_headline,
@@ -47,6 +48,27 @@ class HeadlineScoringTests(unittest.TestCase):
 
 
 class AnalysisShapeTests(unittest.TestCase):
+    def snapshot(self, symbol: str, price: float, previous: float) -> SymbolSnapshot:
+        points = [
+            PricePoint(timestamp=1, close=previous),
+            PricePoint(timestamp=2, close=price),
+        ]
+        return SymbolSnapshot(
+            symbol=symbol,
+            label=symbol,
+            price=price,
+            previous_close=previous,
+            change_abs=price - previous,
+            change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            period_change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            day_high=max(price, previous),
+            day_low=min(price, previous),
+            support=min(price, previous),
+            resistance=max(price, previous),
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
+
     def test_parse_ig_weekend_gold_snapshot(self) -> None:
         html = """
         <html><body>
@@ -257,6 +279,11 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertGreaterEqual(dashboard.count("Regime Hormuz/Oil Shock test."), 3)
         self.assertIn("Regime decisionnel", dashboard)
         self.assertIn("WTI/Brent + Hormuz/Oil Shock", dashboard)
+        self.assertIn("Agents passifs experimentaux", dashboard)
+        self.assertIn("PriceAgent", dashboard)
+        self.assertIn("ElliottWaveAgent", dashboard)
+        self.assertIn("OrchestratorAgent", dashboard)
+        self.assertIn("Contradictions entre agents", dashboard)
         self.assertIn("Synthese prioritaire", dashboard)
         self.assertIn("Headlines expliquees", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)
@@ -273,6 +300,59 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("global-live-strip", dashboard)
         self.assertIn("aureumFlux.activeTab", dashboard)
         self.assertIn("applyStoredTab", dashboard)
+
+    def test_passive_agents_do_not_replace_official_scoring(self) -> None:
+        points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]
+        gold = SymbolSnapshot(
+            symbol="XAU/USD",
+            label="XAU/USD Spot",
+            price=114.0,
+            previous_close=112.0,
+            change_abs=2.0,
+            change_pct=1.79,
+            period_change_pct=1.79,
+            day_high=115.0,
+            day_low=111.0,
+            support=111.0,
+            resistance=115.0,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+            intraday_points=points,
+        )
+        dxy = self.snapshot("DXY", 99.0, 100.0)
+        us10y = self.snapshot("^TNX", 4.1, 4.2)
+        analysis = AnalysisResult(
+            bias="bullish",
+            score=4,
+            confidence=66,
+            reasons=["Dollar faible"],
+            bullish_news=[],
+            bearish_news=[],
+            neutral_news=[],
+        )
+        official = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=63,
+            summary="Verdict officiel test.",
+            reasons=["Score global conserve"],
+            stop_loss=110.0,
+            take_profit_1=116.0,
+            take_profit_2=118.0,
+            source_note="Test.",
+        )
+        agents = build_passive_agent_results(
+            gold,
+            dxy,
+            us10y,
+            [],
+            analysis,
+            global_recommendation=official,
+        )
+        self.assertEqual(len(agents), 12)
+        self.assertTrue(all(agent.experimental for agent in agents))
+        self.assertTrue(any(agent.name == "ElliottWaveAgent" for agent in agents))
+        self.assertEqual(official.verdict, "BUY")
 
 
 class LocalFreeContextTests(unittest.TestCase):

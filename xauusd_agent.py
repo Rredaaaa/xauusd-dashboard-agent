@@ -372,6 +372,34 @@ class MarketRegimeAnalysis:
 
 
 @dataclass
+class AgentEvidence:
+    label: str
+    value: str
+    source: str = ""
+
+
+@dataclass
+class AgentRisk:
+    label: str
+    detail: str
+    severity: str = "medium"
+
+
+@dataclass
+class AgentResult:
+    name: str
+    department: str
+    bias: str
+    score: int
+    confidence: int
+    summary: str
+    evidence: list[AgentEvidence] = field(default_factory=list)
+    risks: list[AgentRisk] = field(default_factory=list)
+    status: str = "PASSIVE"
+    experimental: bool = True
+
+
+@dataclass
 class BriefingBundle:
     gold: SymbolSnapshot
     dxy: SymbolSnapshot
@@ -391,6 +419,7 @@ class BriefingBundle:
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
     market_regime: MarketRegimeAnalysis | None = None
+    agent_results: list[AgentResult] = field(default_factory=list)
 
 
 @dataclass
@@ -2134,6 +2163,384 @@ def build_market_regime_analysis(
     )
 
 
+def normalize_agent_bias(verdict: str) -> str:
+    upper = verdict.upper()
+    if "BUY" in upper or "BULL" in upper or "HAUS" in upper:
+        return "BUY"
+    if "SELL" in upper or "BEAR" in upper or "BAISS" in upper:
+        return "SELL"
+    if "CAUTION" in upper or "PRUD" in upper or "WAIT" in upper:
+        return "CAUTION"
+    return "NEUTRAL"
+
+
+def score_to_bias(score: int, buy_threshold: int = 56, sell_threshold: int = 44) -> str:
+    if score >= buy_threshold:
+        return "BUY"
+    if score <= sell_threshold:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def clamp_score(value: float) -> int:
+    return round(clamp(value, 0, 100))
+
+
+def top_news_titles(news: list[NewsItem], categories: set[str] | None = None, limit: int = 2) -> str:
+    selected = [
+        clean_display_text(item.title)
+        for item in news
+        if categories is None or item.category in categories
+    ][:limit]
+    return " | ".join(selected) if selected else "aucun titre exploitable"
+
+
+def build_elliott_wave_agent(gold: SymbolSnapshot) -> AgentResult:
+    points = gold.intraday_points or gold.points
+    closes = [point.close for point in points if point.close]
+    if len(closes) < 8:
+        return AgentResult(
+            name="ElliottWaveAgent",
+            department="Technical",
+            bias="NEUTRAL",
+            score=50,
+            confidence=35,
+            summary="Lecture Elliott passive indisponible: pas assez de points pour compter les swings.",
+            evidence=[
+                AgentEvidence(
+                    "Base theorique",
+                    "Motive 5 vagues, correction ABC, Fibonacci, avec prudence sur les sequences modernes.",
+                    "elliottwave-forecast.com/elliott-wave-theory",
+                )
+            ],
+            risks=[AgentRisk("Donnees", "Historique intraday trop court pour une lecture robuste.", "high")],
+        )
+
+    recent = closes[-1]
+    reference_13 = closes[-13] if len(closes) >= 13 else closes[0]
+    reference_5 = closes[-5]
+    medium_change = ((recent - reference_13) / reference_13) * 100 if reference_13 else 0.0
+    short_change = ((recent - reference_5) / reference_5) * 100 if reference_5 else 0.0
+    absolute_move = abs(medium_change)
+
+    if medium_change > 0.12 and short_change >= -0.08:
+        bias = "BUY"
+        score = clamp_score(56 + min(18, absolute_move * 8))
+        phase = "sequence haussiere incomplete"
+        summary = "Lecture Elliott passive: le prix garde une sequence motive haussiere tant que le dernier repli reste contenu."
+    elif medium_change < -0.12 and short_change <= 0.08:
+        bias = "SELL"
+        score = clamp_score(44 - min(18, absolute_move * 8))
+        phase = "sequence baissiere incomplete"
+        summary = "Lecture Elliott passive: le prix garde une sequence motive baissiere tant que le rebond court reste limite."
+    else:
+        bias = "NEUTRAL"
+        score = 50
+        phase = "correction / range probable"
+        summary = "Lecture Elliott passive: la structure ressemble davantage a une correction qu'a une impulsion propre."
+
+    return AgentResult(
+        name="ElliottWaveAgent",
+        department="Technical",
+        bias=bias,
+        score=score,
+        confidence=48 if absolute_move < 0.2 else 58,
+        summary=summary,
+        evidence=[
+            AgentEvidence("Structure", phase, "XAU/USD intraday"),
+            AgentEvidence("Variation sequence", f"{medium_change:+.2f}% moyen terme / {short_change:+.2f}% court terme", "Prix"),
+            AgentEvidence(
+                "Base theorique",
+                "Lecture passive inspiree des sequences motive/corrective et ratios Fibonacci.",
+                "elliottwave-forecast.com/elliott-wave-theory",
+            ),
+        ],
+        risks=[
+            AgentRisk(
+                "Validation manuelle",
+                "Le comptage Elliott reste experimental et ne doit pas remplacer le verdict officiel.",
+                "medium",
+            )
+        ],
+    )
+
+
+def build_passive_agent_results(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    analysis: AnalysisResult,
+    geopolitical_analysis: GeopoliticalAnalysis | None = None,
+    fundamental_recommendation: TradeRecommendation | None = None,
+    technical_recommendation: TradeRecommendation | None = None,
+    global_recommendation: TradeRecommendation | None = None,
+    technical_timeframes: list[TechnicalReading] | None = None,
+    real_yield: SymbolSnapshot | None = None,
+    cross_asset_analysis: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
+    weekend_gold: WeekendGoldSnapshot | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
+) -> list[AgentResult]:
+    readings = technical_timeframes or []
+    agents: list[AgentResult] = []
+
+    price_score = clamp_score(50 + (gold.change_pct * 18) + (gold.period_change_pct * 6))
+    price_risks = []
+    if weekend_gold is not None:
+        price_risks.append(AgentRisk("Proxy week-end", "IG Weekend Gold reste indicatif et distinct du spot semaine.", "medium"))
+    agents.append(
+        AgentResult(
+            name="PriceAgent",
+            department="Market",
+            bias=score_to_bias(price_score),
+            score=price_score,
+            confidence=72 if gold.price else 35,
+            summary="Lecture prix passive: spot, variation courte, support/resistance et proxy week-end si disponible.",
+            evidence=[
+                AgentEvidence("Spot XAU/USD", f"{gold.price:.2f} ({gold.change_pct:+.2f}%)", "Investing.com XAU/USD"),
+                AgentEvidence("Support / resistance", f"{format_number(gold.support)} / {format_number(gold.resistance)}", "Calcul local"),
+            ],
+            risks=price_risks,
+        )
+    )
+
+    technical_score = technical_recommendation.score if technical_recommendation else 50
+    agents.append(
+        AgentResult(
+            name="TechnicalAgent",
+            department="Technical",
+            bias=normalize_agent_bias(technical_recommendation.verdict if technical_recommendation else "NEUTRAL"),
+            score=technical_score,
+            confidence=70 if readings else 45,
+            summary=(technical_recommendation.summary if technical_recommendation else "Lecture technique passive indisponible."),
+            evidence=[
+                AgentEvidence("Timeframes", f"{len(readings)} lectures EMA/RSI/MACD/volume", "GC=F proxy + spot XAU/USD"),
+                AgentEvidence("Raisons", "; ".join((technical_recommendation.reasons if technical_recommendation else [])[:3]) or "aucune raison technique"),
+            ],
+            risks=[] if readings else [AgentRisk("Technique", "Aucune matrice multi-timeframe disponible.", "high")],
+        )
+    )
+    agents.append(build_elliott_wave_agent(gold))
+
+    macro_score = fundamental_recommendation.score if fundamental_recommendation else clamp_score(50 - dxy.change_pct * 18 - us10y.change_abs * 600)
+    macro_evidence = [
+        AgentEvidence("DXY", f"{dxy.price:.2f} ({dxy.change_pct:+.2f}%)", "Yahoo Finance"),
+        AgentEvidence("10Y US", f"{us10y.price:.2f}% ({us10y.change_abs * 100:+.1f} bps)", "Yahoo Finance"),
+    ]
+    if real_yield is not None:
+        macro_evidence.append(AgentEvidence("10Y reel", f"{real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)", "FRED DFII10"))
+    agents.append(
+        AgentResult(
+            name="MacroAgent",
+            department="Macro",
+            bias=normalize_agent_bias(fundamental_recommendation.verdict if fundamental_recommendation else score_to_bias(macro_score)),
+            score=macro_score,
+            confidence=68 if real_yield is not None else 55,
+            summary=(fundamental_recommendation.summary if fundamental_recommendation else "Lecture macro passive basee sur dollar et taux."),
+            evidence=macro_evidence,
+            risks=[AgentRisk("Source taux", "FRED officiel sera renforce en Phase 6.", "medium")] if real_yield is None else [],
+        )
+    )
+
+    regime_score = market_regime.score if market_regime else 50
+    agents.append(
+        AgentResult(
+            name="GeopoliticalOilShockAgent",
+            department="Geopolitics & Flows",
+            bias="CAUTION" if market_regime and market_regime.name != "Normal Macro" else "NEUTRAL",
+            score=regime_score,
+            confidence=68 if market_regime else 45,
+            summary=market_regime.summary if market_regime else "Regime geopolitique/petrole indisponible.",
+            evidence=[
+                AgentEvidence("Regime", market_regime.name if market_regime else "indisponible", "Headlines + WTI/Brent"),
+                AgentEvidence("Pourquoi", "; ".join((market_regime.reasons if market_regime else [])[:3]) or "aucune raison dominante"),
+            ],
+            risks=[AgentRisk("Oil shock", "Le regime peut inverser le lien geopolitique -> gold si oil/dollar captent la liquidite.", "high")],
+        )
+    )
+
+    sentiment_score = clamp_score(50 + analysis.score * 5)
+    agents.append(
+        AgentResult(
+            name="SentimentNewsAgent",
+            department="Geopolitics & Flows",
+            bias=score_to_bias(sentiment_score),
+            score=sentiment_score,
+            confidence=analysis.confidence,
+            summary=heuristic_decision_sentence(analysis),
+            evidence=[
+                AgentEvidence("Headlines", top_news_titles(news, limit=2), "RSS/Google News"),
+                AgentEvidence("Score headlines", str(analysis.score), "Moteur heuristique local"),
+            ],
+            risks=[AgentRisk("Bruit news", "Les titres peuvent etre redondants ou en retard sur le prix.", "medium")],
+        )
+    )
+
+    correlation_score = cross_asset_analysis.score if cross_asset_analysis else 50
+    agents.append(
+        AgentResult(
+            name="CorrelationAgent",
+            department="Market",
+            bias=normalize_agent_bias(cross_asset_analysis.verdict if cross_asset_analysis else "NEUTRAL"),
+            score=correlation_score,
+            confidence=70 if cross_asset_analysis else 40,
+            summary=cross_asset_analysis.summary if cross_asset_analysis else "Confluence inter-marches indisponible.",
+            evidence=[
+                AgentEvidence("Confirmations", "; ".join((cross_asset_analysis.confirmations if cross_asset_analysis else [])[:2]) or "aucune confirmation nette"),
+                AgentEvidence("Contradictions", "; ".join((cross_asset_analysis.contradictions if cross_asset_analysis else [])[:2]) or "aucune contradiction nette"),
+            ],
+            risks=[AgentRisk("Correlation", "Une correlation court terme peut casser pendant un regime special.", "medium")],
+        )
+    )
+
+    flow_summary = geopolitical_analysis.summary if geopolitical_analysis else "Flux et positionnement indisponibles."
+    agents.append(
+        AgentResult(
+            name="FlowPositioningAgent",
+            department="Geopolitics & Flows",
+            bias=score_to_bias(geopolitical_analysis.score if geopolitical_analysis else 50),
+            score=geopolitical_analysis.score if geopolitical_analysis else 50,
+            confidence=55,
+            summary=flow_summary,
+            evidence=[
+                AgentEvidence("Large specs", geopolitical_analysis.large_speculators if geopolitical_analysis else "indisponible", "News/COT proxy"),
+                AgentEvidence("ETF + OI", f"{geopolitical_analysis.etf_flows} / {geopolitical_analysis.comex_open_interest}" if geopolitical_analysis else "indisponible", "News/ETF/OI proxy"),
+            ],
+            risks=[AgentRisk("Source officielle", "COT et ETF flows officiels seront ajoutes en Phases 9 et 10.", "medium")],
+        )
+    )
+
+    agents.append(
+        AgentResult(
+            name="EventFactsAgent",
+            department="Geopolitics & Flows",
+            bias="CAUTION" if event_mode and event_mode.active else "NEUTRAL",
+            score=event_mode.score if event_mode else 0,
+            confidence=60 if event_mode else 35,
+            summary=event_mode.action if event_mode else "Aucun regime event disponible.",
+            evidence=[
+                AgentEvidence("Mode event", event_mode.status if event_mode else "indisponible", "Volatilite/volume"),
+                AgentEvidence("Events", top_news_titles(news, {"events_calendar", "events_fomc", "macro_fed", "macro_cpi", "macro_nfp"}, 2), "Headlines calendrier"),
+            ],
+            risks=[AgentRisk("Calendrier officiel", "Les faits macro seront fiabilises en Phase 7.", "medium")],
+        )
+    )
+
+    trump_news = [item for item in news if text_contains_any(item.title, ("trump", "white house", "president", "tariff", "sanction"))]
+    agents.append(
+        AgentResult(
+            name="TrumpPoliticalStatementsAgent",
+            department="Geopolitics & Flows",
+            bias="CAUTION" if trump_news else "NEUTRAL",
+            score=65 if trump_news else 50,
+            confidence=45 if trump_news else 30,
+            summary=(
+                "Declaration politique detectee dans les headlines; impact a confirmer par source primaire."
+                if trump_news
+                else "Aucune declaration Trump/politique exploitable detectee dans les donnees actuelles."
+            ),
+            evidence=[AgentEvidence("Titres politiques", top_news_titles(trump_news, limit=2), "Headlines actuelles")],
+            risks=[AgentRisk("Source primaire", "Le module officiel declarations politiques arrive en Phase 8.", "medium")],
+        )
+    )
+
+    risk_score = global_recommendation.score if global_recommendation else 50
+    risk_reasons = []
+    if event_mode and event_mode.active:
+        risk_reasons.append("Mode event actif")
+    if market_regime and market_regime.name != "Normal Macro":
+        risk_reasons.append(market_regime.name)
+    agents.append(
+        AgentResult(
+            name="RiskManagerAgent",
+            department="Decision",
+            bias="CAUTION" if risk_reasons else "NEUTRAL",
+            score=risk_score,
+            confidence=72,
+            summary="Controle passif du risque: verifie regime, contradictions, SL/TP et prudence execution.",
+            evidence=[
+                AgentEvidence("Decision officielle", f"{global_recommendation.verdict} {global_recommendation.score}/100" if global_recommendation else "indisponible", "Scoring actuel"),
+                AgentEvidence("Alertes risque", "; ".join(risk_reasons) if risk_reasons else "aucune alerte majeure", "Event/regime"),
+            ],
+            risks=[AgentRisk("Execution", "La lecture agent ne constitue pas un ordre; elle surveille les risques autour du plan.", "high")],
+        )
+    )
+
+    contradictions = build_agent_contradictions(agents)
+    orchestrator_risks = [AgentRisk("Contradictions", item, "medium") for item in contradictions[:3]]
+    agents.append(
+        AgentResult(
+            name="OrchestratorAgent",
+            department="Decision",
+            bias=normalize_agent_bias(global_recommendation.verdict if global_recommendation else "NEUTRAL"),
+            score=risk_score,
+            confidence=74,
+            summary="Orchestrateur passif: compare les agents, signale les contradictions, mais ne remplace pas le verdict officiel.",
+            evidence=[
+                AgentEvidence("Verdict officiel conserve", global_recommendation.verdict if global_recommendation else "indisponible", "Moteur actuel"),
+                AgentEvidence("Agents actifs", f"{len(agents) + 1} lectures passives", "Fondation Phase 5"),
+            ],
+            risks=orchestrator_risks or [AgentRisk("Contradictions", "Aucune contradiction majeure entre agents passifs.", "low")],
+        )
+    )
+
+    return agents
+
+
+def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
+    buy_agents = [agent.name for agent in agent_results if agent.bias == "BUY"]
+    sell_agents = [agent.name for agent in agent_results if agent.bias == "SELL"]
+    caution_agents = [agent.name for agent in agent_results if agent.bias == "CAUTION"]
+    contradictions: list[str] = []
+    if buy_agents and sell_agents:
+        contradictions.append(f"BUY vs SELL: {', '.join(buy_agents[:3])} contre {', '.join(sell_agents[:3])}.")
+    if caution_agents:
+        contradictions.append(f"Prudence active: {', '.join(caution_agents[:4])}.")
+    weak_confidence = [agent.name for agent in agent_results if agent.confidence < 45]
+    if weak_confidence:
+        contradictions.append(f"Confiance faible: {', '.join(weak_confidence[:4])}.")
+    return contradictions
+
+
+def parse_agent_results(entries: list[dict[str, Any]]) -> list[AgentResult]:
+    results: list[AgentResult] = []
+    for entry in entries:
+        evidence = [
+            AgentEvidence(
+                label=str(item.get("label", "")),
+                value=str(item.get("value", "")),
+                source=str(item.get("source", "")),
+            )
+            for item in entry.get("evidence", [])
+            if isinstance(item, dict)
+        ]
+        risks = [
+            AgentRisk(
+                label=str(item.get("label", "")),
+                detail=str(item.get("detail", "")),
+                severity=str(item.get("severity", "medium")),
+            )
+            for item in entry.get("risks", [])
+            if isinstance(item, dict)
+        ]
+        results.append(
+            AgentResult(
+                name=str(entry.get("name", "UnknownAgent")),
+                department=str(entry.get("department", "Decision")),
+                bias=str(entry.get("bias", "NEUTRAL")),
+                score=int(entry.get("score", 50) or 50),
+                confidence=int(entry.get("confidence", 50) or 50),
+                summary=str(entry.get("summary", "")),
+                evidence=evidence,
+                risks=risks,
+                status=str(entry.get("status", "PASSIVE")),
+                experimental=bool(entry.get("experimental", True)),
+            )
+        )
+    return results
+
+
 def classify_bias(score: int) -> str:
     if score >= 5:
         return "bullish"
@@ -2802,6 +3209,7 @@ def build_payload(
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    agent_results: list[AgentResult] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -2897,6 +3305,8 @@ def build_payload(
         payload["event_mode"] = asdict(event_mode)
     if market_regime:
         payload["market_regime"] = asdict(market_regime)
+    if agent_results:
+        payload["agent_results"] = [asdict(agent) for agent in agent_results]
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
             "symbol": "Weekend Gold",
@@ -3150,6 +3560,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         )
         for item in payload.get("technical_timeframes", [])
     ]
+    agent_results = parse_agent_results(payload.get("agent_results", []))
 
     return BriefingBundle(
         gold=gold,
@@ -3167,6 +3578,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         executive_summary=str(payload.get("executive_summary", "")),
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        agent_results=agent_results,
     )
 
 
@@ -3206,6 +3618,7 @@ def render_report(
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    agent_results: list[AgentResult] | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -3376,6 +3789,23 @@ def render_report(
         lines.append("- Facteurs dominants:")
         for reason in analysis.reasons:
             lines.append(f"  - {reason}")
+
+    if agent_results:
+        lines.extend(
+            [
+                "",
+                "## Fondation multi-agents passive",
+                "- Statut: experimental, lecture informative uniquement.",
+                "- Verdict officiel conserve par le scoring global prioritaire.",
+            ]
+        )
+        for agent in agent_results:
+            lines.append(f"- {agent.department} / {agent.name}: {agent.bias} {agent.score}/100, confiance {agent.confidence}/100 - {agent.summary}")
+        contradictions = build_agent_contradictions(agent_results)
+        if contradictions:
+            lines.append("- Contradictions:")
+            for contradiction in contradictions:
+                lines.append(f"  - {contradiction}")
 
     lines.extend(["", "## Headlines expliquees"])
     headlines = render_news_lines(news, max_items=8)
@@ -3854,6 +4284,65 @@ def render_market_regime_panel(regime: MarketRegimeAnalysis | None, cross_asset:
     <div class="section-kicker" style="margin-top:10px;">Pourquoi ce regime</div>
     <ul class="reason-list">{reasons}</ul>
     """.strip()
+
+
+def agent_css_class(bias: str) -> str:
+    upper = bias.upper()
+    if upper == "BUY":
+        return "bullish"
+    if upper == "SELL":
+        return "bearish"
+    if upper == "CAUTION":
+        return "caution"
+    return "neutral"
+
+
+def render_agent_card(agent: AgentResult) -> str:
+    badge_class = agent_css_class(agent.bias)
+    evidence_items = "".join(
+        f"<li><strong>{html.escape(item.label)}</strong>: {html.escape(item.value)}"
+        + (f" <small>{html.escape(item.source)}</small>" if item.source else "")
+        + "</li>"
+        for item in agent.evidence[:3]
+    )
+    risk_items = "".join(
+        f"<li><strong>{html.escape(risk.label)}</strong>: {html.escape(risk.detail)}</li>"
+        for risk in agent.risks[:2]
+    )
+    risk_block = f'<ul class="agent-risk-list">{risk_items}</ul>' if risk_items else '<div class="agent-muted">Aucun risque specifique signale.</div>'
+    return f"""
+    <article class="agent-card {badge_class}">
+      <div class="agent-card-top">
+        <div>
+          <div class="section-kicker">{html.escape(agent.department)}</div>
+          <h3>{html.escape(agent.name)}</h3>
+        </div>
+        <div class="agent-score">{agent.score}<small>/100</small></div>
+      </div>
+      <div class="agent-badge {badge_class}">{html.escape(agent.bias)} · {html.escape(agent.status)}</div>
+      <p>{html.escape(agent.summary)}</p>
+      <div class="agent-confidence">Confiance {agent.confidence}/100</div>
+      <ul class="agent-evidence-list">{evidence_items}</ul>
+      {risk_block}
+    </article>
+    """.strip()
+
+
+def render_agent_department_panel(agent_results: list[AgentResult], department: str, limit: int | None = None) -> str:
+    agents = [agent for agent in agent_results if agent.department == department]
+    if limit is not None:
+        agents = agents[:limit]
+    if not agents:
+        return '<div class="empty-state">Agents passifs indisponibles pour ce departement.</div>'
+    return '<div class="agent-grid">' + "".join(render_agent_card(agent) for agent in agents) + "</div>"
+
+
+def render_agent_contradictions(agent_results: list[AgentResult]) -> str:
+    contradictions = build_agent_contradictions(agent_results)
+    if not contradictions:
+        contradictions = ["Aucune contradiction majeure entre agents passifs."]
+    items = "".join(f"<li>{html.escape(item)}</li>" for item in contradictions[:5])
+    return f'<ul class="agent-risk-list">{items}</ul>'
 
 
 def render_headlines_grid(news: list[NewsItem]) -> str:
@@ -4947,6 +5436,23 @@ def render_dashboard_clarity(
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
     )
+    agent_results = bundle.agent_results or build_passive_agent_results(
+        gold,
+        dxy,
+        us10y,
+        bundle.news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental,
+        technical_recommendation=technical,
+        global_recommendation=global_recommendation,
+        technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
+    )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
     price_class = "bullish" if gold.change_pct > 0 else "bearish" if gold.change_pct < 0 else "neutral"
@@ -5581,6 +6087,96 @@ def render_dashboard_clarity(
       font-size: 13px;
       line-height: 1.6;
     }}
+    .agent-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .agent-card {{
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-alt);
+      min-width: 0;
+    }}
+    .agent-card.bullish {{ border-top-color: var(--bull); }}
+    .agent-card.bearish {{ border-top-color: var(--bear); }}
+    .agent-card.caution {{ border-top-color: var(--amber); }}
+    .agent-card.neutral {{ border-top-color: var(--blue); }}
+    .agent-card-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }}
+    .agent-card h3 {{
+      font-size: 15px;
+      line-height: 1.3;
+      color: var(--text);
+      margin: 0;
+    }}
+    .agent-score {{
+      flex: 0 0 auto;
+      color: var(--gold);
+      font-family: "Space Grotesk", monospace;
+      font-size: 20px;
+      font-weight: 800;
+    }}
+    .agent-score small {{
+      color: var(--soft);
+      font-size: 11px;
+      margin-left: 2px;
+    }}
+    .agent-badge {{
+      display: inline-flex;
+      margin-bottom: 8px;
+      padding: 4px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .agent-badge.bullish {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.35); }}
+    .agent-badge.bearish {{ color: var(--bear); border-color: rgba(255, 180, 171, 0.35); }}
+    .agent-badge.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.35); }}
+    .agent-badge.neutral {{ color: var(--blue); border-color: rgba(138, 180, 255, 0.35); }}
+    .agent-card p,
+    .agent-muted {{
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 0;
+    }}
+    .agent-confidence {{
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .agent-evidence-list,
+    .agent-risk-list {{
+      margin: 8px 0 0;
+      padding-left: 17px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .agent-evidence-list strong,
+    .agent-risk-list strong {{
+      color: var(--text);
+    }}
+    .agent-evidence-list small {{
+      display: block;
+      color: var(--amber);
+      font-size: 10px;
+      margin-top: 2px;
+    }}
     .confidence-bar {{
       height: 10px;
       margin-top: 10px;
@@ -6008,6 +6604,23 @@ def render_dashboard_clarity_v2(
         geopolitical=geopolitical_analysis,
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
+    )
+    agent_results = bundle.agent_results or build_passive_agent_results(
+        gold,
+        dxy,
+        us10y,
+        bundle.news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental,
+        technical_recommendation=technical,
+        global_recommendation=global_recommendation,
+        technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
     )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
@@ -6884,6 +7497,96 @@ def render_dashboard_clarity_v2(
       font-size: 13px;
       line-height: 1.6;
     }}
+    .agent-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .agent-card {{
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-alt);
+      min-width: 0;
+    }}
+    .agent-card.bullish {{ border-top-color: var(--bull); }}
+    .agent-card.bearish {{ border-top-color: var(--bear); }}
+    .agent-card.caution {{ border-top-color: var(--amber); }}
+    .agent-card.neutral {{ border-top-color: var(--blue); }}
+    .agent-card-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }}
+    .agent-card h3 {{
+      font-size: 15px;
+      line-height: 1.3;
+      color: var(--text);
+      margin: 0;
+    }}
+    .agent-score {{
+      flex: 0 0 auto;
+      color: var(--gold);
+      font-family: "Space Grotesk", monospace;
+      font-size: 20px;
+      font-weight: 800;
+    }}
+    .agent-score small {{
+      color: var(--soft);
+      font-size: 11px;
+      margin-left: 2px;
+    }}
+    .agent-badge {{
+      display: inline-flex;
+      margin-bottom: 8px;
+      padding: 4px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .agent-badge.bullish {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.35); }}
+    .agent-badge.bearish {{ color: var(--bear); border-color: rgba(255, 180, 171, 0.35); }}
+    .agent-badge.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.35); }}
+    .agent-badge.neutral {{ color: var(--blue); border-color: rgba(138, 180, 255, 0.35); }}
+    .agent-card p,
+    .agent-muted {{
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 0;
+    }}
+    .agent-confidence {{
+      margin-top: 8px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .agent-evidence-list,
+    .agent-risk-list {{
+      margin: 8px 0 0;
+      padding-left: 17px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .agent-evidence-list strong,
+    .agent-risk-list strong {{
+      color: var(--text);
+    }}
+    .agent-evidence-list small {{
+      display: block;
+      color: var(--amber);
+      font-size: 10px;
+      margin-top: 2px;
+    }}
     .confidence-bar {{
       height: 10px;
       margin-top: 10px;
@@ -7256,6 +7959,12 @@ def render_dashboard_clarity_v2(
               <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
               {render_market_regime_panel(market_regime, cross_asset_analysis)}
             </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Agents passifs experimentaux</div>
+              <h2>Market agents</h2>
+              {render_agent_department_panel(agent_results, "Market")}
+            </article>
           </section>
         </section>
 
@@ -7301,6 +8010,15 @@ def render_dashboard_clarity_v2(
               <h2>WTI/Brent + Hormuz/Oil Shock</h2>
               {render_market_regime_panel(market_regime, cross_asset_analysis)}
             </article>
+            <article class="panel span-12">
+              <div class="section-kicker">Agents passifs experimentaux</div>
+              <h2>Decision agents & contradictions</h2>
+              {render_agent_department_panel(agent_results, "Decision")}
+              <div class="module-block">
+                <div class="section-kicker">Contradictions entre agents</div>
+                {render_agent_contradictions(agent_results)}
+              </div>
+            </article>
           </section>
         </section>
 
@@ -7330,6 +8048,11 @@ def render_dashboard_clarity_v2(
                 </div>
               </div>
             </article>
+            <article class="panel span-12">
+              <div class="section-kicker">Agents passifs experimentaux</div>
+              <h2>Technical agents</h2>
+              {render_agent_department_panel(agent_results, "Technical")}
+            </article>
           </section>
         </section>
 
@@ -7357,6 +8080,11 @@ def render_dashboard_clarity_v2(
               </div>
             </article>
             {render_trade_card(fundamental)}
+            <article class="panel span-12">
+              <div class="section-kicker">Agents passifs experimentaux</div>
+              <h2>Macro agents</h2>
+              {render_agent_department_panel(agent_results, "Macro")}
+            </article>
           </section>
         </section>
 
@@ -7397,6 +8125,12 @@ def render_dashboard_clarity_v2(
                 {render_headline_reason_cards(bundle.news, limit=6)}
               </div>
             </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Agents passifs experimentaux</div>
+              <h2>Geopolitics & Flows agents</h2>
+              {render_agent_department_panel(agent_results, "Geopolitics & Flows")}
+            </article>
           </section>
         </section>
 
@@ -7421,6 +8155,16 @@ def render_dashboard_clarity_v2(
                   <span>{html.escape(generated_at)}</span>
                 </div>
               </div>
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Fondation multi-agents passive</div>
+              <h2>Inventaire agents Phase 5</h2>
+              {render_agent_department_panel(agent_results, "Market")}
+              {render_agent_department_panel(agent_results, "Decision")}
+              {render_agent_department_panel(agent_results, "Technical")}
+              {render_agent_department_panel(agent_results, "Macro")}
+              {render_agent_department_panel(agent_results, "Geopolitics & Flows")}
             </article>
 
             <article class="panel span-12">
@@ -7603,6 +8347,23 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_recommendation,
         geopolitical_analysis,
     )
+    agent_results = build_passive_agent_results(
+        gold,
+        dxy,
+        us10y,
+        live_bundle.news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
+        technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -7619,6 +8380,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -7640,6 +8402,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
     live_bundle.market_regime = market_regime
+    live_bundle.agent_results = agent_results
     return live_bundle
 
 
@@ -7700,6 +8463,23 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_recommendation,
         geopolitical_analysis,
     )
+    agent_results = build_passive_agent_results(
+        gold,
+        dxy,
+        us10y,
+        news,
+        analysis,
+        geopolitical_analysis=geopolitical_analysis,
+        fundamental_recommendation=fundamental_recommendation,
+        technical_recommendation=technical_recommendation,
+        global_recommendation=global_recommendation,
+        technical_timeframes=technical_readings,
+        real_yield=real_yield,
+        cross_asset_analysis=cross_asset_analysis,
+        event_mode=event_mode,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -7716,6 +8496,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -7742,6 +8523,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        agent_results=agent_results,
     )
 
 
@@ -7774,6 +8556,7 @@ def render_artifacts(
         bundle.event_mode,
         bundle.weekend_gold,
         bundle.market_regime,
+        bundle.agent_results,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (
@@ -7847,6 +8630,7 @@ class DashboardLiveCache:
                 bundle.event_mode,
                 bundle.weekend_gold,
                 bundle.market_regime,
+                bundle.agent_results,
             )
             write_text_file(self.save_path, report)
 

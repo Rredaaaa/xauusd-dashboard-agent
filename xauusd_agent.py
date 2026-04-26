@@ -7099,11 +7099,13 @@ def render_dashboard_clarity_v2(
           <div class="rail-status">Live analysis</div>
         </div>
         <nav class="rail-nav" aria-label="Sections dashboard">
-          <a class="rail-link active" href="#market">Market</a>
-          <a class="rail-link" href="#scores">Scores</a>
-          <a class="rail-link" href="#technical">Technical</a>
-          <a class="rail-link" href="#fundamental">Fundamental</a>
-          <a class="rail-link" href="#sentiment">Sentiment</a>
+          <a class="rail-link active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
+          <a class="rail-link" href="#market" data-tab-target="market" aria-selected="false">Market</a>
+          <a class="rail-link" href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
+          <a class="rail-link" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
+          <a class="rail-link" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
+          <a class="rail-link" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="rail-link" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
         </nav>
       </aside>
       <div class="workspace">
@@ -7218,6 +7220,16 @@ def render_dashboard_clarity_v2(
 
         <section class="tab-view" id="market" data-tab-view="market">
           <section class="content-grid anchor-target">
+            <article class="panel span-12">
+              <div class="section-kicker">Source prix & proxy week-end</div>
+              <h2>Spot classique et IG Weekend Gold</h2>
+              <div class="ticker-meta">
+                Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
+                Prix spot actuel: {format_number(gold.price)} · Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+              </div>
+              {render_weekend_gold_proxy(weekend_gold, gold)}
+            </article>
+
             <article class="panel span-7">
               <div class="section-kicker">Prix & niveaux</div>
               <h2>Chandelles 5m + ligne de prix live</h2>

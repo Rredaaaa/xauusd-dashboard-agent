@@ -1,8 +1,8 @@
 # Aureum Flux Terminal 2.0 - Plan de conception et d'implementation
 
-Version du document: 1.0  
-Date: 2026-04-25  
-Statut: cadrage avant implementation  
+Version du document: 1.2
+Date: 2026-04-26
+Statut: roadmap de reprise avant implementation
 Objectif: servir de base officielle pour toutes les evolutions v2.0 du dashboard XAU/USD.
 
 ## 1. Vision generale
@@ -72,6 +72,20 @@ Ce nom est une marque produit pour le dashboard. Ce n'est pas une source de donn
 
 La v2.0 doit fonctionner avec de vrais onglets. Un clic sur un bouton doit afficher une vue dediee, pas simplement descendre dans une longue page.
 
+La structure officielle cible est:
+- Dashboard;
+- Market;
+- Decision;
+- Technical;
+- Macro;
+- Geopolitics & Flows;
+- Reports.
+
+Les anciens libelles `Scores`, `Fundamental` et `Sentiment` sont remplaces dans la cible v2.0:
+- `Scores` devient `Decision`;
+- `Fundamental` devient `Macro`;
+- `Sentiment` devient `Geopolitics & Flows`.
+
 ### 4.1 Onglet Dashboard
 
 Role: decision rapide.
@@ -89,35 +103,54 @@ Contenu:
 - alertes majeures.
 
 Questions auxquelles cet onglet repond:
-- Que dit l'agent maintenant?
+- Que dit le terminal maintenant?
 - Est-ce BUY, SELL ou WAIT?
 - Ou sont le SL et les TP?
 - Pourquoi cette decision en une phrase?
 - Est-ce un marche normal ou un regime special?
 
-### 4.2 Onglet Market Analysis
+### 4.2 Onglet Market
 
-Role: expliquer le scenario global.
+Role: prix, contexte de marche et correlations directes.
 
 Contenu:
-- scenario principal;
-- scenario alternatif haussier;
-- scenario alternatif baissier;
-- scenario attente;
-- niveaux importants;
-- support/resistance;
-- contexte intraday;
-- synthese des facteurs dominants.
+- prix XAU/USD spot;
+- prix IG Weekend Gold si applicable;
+- spread, variation, range du jour;
+- correlation DXY, US10Y, USD/JPY, Silver, miners, SPX, VIX/GVZ;
+- WTI/Brent comme contexte cross-asset;
+- divergences entre gold et actifs lies.
 
 Questions auxquelles cet onglet repond:
-- Pourquoi le marche penche d'un cote?
-- Qu'est-ce qui invalide le scenario?
-- Quel niveau change la lecture?
-- Qu'est-ce qui est prioritaire maintenant?
+- Quel prix doit-on utiliser maintenant?
+- Quelle source donne ce prix?
+- Les marches correles confirment-ils gold?
+- Le petrole, le dollar ou les taux dominent-ils le mouvement?
 
-### 4.3 Onglet Technical
+### 4.3 Onglet Decision
 
-Role: timing et structure de prix.
+Role: verdict, plan de risque et contradictions.
+
+Contenu:
+- verdict global BUY, SELL ou WAIT;
+- score global;
+- confiance;
+- SL, TP1, TP2;
+- regime dominant;
+- raisons principales;
+- raisons contre-signal;
+- contradictions entre agents;
+- conditions d'invalidation.
+
+Questions auxquelles cet onglet repond:
+- Quelle est la decision officielle du terminal?
+- Quel risque est accepte?
+- Qu'est-ce qui invalide le plan?
+- Pourquoi ne pas simplement acheter ou vendre sans prudence?
+
+### 4.4 Onglet Technical
+
+Role: timing, structure de prix et Elliott Wave.
 
 Contenu:
 - graphique 5m;
@@ -130,6 +163,8 @@ Contenu:
 - MACD 5/34/5;
 - volume ratio;
 - ATR14;
+- Elliott Wave Agent;
+- Fibonacci retracement/extension;
 - verdict technique;
 - raisons techniques concretes.
 
@@ -138,10 +173,11 @@ Questions auxquelles cet onglet repond:
 - Le prix est-il au-dessus ou sous les EMA?
 - Les timeframes superieurs confirment-ils?
 - Le volume soutient-il le mouvement?
+- La structure Elliott donne-t-elle un scenario et une invalidation?
 
-### 4.4 Onglet Fundamental
+### 4.5 Onglet Macro
 
-Role: macro, taux, dollar, inflation.
+Role: dollar, taux, inflation et Fed.
 
 Contenu:
 - DXY;
@@ -149,7 +185,7 @@ Contenu:
 - US 10Y reel;
 - breakeven inflation 10Y;
 - Fed/FOMC;
-- CPI/NFP si disponible;
+- CPI/NFP/PCE si disponible;
 - calendrier economique;
 - impact des taux sur gold;
 - impact du dollar sur gold;
@@ -161,9 +197,9 @@ Questions auxquelles cet onglet repond:
 - Le marche price-t-il une Fed plus dovish ou hawkish?
 - L'inflation pousse-t-elle gold ou les rendements?
 
-### 4.5 Onglet Geopolitique & Sentiment
+### 4.6 Onglet Geopolitics & Flows
 
-Role: faits politiques, guerre, Hormuz, Trump, sentiment, flows.
+Role: faits politiques, guerre, Hormuz, Trump, sentiment, COT et ETF flows.
 
 Contenu:
 - regime politique actif;
@@ -182,9 +218,9 @@ Questions auxquelles cet onglet repond:
 - Est-ce confirme par une source fiable?
 - Est-ce un regime safe-haven classique ou oil shock?
 - Le capital va-t-il vers gold, oil ou dollar?
-- Le sentiment soutient-il vraiment le signal global?
+- Les flux institutionnels confirment-ils le signal global?
 
-### 4.6 Onglet Reports
+### 4.7 Onglet Reports
 
 Role: rapport propre et export.
 
@@ -202,6 +238,112 @@ Questions auxquelles cet onglet repond:
 - Que puis-je archiver?
 - Quelles sources ont ete utilisees?
 - Quelle etait la logique au moment du signal?
+
+## 4.8 Affectation agents vers departements
+
+L'affectation officielle des agents est:
+
+| Departement | Agents |
+| --- | --- |
+| Market | `PriceAgent`, `CorrelationAgent` |
+| Decision | `OrchestratorAgent`, `RiskManagerAgent` |
+| Technical | `TechnicalAgent`, `ElliottWaveAgent` |
+| Macro | `MacroAgent` |
+| Geopolitics & Flows | `GeopoliticalOilShockAgent`, `SentimentNewsAgent`, `EventFactsAgent`, `TrumpPoliticalStatementsAgent`, `FlowPositioningAgent` |
+
+Cette affectation est documentee pendant la Phase 2, mais les agents ne sont crees et branches qu'en Phase 5.
+
+## 4.9 Elliott Wave Agent
+
+`ElliottWaveAgent` appartient au departement `Technical`.
+
+Base methodologique:
+- Elliott Wave Forecast, "Elliott Wave Theory": https://elliottwave-forecast.com/elliott-wave-theory/
+
+Role:
+- detecter les impulsions `1-2-3-4-5`;
+- detecter les corrections `A-B-C`;
+- utiliser les pivots hauts/bas;
+- utiliser Fibonacci retracement et extension;
+- proposer un scenario principal;
+- proposer un scenario alternatif;
+- fournir une invalidation claire;
+- ne jamais decider seul.
+
+Regles minimales a respecter:
+- la vague 2 ne doit pas depasser le depart de la vague 1;
+- la vague 3 ne doit pas etre la plus courte des vagues 1, 3, 5;
+- la vague 4 ne doit normalement pas revenir dans le territoire de la vague 1;
+- la vague 5 doit etre surveillee avec divergence de momentum;
+- une correction standard doit etre lue en `A-B-C`;
+- les ratios Fibonacci doivent servir pour les retracements, extensions, targets et invalidations;
+- l'agent doit accepter qu'un marche moderne puisse progresser en sequence corrective de 3 vagues sans forcer partout un schema parfait en 5 vagues.
+
+Sortie attendue:
+
+```json
+{
+  "agent": "elliott_wave",
+  "bias": "SELL",
+  "score": 68,
+  "confidence": 62,
+  "scenario": "ABC corrective decline",
+  "invalidation": "Break above wave B high",
+  "targets": ["100% extension", "161.8% extension"],
+  "summary": "Correction C-wave possible while price remains below invalidation."
+}
+```
+
+## 4.10 Fondation multi-agents
+
+La v2.0 doit evoluer vers une architecture multi-agents progressive, mais sans casser le moteur actuel.
+
+Principe:
+- le scoring actuel reste le moteur principal tant que l'orchestrateur multi-agents n'est pas valide;
+- les agents specialises sont d'abord ajoutes en mode passif;
+- chaque agent produit un resultat structure et comparable;
+- le dashboard affiche les lectures des agents sans remplacer immediatement le verdict principal;
+- l'activation du multi-agents comme moteur principal se fait uniquement pendant la phase de refonte scoring global.
+
+Agents cibles:
+- `PriceAgent`: prix XAU/USD, IG Weekend Gold, spread, source, fraicheur;
+- `TechnicalAgent`: EMA, RSI, MACD, timeframes, supports, resistances, ATR;
+- `ElliottWaveAgent`: vagues Elliott, Fibonacci, scenario, invalidation;
+- `MacroAgent`: DXY, taux nominaux, taux reels, inflation breakeven, Fed, calendrier macro;
+- `GeopoliticalOilShockAgent`: Iran/USA, Hormuz, oil shock, sanctions, dollar liquidity;
+- `SentimentNewsAgent`: headlines, event facts, confirmation level, tonalite marche;
+- `CorrelationAgent`: oil, silver, miners, USD/JPY, SPX, VIX/GVZ, ETF/cross-assets;
+- `FlowPositioningAgent`: CFTC COT, ETF flows, open interest, positionnement;
+- `EventFactsAgent`: transformation des headlines en faits confirmes ou hypotheses;
+- `TrumpPoliticalStatementsAgent`: declarations Trump/White House et validation des citations;
+- `RiskManagerAgent`: transformation du contexte en BUY/SELL/WAIT, SL, TP1, TP2, confiance;
+- `OrchestratorAgent`: comparaison des agents, detection des contradictions, decision finale.
+
+Structure commune attendue:
+
+```json
+{
+  "agent": "geopolitical_oil",
+  "bias": "SELL",
+  "score": 72,
+  "confidence": 81,
+  "summary": "Hormuz risk active, oil pressure stronger than gold hedge demand.",
+  "evidence": [
+    "WTI rising",
+    "DXY rising",
+    "Confirmed Hormuz headline"
+  ],
+  "risks": [
+    "If oil fades and DXY weakens, gold can rebound"
+  ],
+  "updated_at": "2026-04-26T00:00:00Z"
+}
+```
+
+Regle de securite:
+- aucun agent passif ne doit modifier le verdict principal;
+- les agents peuvent seulement informer, comparer et signaler les contradictions;
+- l'orchestrateur ne devient moteur principal qu'apres validation explicite.
 
 ## 5. Sources de donnees actuelles
 
@@ -809,35 +951,48 @@ Important:
 
 ## 14. Etapes d'implementation detaillees
 
-### Phase 0 - Validation du cahier des charges
+Cette roadmap remplace l'ordre precedent. Elle reprend le projet depuis le socle valide et reclasse les fonctionnalites deja codees.
+
+Regle generale:
+- aucune phase ne demarre sans validation utilisateur;
+- avant chaque phase: verifier Git/GitHub;
+- apres chaque phase finalisee: tests adaptes, commit et push GitHub;
+- les agents passifs ne remplacent pas le moteur principal;
+- l'orchestrateur ne devient principal qu'en Phase 12 et seulement apres validation.
+
+### Phase 0 - Audit de reprise et cadrage officiel
+
+Statut: fait.
 
 Objectif:
-- lire ce document;
-- valider les onglets;
-- valider les sources;
-- valider la logique Hormuz/Oil Shock;
-- valider le vocabulaire.
+- verifier l'etat reel du projet;
+- verifier Git/GitHub;
+- verifier les tests;
+- verifier le dashboard local;
+- clarifier ce qui est deja code, ce qui est partiel et ce qui reste a faire.
 
 Livrable:
-- document approuve par l'utilisateur.
+- rapport d'audit de reprise.
 
 Critere de fin:
-- accord clair avant modification du code.
+- etat du projet compris;
+- aucune modification de code;
+- prochaine phase officielle identifiee.
 
-### Phase 1 - Stabilisation avant v2.0
+### Phase 1 - Stabilisation de la base actuelle
+
+Statut: fait.
 
 Objectif:
-- verifier l'etat actuel du projet;
-- verifier les changements non commits;
-- lancer les tests existants;
-- s'assurer que le dashboard actuel fonctionne.
+- conserver une base dashboard locale fonctionnelle;
+- garder le scoring principal visible;
+- garder prix, BUY/SELL, SL, TP et rapport accessibles.
 
 Actions:
 1. `git status`.
-2. Lire les fichiers modifies.
-3. Lancer les tests.
-4. Lancer le dashboard local.
-5. Verifier visuellement.
+2. Lancer les tests existants.
+3. Lancer le dashboard local.
+4. Verifier que le systeme actuel reste exploitable.
 
 Livrable:
 - base stable.
@@ -847,73 +1002,127 @@ Critere de fin:
 - dashboard accessible;
 - aucune regression majeure.
 
-### Phase 2 - Vrais onglets dashboard
+### Phase 2 - Vrais onglets + departements officiels
+
+Statut: prochaine phase.
 
 Objectif:
-- remplacer la longue page par des vues dediees.
+- remplacer la longue page par des vues dediees;
+- creer les departements officiels v2.0.
 
 Actions:
 1. Creer une navigation principale.
 2. Creer les vues:
    - Dashboard;
-   - Market Analysis;
+   - Market;
+   - Decision;
    - Technical;
-   - Fundamental;
-   - Geopolitique & Sentiment;
+   - Macro;
+   - Geopolitics & Flows;
    - Reports.
 3. Ajouter le JavaScript minimal pour afficher une seule vue a la fois.
 4. Garder le live refresh compatible.
-5. Tester chaque bouton.
+5. Preparer les emplacements futurs des agents par departement.
+6. Tester chaque bouton.
 
 Livrable:
-- dashboard multi-vues.
+- dashboard multi-vues avec departements officiels.
 
 Critere de fin:
 - chaque bouton affiche une vue differente;
 - pas de scroll monopage force;
-- live refresh ne casse pas les onglets.
+- live refresh ne casse pas les onglets;
+- les departements sont visibles et coherents.
 
-### Phase 3 - Ajout IG Weekend Gold
+### Phase 3 - Revue IG Weekend Gold
+
+Statut: deja code, a revalider apres Phase 2.
 
 Objectif:
-- rendre le dashboard utile le samedi/dimanche.
+- verifier que IG Weekend Gold est place au bon endroit apres creation des onglets.
 
 Actions:
-1. Creer une fonction de recuperation IG Weekend Gold.
-2. Parser sell/buy/mid si disponible.
-3. Detecter si le marche classique est ferme.
-4. Afficher `Weekend proxy`.
-5. Comparer dernier spot classique vs IG week-end.
+1. Verifier le parsing IG Weekend Gold existant.
+2. Verifier l'affichage dans Dashboard et Market.
+3. Verifier la distinction spot classique vs prix week-end.
+4. Verifier le JSON et le rapport Markdown.
+5. Ajouter ou ajuster tests si necessaire.
 
 Livrable:
-- bloc prix week-end.
+- integration IG Weekend Gold validee dans la structure multi-vues.
 
 Critere de fin:
-- le samedi/dimanche, le dashboard montre clairement le prix IG separe du spot classique.
+- le samedi/dimanche, le dashboard montre clairement le prix IG separe du spot classique;
+- le prix IG n'est pas perdu dans une section secondaire.
 
-### Phase 4 - Ajout WTI/Brent et regime Hormuz/Oil Shock
+### Phase 4 - Revue WTI/Brent et regime Hormuz/Oil Shock
+
+Statut: deja code, a revalider apres Phase 2.
 
 Objectif:
-- integrer le lien politique -> oil -> dollar/taux -> gold.
+- verifier que WTI/Brent et le regime Hormuz/Oil Shock sont places au bon endroit apres creation des onglets.
 
 Actions:
-1. Ajouter `CL=F`.
-2. Ajouter `BZ=F`.
-3. Ajouter variation jour/court terme.
-4. Detecter headlines Hormuz/Iran/shipping/mines/blockade.
-5. Construire le regime `Hormuz/Oil Shock`.
-6. Modifier le scoring geopolitique.
+1. Verifier `CL=F` et `BZ=F`.
+2. Verifier variation jour/court terme.
+3. Verifier detection headlines Hormuz/Iran/shipping/mines/blockade.
+4. Verifier affichage dans Market, Decision et Geopolitics & Flows.
+5. Verifier que la chaine oil -> dollar/taux -> gold reste claire.
+6. Ajouter ou ajuster tests si necessaire.
 
 Livrable:
-- regime oil shock actif quand conditions remplies.
+- regime oil shock valide dans la structure multi-vues.
 
 Critere de fin:
-- le dashboard peut dire: tension geopolitique positive pour oil mais negative/mixte pour gold.
+- le dashboard peut dire: tension geopolitique positive pour oil mais negative/mixte pour gold;
+- le regime n'est pas cache trop bas dans la page.
 
-### Phase 5 - Ajout FRED macro officiel
+### Phase 5 - Fondation multi-agents passive
+
+Statut: a faire apres Phase 2, Phase 3 review et Phase 4 review.
 
 Objectif:
-- fiabiliser taux/inflation.
+- preparer Aureum Flux Terminal a une lecture multi-agents sans remplacer le moteur actuel.
+
+Actions:
+1. Creer une structure commune `AgentResult`.
+2. Creer `AgentEvidence` si necessaire.
+3. Creer `AgentRisk` si necessaire.
+4. Ajouter les agents passifs:
+   - `PriceAgent`;
+   - `TechnicalAgent`;
+   - `ElliottWaveAgent`;
+   - `MacroAgent`;
+   - `GeopoliticalOilShockAgent`;
+   - `SentimentNewsAgent`;
+   - `CorrelationAgent`;
+   - `FlowPositioningAgent`;
+   - `EventFactsAgent`;
+   - `TrumpPoliticalStatementsAgent`;
+   - `RiskManagerAgent`;
+   - `OrchestratorAgent`.
+5. Brancher les agents sur les donnees deja disponibles.
+6. Afficher une lecture experimentale multi-agents dans les departements.
+7. Afficher les contradictions entre agents.
+8. Garder le verdict principal actuel comme decision officielle.
+9. Ajouter des tests pour verifier que les agents ne cassent pas le payload existant.
+
+Livrable:
+- panneau multi-agents passif;
+- chaque agent affiche bias, score, confiance, preuves et risques;
+- aucune modification du verdict principal officiel.
+
+Critere de fin:
+- dashboard actuel toujours fonctionnel;
+- tests OK;
+- ancien scoring conserve;
+- agents visibles uniquement comme lecture experimentale.
+
+### Phase 6 - Ajout FRED macro officiel
+
+Objectif:
+- fiabiliser taux/inflation;
+- alimenter progressivement `MacroAgent`.
 
 Actions:
 1. Ajouter FRED `DGS10`.
@@ -929,10 +1138,11 @@ Livrable:
 Critere de fin:
 - les taux affiches ont une source officielle.
 
-### Phase 6 - Event Facts
+### Phase 7 - Event Facts
 
 Objectif:
-- remplacer les phrases vagues par des faits concrets.
+- remplacer les phrases vagues par des faits concrets;
+- alimenter `GeopoliticalOilShockAgent` et `SentimentNewsAgent`.
 
 Actions:
 1. Creer une structure `EventFact`.
@@ -941,7 +1151,7 @@ Actions:
 4. Ajouter confirmation_level.
 5. Ajouter market_chain.
 6. Ajouter gold_impact.
-7. Afficher les faits dans `Geopolitique & Sentiment`.
+7. Afficher les faits dans `Geopolitics & Flows`.
 
 Livrable:
 - cartes "Fait detecte".
@@ -949,10 +1159,11 @@ Livrable:
 Critere de fin:
 - chaque conclusion geopolitique cite un fait et une source.
 
-### Phase 7 - Trump / White House
+### Phase 8 - Trump / Political Statements
 
 Objectif:
-- suivre les declarations politiques a fort impact.
+- suivre les declarations politiques a fort impact;
+- alimenter `TrumpPoliticalStatementsAgent` et `GeopoliticalOilShockAgent`.
 
 Actions:
 1. Ajouter White House News.
@@ -968,10 +1179,11 @@ Livrable:
 Critere de fin:
 - une declaration Trump n'est prise au serieux que si elle est confirmee ou sourcee.
 
-### Phase 8 - CFTC COT officiel
+### Phase 9 - CFTC COT officiel
 
 Objectif:
-- remplacer les headlines COT par des donnees officielles.
+- remplacer les headlines COT par des donnees officielles;
+- alimenter `FlowPositioningAgent`.
 
 Actions:
 1. Identifier le fichier CFTC adapte a gold futures.
@@ -979,7 +1191,7 @@ Actions:
 3. Extraire Managed Money, Producers, Swap Dealers, Non-reportable.
 4. Calculer variation semaine.
 5. Afficher le positionnement.
-6. Integrer dans scoring sentiment.
+6. Integrer dans scoring sentiment/flows.
 
 Livrable:
 - bloc COT officiel.
@@ -987,10 +1199,11 @@ Livrable:
 Critere de fin:
 - le dashboard n'utilise plus seulement des headlines pour COT.
 
-### Phase 9 - ETF flows officiels
+### Phase 10 - ETF flows officiels
 
 Objectif:
-- mesurer les flux institutionnels gold.
+- mesurer les flux institutionnels gold;
+- alimenter `FlowPositioningAgent` et `CorrelationAgent`.
 
 Actions:
 1. Ajouter WGC ETF flows si accessible.
@@ -998,7 +1211,7 @@ Actions:
 3. Ajouter IAU holdings.
 4. Calculer flux jour/semaine.
 5. Classer inflows/outflows/mixed.
-6. Integrer dans sentiment.
+6. Integrer dans Geopolitics & Flows.
 
 Livrable:
 - bloc ETF flows officiel.
@@ -1006,10 +1219,11 @@ Livrable:
 Critere de fin:
 - les flux ETF ont une source explicite.
 
-### Phase 10 - Calendrier economique et Fed
+### Phase 11 - Calendrier economique et Fed
 
 Objectif:
-- anticiper les catalyseurs macro.
+- anticiper les catalyseurs macro;
+- alimenter `MacroAgent` et `RiskManagerAgent`.
 
 Actions:
 1. Ajouter calendrier economique high impact.
@@ -1024,31 +1238,40 @@ Livrable:
 Critere de fin:
 - le dashboard sait dire quel evenement macro arrive et pourquoi il compte.
 
-### Phase 11 - Refonte scoring global
+### Phase 12 - Refonte scoring global / orchestrateur
 
 Objectif:
-- consolider tout dans une decision plus robuste.
+- consolider tout dans une decision plus robuste;
+- decider si l'orchestrateur multi-agents devient le moteur principal.
 
 Actions:
-1. Implementer scores separes:
+1. Comparer le scoring actuel avec les resultats des agents passifs.
+2. Verifier les contradictions frequentes.
+3. Valider ou ajuster les ponderations agents.
+4. Implementer scores separes:
    - technique;
+   - Elliott;
    - macro;
-   - geopolitique;
+   - geopolitique/oil;
    - cross-assets;
+   - flows;
    - regime;
    - data quality.
-2. Ajouter pondération.
-3. Ajouter WAIT si contradictions fortes.
-4. Ajouter raisons top 3.
-5. Ajouter raisons contre-signal top 3.
+5. Ajouter ponderation.
+6. Ajouter WAIT si contradictions fortes.
+7. Ajouter raisons top 3.
+8. Ajouter raisons contre-signal top 3.
+9. Activer l'orchestrateur comme moteur principal uniquement apres validation utilisateur.
 
 Livrable:
-- score global v2.0.
+- score global v2.0;
+- orchestrateur multi-agents actif seulement si valide.
 
 Critere de fin:
-- le verdict explique ses preuves et ses contradictions.
+- le verdict explique ses preuves et ses contradictions;
+- l'ancien moteur peut encore servir de comparaison ou fallback.
 
-### Phase 12 - Design Aureum Flux Terminal 2.0
+### Phase 13 - Design Aureum Flux Terminal 2.0
 
 Objectif:
 - appliquer le design terminal institutionnel multi-vues.
@@ -1070,7 +1293,7 @@ Critere de fin:
 - pas de texte qui deborde;
 - onglets fonctionnels.
 
-### Phase 13 - Tests et verification
+### Phase 14 - Tests, validation et monitoring
 
 Objectif:
 - eviter de casser le dashboard.
@@ -1092,7 +1315,7 @@ Critere de fin:
 - chaque onglet fonctionne;
 - pas d'erreur console critique.
 
-### Phase 14 - Documentation utilisateur
+### Phase 15 - Documentation utilisateur
 
 Objectif:
 - rendre le projet exploitable facilement.
@@ -1115,21 +1338,27 @@ Critere de fin:
 
 Ordre prioritaire:
 
-1. Valider ce document.
-2. Stabiliser dashboard actuel.
-3. Creer vrais onglets.
-4. Ajouter IG Weekend Gold.
-5. Ajouter WTI/Brent.
-6. Ajouter regime Hormuz/Oil Shock.
-7. Ajouter Event Facts.
-8. Ajouter FRED DGS10/DGS2/T10YIE.
-9. Ajouter Trump/White House.
-10. Ajouter CFTC COT.
-11. Ajouter WGC/GLD/IAU ETF flows.
-12. Refaire scoring global v2.0.
-13. Finaliser design.
-14. Tester.
-15. Documenter.
+1. Finaliser Phase 0 - Audit de reprise.
+2. Conserver Phase 1 - Base stable.
+3. Lancer Phase 2 - Vrais onglets + departements officiels.
+4. Revalider Phase 3 - IG Weekend Gold dans la structure multi-vues.
+5. Revalider Phase 4 - WTI/Brent + Hormuz/Oil Shock dans la structure multi-vues.
+6. Lancer Phase 5 - Fondation multi-agents passive.
+7. Ajouter Phase 6 - FRED macro officiel.
+8. Ajouter Phase 7 - Event Facts.
+9. Ajouter Phase 8 - Trump / Political Statements.
+10. Ajouter Phase 9 - CFTC COT officiel.
+11. Ajouter Phase 10 - ETF flows officiels.
+12. Ajouter Phase 11 - Calendrier economique et Fed.
+13. Lancer Phase 12 - Refonte scoring global / orchestrateur.
+14. Finaliser Phase 13 - Design Aureum Flux Terminal 2.0.
+15. Faire Phase 14 - Tests, validation et monitoring.
+16. Faire Phase 15 - Documentation utilisateur.
+
+Point de reprise officiel:
+- Phase 0: faite;
+- Phase 1: faite;
+- prochaine phase a lancer uniquement apres validation utilisateur: Phase 2.
 
 ## 16. Regles de prudence
 
@@ -1156,16 +1385,18 @@ La v2.0 est terminee quand:
 
 - le dashboard est multi-vues;
 - Dashboard affiche decision rapide + prix + SL/TP;
-- Market Analysis explique le scenario;
-- Technical affiche timing et indicateurs;
-- Fundamental affiche macro officielle;
-- Geopolitique & Sentiment affiche faits concrets, Trump, Hormuz, oil, COT, ETF;
+- Market affiche prix, sources et correlations;
+- Decision affiche verdict, SL/TP, contradictions et regime dominant;
+- Technical affiche timing, indicateurs et Elliott Wave;
+- Macro affiche macro officielle;
+- Geopolitics & Flows affiche faits concrets, Trump, Hormuz, oil, COT, ETF;
 - Reports exporte un resume propre;
 - IG Weekend Gold est integre comme proxy week-end;
 - WTI/Brent sont integres;
 - FRED officiel est integre;
 - Event Facts remplace les phrases vagues;
 - Hormuz/Oil Shock change reellement le scoring;
+- les agents passifs sont visibles avant activation de l'orchestrateur;
 - les tests passent;
 - les sources sont documentees.
 
@@ -1188,11 +1419,11 @@ Recommandation Codex:
 
 Commencer par les fondations les plus utiles:
 
-1. vrais onglets;
-2. IG Weekend Gold;
-3. WTI/Brent;
-4. regime Hormuz/Oil Shock;
-5. Event Facts.
+1. Phase 2 - vrais onglets + departements officiels;
+2. Phase 3 - revue IG Weekend Gold;
+3. Phase 4 - revue WTI/Brent + regime Hormuz/Oil Shock;
+4. Phase 5 - fondation multi-agents passive;
+5. Phase 6 et suivantes - nouvelles sources officielles.
 
 Ces cinq elements corrigent les plus gros problemes actuels:
 - dashboard encore trop monopage;

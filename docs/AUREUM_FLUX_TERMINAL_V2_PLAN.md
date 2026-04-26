@@ -1,9 +1,21 @@
 # Aureum Flux Terminal 2.0 - Plan de conception et d'implementation
 
-Version du document: 1.2
+Version du document: 1.3
 Date: 2026-04-26
-Statut: roadmap de reprise avant implementation
+Statut: roadmap stable approuvee avant Phase 2
 Objectif: servir de base officielle pour toutes les evolutions v2.0 du dashboard XAU/USD.
+
+## 0. Stabilite du plan
+
+A partir de cette version, ce document devient la reference stable du projet jusqu'a la livraison finale d'Aureum Flux Terminal 2.0.
+
+Regles:
+- les phases doivent etre executees dans l'ordre documente;
+- aucune phase ne demarre sans validation explicite de l'utilisateur;
+- avant chaque phase: verifier Git/GitHub;
+- apres chaque phase finalisee: tests adaptes, commit et push GitHub;
+- le plan ne doit plus etre modifie jusqu'a la livraison finale, sauf demande et validation explicites de l'utilisateur;
+- les avis externes Claude/Antigravity sont integres dans cette version, mais la source officielle reste ce document.
 
 ## 1. Vision generale
 
@@ -344,6 +356,55 @@ Regle de securite:
 - aucun agent passif ne doit modifier le verdict principal;
 - les agents peuvent seulement informer, comparer et signaler les contradictions;
 - l'orchestrateur ne devient moteur principal qu'apres validation explicite.
+
+## 4.11 Decision d'architecture Phase 2
+
+La Phase 2 n'est pas une refonte design complete et n'est pas un refactor backend massif.
+
+Definition:
+- Phase 2 = vrais onglets + departements officiels + refresh live stable + bandeau global;
+- Phase 2 ne change pas le moteur de scoring;
+- Phase 2 ne cree pas encore les agents;
+- Phase 2 prepare les emplacements futurs des agents sans les activer;
+- Phase 2 conserve les logiques IG Weekend Gold et Hormuz/Oil Shock existantes.
+
+Decision sur le monolithe:
+- ne pas lancer de decoupage massif `app.py` / `engine/` / `ui/` / `models/` en Phase 2;
+- ne pas ajouter de logique data/scoring dans le rendu;
+- garder le changement concentre sur navigation, structure de vues et stabilite du refresh;
+- preparer le refactor progressif plus tard, quand les contrats agents seront valides.
+
+Decision sur le live refresh:
+- le dashboard utilise `/fragment` pour remplacer le contenu de `#dashboard-app`;
+- le JavaScript de navigation des onglets ne doit pas vivre dans le fragment remplace;
+- le JavaScript de navigation doit vivre dans le `live_script` ou dans une zone non remplacee;
+- l'onglet actif doit etre stocke dans `localStorage`;
+- apres chaque refresh, l'onglet actif doit etre reapplique.
+
+Ordre obligatoire apres refresh:
+1. remplacer `app.innerHTML` par le fragment;
+2. lire l'onglet actif depuis `localStorage`;
+3. reappliquer les classes actives;
+4. reafficher la vue active.
+
+Decision sur le bandeau global:
+- un bandeau global doit rester visible dans tous les onglets;
+- il doit etre dans le fragment pour recevoir les donnees live;
+- il doit afficher prix, verdict, score, resume SL/TP, regime actif et alerte critique;
+- il peut exposer `data-verdict`, `data-regime` et `data-alert`;
+- le JavaScript peut lire ces attributs pour appliquer l'etat visuel;
+- le bandeau ne doit pas masquer les donnees importantes dans un onglet secondaire.
+
+Hors scope Phase 2:
+- refactor backend massif;
+- creation de `app.py` / `engine/` / `ui/` / `models/`;
+- activation des agents;
+- redesign final Stitch;
+- suppression de fonctions mortes;
+- changement du scoring global;
+- ajout de nouvelles sources de donnees;
+- modification de la logique interne de `render_weekend_gold_proxy()`;
+- modification de la logique interne de `render_market_regime_panel()`.
 
 ## 5. Sources de donnees actuelles
 
@@ -1008,11 +1069,20 @@ Statut: prochaine phase.
 
 Objectif:
 - remplacer la longue page par des vues dediees;
-- creer les departements officiels v2.0.
+- creer les departements officiels v2.0;
+- securiser le live refresh pour conserver l'onglet actif;
+- creer un bandeau global visible dans tous les onglets.
 
 Actions:
-1. Creer une navigation principale.
-2. Creer les vues:
+1. Verifier Git/GitHub.
+2. Identifier les sections existantes:
+   - `#market`;
+   - `#scores`;
+   - `#technical`;
+   - `#fundamental`;
+   - `#sentiment`.
+3. Creer une navigation principale.
+4. Creer les vues:
    - Dashboard;
    - Market;
    - Decision;
@@ -1020,19 +1090,53 @@ Actions:
    - Macro;
    - Geopolitics & Flows;
    - Reports.
-3. Ajouter le JavaScript minimal pour afficher une seule vue a la fois.
-4. Garder le live refresh compatible.
-5. Preparer les emplacements futurs des agents par departement.
-6. Tester chaque bouton.
+5. Transformer les liens de scroll en vrais boutons/vues.
+6. Mettre le JavaScript des onglets dans le `live_script` ou une zone non remplacee par `/fragment`.
+7. Stocker l'onglet actif dans `localStorage`.
+8. Apres chaque refresh `/fragment`, reappliquer l'onglet actif.
+9. Creer un bandeau global live visible partout:
+   - prix;
+   - verdict;
+   - score;
+   - resume SL/TP;
+   - regime actif;
+   - alerte IG Weekend Gold ou Hormuz/Oil Shock si applicable.
+10. Splitter l'ancien `#market`:
+   - Dashboard: prix, IG, verdict, score, SL/TP, regime actif;
+   - Market: correlations, cross-assets, WTI/Brent.
+11. Renommer et replacer:
+   - `#scores` -> Decision;
+   - `#fundamental` -> Macro;
+   - `#sentiment` -> Geopolitics & Flows.
+12. Ajouter Reports.
+13. Preparer les emplacements futurs des agents par departement.
+14. Ne pas modifier la logique interne IG Weekend Gold.
+15. Ne pas modifier la logique interne Hormuz/Oil Shock.
+16. Ne pas supprimer `render_dashboard_clarity` pendant Phase 2.
+17. Ne pas activer les agents.
+18. Tester chaque bouton.
+19. Tester le live refresh avec un onglet autre que Dashboard actif.
+20. Commit et push GitHub apres validation.
 
 Livrable:
-- dashboard multi-vues avec departements officiels.
+- dashboard multi-vues avec departements officiels;
+- refresh live stable;
+- bandeau global live.
 
 Critere de fin:
 - chaque bouton affiche une vue differente;
 - pas de scroll monopage force;
 - live refresh ne casse pas les onglets;
-- les departements sont visibles et coherents.
+- l'onglet actif reste actif apres refresh `/fragment`;
+- Dashboard affiche prix, verdict, SL/TP et regime;
+- Market affiche correlations, cross-assets et WTI/Brent;
+- IG Weekend Gold reste visible si disponible;
+- Hormuz/Oil Shock reste visible si actif;
+- Reports existe;
+- les departements sont visibles et coherents;
+- tests unitaires OK;
+- verification navigateur OK;
+- GitHub synchronise.
 
 ### Phase 3 - Revue IG Weekend Gold
 
@@ -1424,6 +1528,12 @@ Commencer par les fondations les plus utiles:
 3. Phase 4 - revue WTI/Brent + regime Hormuz/Oil Shock;
 4. Phase 5 - fondation multi-agents passive;
 5. Phase 6 et suivantes - nouvelles sources officielles.
+
+Decision Phase 2:
+- GO pour Phase 2;
+- condition obligatoire: traiter d'abord la persistance de l'onglet actif pendant le refresh live;
+- Phase 2 doit rester un changement UI controle, pas un redesign final ni un refactor backend massif;
+- le bandeau global et le maintien de l'onglet actif sont des criteres bloquants.
 
 Ces cinq elements corrigent les plus gros problemes actuels:
 - dashboard encore trop monopage;

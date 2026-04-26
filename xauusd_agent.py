@@ -7295,6 +7295,13 @@ def render_dashboard_clarity_v2(
               </div>
             </article>
           </section>
+          <section class="content-grid anchor-target">
+            <article class="panel span-12">
+              <div class="section-kicker">Regime decisionnel</div>
+              <h2>WTI/Brent + Hormuz/Oil Shock</h2>
+              {render_market_regime_panel(market_regime, cross_asset_analysis)}
+            </article>
+          </section>
         </section>
 
         <section class="tab-view" id="technical" data-tab-view="technical">

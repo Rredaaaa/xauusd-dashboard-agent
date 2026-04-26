@@ -4981,29 +4981,85 @@ def render_dashboard_clarity(
         if technical_readings
         else '<div class="footer-note">Lecture technique indisponible.</div>'
     )
+    regime_name = market_regime.name if market_regime is not None else "Normal Macro"
+    regime_status = market_regime.status if market_regime is not None else "NORMAL"
+    regime_alert = (
+        "hormuz-oil-shock"
+        if market_regime is not None and market_regime.name == "Hormuz / Oil Shock"
+        else "ig-weekend"
+        if weekend_gold is not None
+        else "none"
+    )
+    regime_summary = market_regime.summary if market_regime is not None else "Pas de regime special confirme."
+    banner_class = recommendation_css_class(global_recommendation.verdict)
 
     meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
-    live_script = ""
-    if live_client:
-        live_script = f"""
+    refresh_enabled = "true" if live_client else "false"
+    live_script = f"""
   <script>
     (() => {{
       const app = document.getElementById("dashboard-app");
-      if (!app) return;
+      const storageKey = "aureumFlux.activeTab";
+      const defaultTab = "dashboard";
+      const refreshEnabled = {refresh_enabled};
       let busy = false;
+
+      function getRequestedTab() {{
+        const hashTab = window.location.hash ? window.location.hash.replace("#", "") : "";
+        const storedTab = window.localStorage.getItem(storageKey) || "";
+        return hashTab || storedTab || defaultTab;
+      }}
+
+      function setActiveTab(tab, persist = true) {{
+        const requestedTab = tab || defaultTab;
+        const view = document.querySelector(`[data-tab-view="${{requestedTab}}"]`);
+        const activeTab = view ? requestedTab : defaultTab;
+        document.querySelectorAll("[data-tab-view]").forEach((element) => {{
+          element.classList.toggle("active", element.dataset.tabView === activeTab);
+        }});
+        document.querySelectorAll("[data-tab-target]").forEach((element) => {{
+          const isActive = element.dataset.tabTarget === activeTab;
+          element.classList.toggle("active", isActive);
+          element.setAttribute("aria-selected", isActive ? "true" : "false");
+        }});
+        if (persist) {{
+          window.localStorage.setItem(storageKey, activeTab);
+        }}
+      }}
+
+      function applyStoredTab() {{
+        setActiveTab(getRequestedTab(), true);
+      }}
+
+      document.addEventListener("click", (event) => {{
+        const trigger = event.target.closest("[data-tab-target]");
+        if (!trigger) return;
+        event.preventDefault();
+        setActiveTab(trigger.dataset.tabTarget, true);
+      }});
+
+      window.addEventListener("hashchange", () => {{
+        setActiveTab(getRequestedTab(), true);
+      }});
+
       async function refreshLive() {{
+        if (!app || !refreshEnabled) return;
         if (busy) return;
         busy = true;
         try {{
           const response = await fetch("{fragment_endpoint}?_ts=" + Date.now(), {{ cache: "no-store" }});
           if (!response.ok) return;
           app.innerHTML = await response.text();
+          applyStoredTab();
         }} catch (_error) {{
         }} finally {{
           busy = false;
         }}
       }}
-      window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+      applyStoredTab();
+      if (refreshEnabled) {{
+        window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+      }}
     }})();
   </script>
 """.rstrip()
@@ -5671,6 +5727,7 @@ def render_dashboard_clarity(
       .digest-grid,
       .headline-grid,
       .metrics-grid,
+      .global-live-strip,
       .scenario-grid,
       .geo-grid,
       .geo-columns {{
@@ -5711,11 +5768,13 @@ def render_dashboard_clarity(
           <div class="rail-status">Live analysis</div>
         </div>
         <nav class="rail-nav" aria-label="Sections dashboard">
-          <a class="rail-link active" href="#market">Market</a>
-          <a class="rail-link" href="#scores">Scores</a>
-          <a class="rail-link" href="#technical">Technical</a>
-          <a class="rail-link" href="#fundamental">Fundamental</a>
-          <a class="rail-link" href="#sentiment">Sentiment</a>
+          <a class="rail-link active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
+          <a class="rail-link" href="#market" data-tab-target="market" aria-selected="false">Market</a>
+          <a class="rail-link" href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
+          <a class="rail-link" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
+          <a class="rail-link" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
+          <a class="rail-link" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="rail-link" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
         </nav>
       </aside>
       <div class="workspace">
@@ -5984,29 +6043,85 @@ def render_dashboard_clarity_v2(
         if technical_readings
         else '<div class="footer-note">Lecture technique indisponible.</div>'
     )
+    regime_name = market_regime.name if market_regime is not None else "Normal Macro"
+    regime_status = market_regime.status if market_regime is not None else "NORMAL"
+    regime_alert = (
+        "hormuz-oil-shock"
+        if market_regime is not None and market_regime.name == "Hormuz / Oil Shock"
+        else "ig-weekend"
+        if weekend_gold is not None
+        else "none"
+    )
+    regime_summary = market_regime.summary if market_regime is not None else "Pas de regime special confirme."
+    banner_class = recommendation_css_class(global_recommendation.verdict)
 
     meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
-    live_script = ""
-    if live_client:
-        live_script = f"""
+    refresh_enabled = "true" if live_client else "false"
+    live_script = f"""
   <script>
     (() => {{
       const app = document.getElementById("dashboard-app");
-      if (!app) return;
+      const storageKey = "aureumFlux.activeTab";
+      const defaultTab = "dashboard";
+      const refreshEnabled = {refresh_enabled};
       let busy = false;
+
+      function getRequestedTab() {{
+        const hashTab = window.location.hash ? window.location.hash.replace("#", "") : "";
+        const storedTab = window.localStorage.getItem(storageKey) || "";
+        return hashTab || storedTab || defaultTab;
+      }}
+
+      function setActiveTab(tab, persist = true) {{
+        const requestedTab = tab || defaultTab;
+        const view = document.querySelector(`[data-tab-view="${{requestedTab}}"]`);
+        const activeTab = view ? requestedTab : defaultTab;
+        document.querySelectorAll("[data-tab-view]").forEach((element) => {{
+          element.classList.toggle("active", element.dataset.tabView === activeTab);
+        }});
+        document.querySelectorAll("[data-tab-target]").forEach((element) => {{
+          const isActive = element.dataset.tabTarget === activeTab;
+          element.classList.toggle("active", isActive);
+          element.setAttribute("aria-selected", isActive ? "true" : "false");
+        }});
+        if (persist) {{
+          window.localStorage.setItem(storageKey, activeTab);
+        }}
+      }}
+
+      function applyStoredTab() {{
+        setActiveTab(getRequestedTab(), true);
+      }}
+
+      document.addEventListener("click", (event) => {{
+        const trigger = event.target.closest("[data-tab-target]");
+        if (!trigger) return;
+        event.preventDefault();
+        setActiveTab(trigger.dataset.tabTarget, true);
+      }});
+
+      window.addEventListener("hashchange", () => {{
+        setActiveTab(getRequestedTab(), true);
+      }});
+
       async function refreshLive() {{
+        if (!app || !refreshEnabled) return;
         if (busy) return;
         busy = true;
         try {{
           const response = await fetch("{fragment_endpoint}?_ts=" + Date.now(), {{ cache: "no-store" }});
           if (!response.ok) return;
           app.innerHTML = await response.text();
+          applyStoredTab();
         }} catch (_error) {{
         }} finally {{
           busy = false;
         }}
       }}
-      window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+      applyStoredTab();
+      if (refreshEnabled) {{
+        window.setInterval(refreshLive, {max(5, poll_seconds) * 1000});
+      }}
     }})();
   </script>
 """.rstrip()
@@ -6154,6 +6269,96 @@ def render_dashboard_clarity_v2(
       color: var(--amber);
       border-left-color: var(--amber);
       background: rgba(212, 175, 55, 0.08);
+    }}
+    .view-tabs {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 0 0 14px;
+      padding: 8px;
+      border: 1px solid rgba(45, 52, 73, 0.78);
+      border-radius: 8px;
+      background: rgba(6, 14, 32, 0.68);
+    }}
+    .view-tab {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }}
+    .view-tab:hover {{
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+      text-decoration: none;
+    }}
+    .view-tab.active {{
+      color: var(--amber);
+      border-color: rgba(212, 175, 55, 0.34);
+      background: rgba(212, 175, 55, 0.1);
+    }}
+    .tab-view {{
+      display: none;
+    }}
+    .tab-view.active {{
+      display: block;
+    }}
+    .global-live-strip {{
+      display: grid;
+      grid-template-columns: minmax(210px, 1.05fr) repeat(4, minmax(130px, 0.62fr));
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 10px;
+      border: 1px solid rgba(212, 175, 55, 0.28);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(212, 175, 55, 0.1), transparent 42%),
+        rgba(15, 23, 42, 0.82);
+    }}
+    .global-live-strip.bullish {{
+      border-color: rgba(78, 222, 163, 0.26);
+    }}
+    .global-live-strip.bearish {{
+      border-color: rgba(255, 180, 171, 0.3);
+    }}
+    .live-cell {{
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid rgba(45, 52, 73, 0.7);
+      border-radius: 6px;
+      background: rgba(6, 14, 32, 0.5);
+    }}
+    .live-cell small {{
+      display: block;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .live-cell strong {{
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-family: "Space Grotesk", monospace;
+      font-size: 18px;
+      line-height: 1.15;
+    }}
+    .live-cell span {{
+      display: block;
+      margin-top: 3px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.35;
     }}
     .anchor-target {{
       scroll-margin-top: 72px;
@@ -6914,195 +7119,299 @@ def render_dashboard_clarity_v2(
           </div>
           <div class="sync-pill">Ready for export</div>
         </section>
-    <section class="hero-grid anchor-target" id="market">
-      <article class="panel hero-price">
-        <div class="section-kicker">Tableau de bord intraday</div>
-        <div class="ticker-symbol">XAU/USD spot | live</div>
-        <div class="ticker-row">
-          <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
-          <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
-        </div>
-        <div class="ticker-meta">
-          Mis a jour {html.escape(generated_at)}<br>
-          Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
-          Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
-        </div>
-        {render_weekend_gold_proxy(weekend_gold, gold)}
-        <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
-          <div class="global-signal-head">
-            <div>
-              <div class="section-kicker">Scoring global prioritaire</div>
-              <h2>Position conseillee</h2>
-            </div>
-            <div class="global-score">{global_recommendation.score}<small>/100</small></div>
-          </div>
-          <div class="global-position">
-            <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
-            <span>SL {global_recommendation.stop_loss:.2f} | TP1 {global_recommendation.take_profit_1:.2f} | TP2 {global_recommendation.take_profit_2:.2f}</span>
-          </div>
-          <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
-          {render_trade_levels(global_recommendation)}
-        </div>
-        <div class="metrics-grid">
-          <div class="metric-chip">
-            <strong>Biais</strong>
-            <span class="{price_class}">{format_bias_label(analysis.bias)}</span>
-            <small>{heuristic_decision_sentence(analysis)}</small>
-          </div>
-          <div class="metric-chip">
-            <strong>Confiance</strong>
-            <span>{analysis.confidence}/100</span>
-            <div class="confidence-bar"><span></span></div>
-          </div>
-          <div class="metric-chip">
-            <strong>DXY</strong>
-            <span class="{dxy_class}">{dxy.price:.2f}</span>
-            <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
-          </div>
-          <div class="metric-chip">
-            <strong>10Y US</strong>
-            <span class="{us10y_class}">{us10y.price:.2f}%</span>
-            <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
-          </div>
-        </div>
-      </article>
+        <nav class="view-tabs" aria-label="Vues Aureum Flux">
+          <a class="view-tab active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
+          <a class="view-tab" href="#market" data-tab-target="market" aria-selected="false">Market</a>
+          <a class="view-tab" href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
+          <a class="view-tab" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
+          <a class="view-tab" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
+          <a class="view-tab" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="view-tab" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
+        </nav>
 
-      {render_trade_card(fundamental)}
-      {render_trade_card(technical)}
-    </section>
-
-    <section class="summary-grid anchor-target" id="scores">
-      <article class="summary-box">
-        <div class="section-kicker">Synthese prioritaire</div>
-        <h2>Ce qui compte maintenant</h2>
-        <p class="lead">{html.escape(executive_summary)}</p>
-        {render_what_happens_now(story_lines)}
-      </article>
-
-      <article class="summary-box">
-        <div class="section-kicker">Decision & prudence</div>
-        <h2>Lecture des scores</h2>
-        <div class="decision-grid">
-          <div class="decision-item">
-            <strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong>
-            <span>{html.escape(global_recommendation.summary)}</span>
+        <section class="global-live-strip {banner_class}" data-verdict="{html.escape(global_recommendation.verdict)}" data-regime="{html.escape(regime_name)}" data-alert="{html.escape(regime_alert)}">
+          <div class="live-cell">
+            <small>XAU/USD live</small>
+            <strong class="{price_class}">{gold.price:.2f}</strong>
+            <span>{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</span>
           </div>
-          <div class="decision-item">
-            <strong class="{recommendation_css_class(fundamental.verdict)}">Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
-            <span>{html.escape(fundamental.summary)}</span>
+          <div class="live-cell">
+            <small>Decision</small>
+            <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)} {global_recommendation.score}/100</strong>
+            <span>SL {global_recommendation.stop_loss:.2f} · TP1 {global_recommendation.take_profit_1:.2f} · TP2 {global_recommendation.take_profit_2:.2f}</span>
           </div>
-          <div class="decision-item">
-            <strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong>
-            <span>{html.escape(technical.summary)}</span>
+          <div class="live-cell">
+            <small>Regime</small>
+            <strong>{html.escape(regime_name)}</strong>
+            <span>{html.escape(regime_status)}</span>
           </div>
-          <div class="decision-item">
-            <strong class="{geo_class}">Geopolitique: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong>
-            <span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span>
+          <div class="live-cell">
+            <small>Confiance</small>
+            <strong>{analysis.confidence}/100</strong>
+            <span>{html.escape(format_bias_label(analysis.bias))}</span>
           </div>
-          <div class="decision-item">
-            <strong>Ce que cela veut dire pour vous</strong>
-            <span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span>
+          <div class="live-cell">
+            <small>Alerte</small>
+            <strong>{html.escape('IG Weekend' if regime_alert == 'ig-weekend' else 'Hormuz/Oil' if regime_alert == 'hormuz-oil-shock' else 'Normal')}</strong>
+            <span>{html.escape(regime_summary[:92])}</span>
           </div>
-        </div>
-      </article>
-    </section>
+        </section>
 
-    <section class="content-grid">
-      <article class="panel span-7">
-        <div class="section-kicker">Prix & niveaux</div>
-        <h2>Chandelles 5m + ligne de prix live</h2>
-        <div class="chart-wrap">{chart_svg}</div>
-        <div class="footer-note" style="margin-top:10px;">
-          Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
-          La ligne ambre montre le prix spot en temps reel.
-        </div>
-        <div class="key-levels" style="margin-top:10px;">
-          <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
-          <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
-          <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
-        </div>
-      </article>
+        <section class="tab-view active" id="dashboard" data-tab-view="dashboard">
+          <section class="hero-grid anchor-target">
+            <article class="panel hero-price">
+              <div class="section-kicker">Tableau de bord intraday</div>
+              <div class="ticker-symbol">XAU/USD spot | live</div>
+              <div class="ticker-row">
+                <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
+                <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
+              </div>
+              <div class="ticker-meta">
+                Mis a jour {html.escape(generated_at)}<br>
+                Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
+                Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
+              </div>
+              {render_weekend_gold_proxy(weekend_gold, gold)}
+              <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
+                <div class="global-signal-head">
+                  <div>
+                    <div class="section-kicker">Scoring global prioritaire</div>
+                    <h2>Position conseillee</h2>
+                  </div>
+                  <div class="global-score">{global_recommendation.score}<small>/100</small></div>
+                </div>
+                <div class="global-position">
+                  <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
+                  <span>SL {global_recommendation.stop_loss:.2f} | TP1 {global_recommendation.take_profit_1:.2f} | TP2 {global_recommendation.take_profit_2:.2f}</span>
+                </div>
+                <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
+                {render_trade_levels(global_recommendation)}
+              </div>
+              <div class="metrics-grid">
+                <div class="metric-chip">
+                  <strong>Biais</strong>
+                  <span class="{price_class}">{format_bias_label(analysis.bias)}</span>
+                  <small>{heuristic_decision_sentence(analysis)}</small>
+                </div>
+                <div class="metric-chip">
+                  <strong>Confiance</strong>
+                  <span>{analysis.confidence}/100</span>
+                  <div class="confidence-bar"><span></span></div>
+                </div>
+                <div class="metric-chip">
+                  <strong>DXY</strong>
+                  <span class="{dxy_class}">{dxy.price:.2f}</span>
+                  <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
+                </div>
+                <div class="metric-chip">
+                  <strong>10Y US</strong>
+                  <span class="{us10y_class}">{us10y.price:.2f}%</span>
+                  <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
+                </div>
+              </div>
+            </article>
 
-      <article class="panel span-5">
-        <div class="section-kicker">Plan d'execution intraday</div>
-        <h2>Hausse | baisse | attente</h2>
-        <div class="scenario-grid scenario-stack" style="margin-top:10px;">
-          <div class="scenario positive">
-            <h3>Scenario hausse</h3>
-            <p>{html.escape(bullish_case)}</p>
-          </div>
-          <div class="scenario negative">
-            <h3>Scenario baisse</h3>
-            <p>{html.escape(bearish_case)}</p>
-          </div>
-          <div class="scenario neutral">
-            <h3>Scenario attente</h3>
-            <p>{html.escape(wait_case)}</p>
-          </div>
-        </div>
-      </article>
-    </section>
+            {render_trade_card(fundamental)}
+            {render_trade_card(technical)}
+          </section>
+        </section>
 
-    <section class="content-grid anchor-target" id="technical">
-      <article class="panel span-7">
-        <div class="section-kicker">Technique multi-timeframe</div>
-        <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
-        {technical_matrix}
-      </article>
+        <section class="tab-view" id="market" data-tab-view="market">
+          <section class="content-grid anchor-target">
+            <article class="panel span-7">
+              <div class="section-kicker">Prix & niveaux</div>
+              <h2>Chandelles 5m + ligne de prix live</h2>
+              <div class="chart-wrap">{chart_svg}</div>
+              <div class="footer-note" style="margin-top:10px;">
+                Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
+                La ligne ambre montre le prix spot en temps reel.
+              </div>
+              <div class="key-levels" style="margin-top:10px;">
+                <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
+                <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
+                <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
+              </div>
+            </article>
 
-      <article class="panel span-5">
-        <div class="section-kicker">Confluence inter-marches</div>
-        <h2>Ce qui renforce ou affaiblit Gold</h2>
-        {render_cross_asset_panel(cross_asset_analysis, real_yield)}
-      </article>
-    </section>
+            <article class="panel span-5">
+              <div class="section-kicker">Confluence inter-marches</div>
+              <h2>Ce qui renforce ou affaiblit Gold</h2>
+              {render_cross_asset_panel(cross_asset_analysis, real_yield)}
+            </article>
 
-    <section class="content-grid anchor-target" id="sentiment">
-      <article class="panel span-7">
-        <div class="section-kicker">Geopolitique | sentiment | flux</div>
-        <h2>Risque externe qui soutient ou freine l'or</h2>
-        {render_geopolitical_panel(geopolitical_analysis)}
-      </article>
+            <article class="panel span-12">
+              <div class="section-kicker">Regime politique / petrole</div>
+              <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
+              {render_market_regime_panel(market_regime, cross_asset_analysis)}
+            </article>
+          </section>
+        </section>
 
-      <article class="panel span-5">
-        <div class="section-kicker">Regime de volatilite</div>
-        <h2>Mode event et prudence SL</h2>
-        {render_event_mode_panel(event_mode)}
-      </article>
+        <section class="tab-view" id="decision" data-tab-view="decision">
+          <section class="summary-grid anchor-target">
+            <article class="summary-box">
+              <div class="section-kicker">Synthese prioritaire</div>
+              <h2>Ce qui compte maintenant</h2>
+              <p class="lead">{html.escape(executive_summary)}</p>
+              {render_what_happens_now(story_lines)}
+            </article>
 
-      <article class="panel span-12">
-        <div class="section-kicker">Regime politique / petrole</div>
-        <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
-        {render_market_regime_panel(market_regime, cross_asset_analysis)}
-      </article>
-    </section>
+            <article class="summary-box">
+              <div class="section-kicker">Decision & prudence</div>
+              <h2>Lecture des scores</h2>
+              <div class="decision-grid">
+                <div class="decision-item">
+                  <strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong>
+                  <span>{html.escape(global_recommendation.summary)}</span>
+                </div>
+                <div class="decision-item">
+                  <strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
+                  <span>{html.escape(fundamental.summary)}</span>
+                </div>
+                <div class="decision-item">
+                  <strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong>
+                  <span>{html.escape(technical.summary)}</span>
+                </div>
+                <div class="decision-item">
+                  <strong class="{geo_class}">Geopolitics & Flows: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong>
+                  <span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span>
+                </div>
+                <div class="decision-item">
+                  <strong>Ce que cela veut dire pour vous</strong>
+                  <span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span>
+                </div>
+              </div>
+            </article>
+          </section>
+        </section>
 
-    <section class="panel module-block">
-      <div class="section-kicker">Catalyseurs du jour</div>
-      <h2>Messages qui expliquent le mouvement</h2>
-      <p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
-      <div class="digest-grid">
-        {render_information_digest(digest_items)}
-      </div>
-    </section>
+        <section class="tab-view" id="technical" data-tab-view="technical">
+          <section class="content-grid anchor-target">
+            <article class="panel span-7">
+              <div class="section-kicker">Technique multi-timeframe</div>
+              <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
+              {technical_matrix}
+            </article>
 
-    <section class="panel module-block">
-      <div class="section-kicker">Headlines expliquees</div>
-      <h2>Impact probable des actualites sur l'or</h2>
-      <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
-      <div class="headline-grid">
-        {render_headline_reason_cards(bundle.news, limit=6)}
-      </div>
-    </section>
+            <article class="panel span-5">
+              <div class="section-kicker">Plan d'execution intraday</div>
+              <h2>Hausse | baisse | attente</h2>
+              <div class="scenario-grid scenario-stack" style="margin-top:10px;">
+                <div class="scenario positive">
+                  <h3>Scenario hausse</h3>
+                  <p>{html.escape(bullish_case)}</p>
+                </div>
+                <div class="scenario negative">
+                  <h3>Scenario baisse</h3>
+                  <p>{html.escape(bearish_case)}</p>
+                </div>
+                <div class="scenario neutral">
+                  <h3>Scenario attente</h3>
+                  <p>{html.escape(wait_case)}</p>
+                </div>
+              </div>
+            </article>
+          </section>
+        </section>
 
-    {render_ai_summary(ai_analysis)}
+        <section class="tab-view" id="macro" data-tab-view="macro">
+          <section class="content-grid anchor-target">
+            <article class="panel span-7">
+              <div class="section-kicker">Macro | dollar | taux</div>
+              <h2>DXY, 10Y US, taux reel et lecture fondamentale</h2>
+              <div class="metrics-grid">
+                <div class="metric-chip">
+                  <strong>DXY</strong>
+                  <span class="{dxy_class}">{dxy.price:.2f}</span>
+                  <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
+                </div>
+                <div class="metric-chip">
+                  <strong>10Y US</strong>
+                  <span class="{us10y_class}">{us10y.price:.2f}%</span>
+                  <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
+                </div>
+                <div class="metric-chip">
+                  <strong>10Y reel</strong>
+                  <span class="{real_yield_class}">{format_number(real_yield.price if real_yield else None, 2, '%')}</span>
+                  <small>{'FRED DFII10' if real_yield else 'Indisponible'}</small>
+                </div>
+              </div>
+            </article>
+            {render_trade_card(fundamental)}
+          </section>
+        </section>
 
-    <section class="panel module-block">
-      <div class="section-kicker">Avertissement</div>
-      <div class="footer-note">
-        Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
-      </div>
-    </section>
+        <section class="tab-view" id="geopolitics" data-tab-view="geopolitics">
+          <section class="content-grid anchor-target">
+            <article class="panel span-7">
+              <div class="section-kicker">Geopolitics & Flows</div>
+              <h2>Risque externe qui soutient ou freine l'or</h2>
+              {render_geopolitical_panel(geopolitical_analysis)}
+            </article>
+
+            <article class="panel span-5">
+              <div class="section-kicker">Regime de volatilite</div>
+              <h2>Mode event et prudence SL</h2>
+              {render_event_mode_panel(event_mode)}
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Regime politique / petrole</div>
+              <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
+              {render_market_regime_panel(market_regime, cross_asset_analysis)}
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Catalyseurs du jour</div>
+              <h2>Messages qui expliquent le mouvement</h2>
+              <p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
+              <div class="digest-grid">
+                {render_information_digest(digest_items)}
+              </div>
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Headlines expliquees</div>
+              <h2>Impact probable des actualites sur l'or</h2>
+              <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
+              <div class="headline-grid">
+                {render_headline_reason_cards(bundle.news, limit=6)}
+              </div>
+            </article>
+          </section>
+        </section>
+
+        <section class="tab-view" id="reports" data-tab-view="reports">
+          <section class="content-grid anchor-target">
+            {render_ai_summary(ai_analysis)}
+
+            <article class="panel span-12">
+              <div class="section-kicker">Exports</div>
+              <h2>Rapports disponibles</h2>
+              <div class="decision-grid">
+                <div class="decision-item">
+                  <strong>Markdown</strong>
+                  <span>Le rapport principal est genere dans reports/xauusd_report.md.</span>
+                </div>
+                <div class="decision-item">
+                  <strong>JSON</strong>
+                  <span>Le payload structure est genere dans reports/xauusd_data.json.</span>
+                </div>
+                <div class="decision-item">
+                  <strong>Dernier calcul</strong>
+                  <span>{html.escape(generated_at)}</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Avertissement</div>
+              <div class="footer-note">
+                Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
+              </div>
+            </article>
+          </section>
+        </section>
       </div>
     </div>
   </main>

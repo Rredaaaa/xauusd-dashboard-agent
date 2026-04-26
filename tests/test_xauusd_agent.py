@@ -256,6 +256,17 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Headlines expliquees", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
+        self.assertIn('data-tab-target="dashboard"', dashboard)
+        self.assertIn('data-tab-target="market"', dashboard)
+        self.assertIn('data-tab-target="decision"', dashboard)
+        self.assertIn('data-tab-target="macro"', dashboard)
+        self.assertIn('data-tab-target="geopolitics"', dashboard)
+        self.assertIn('data-tab-target="reports"', dashboard)
+        self.assertIn('data-tab-view="dashboard"', dashboard)
+        self.assertIn('data-tab-view="reports"', dashboard)
+        self.assertIn("global-live-strip", dashboard)
+        self.assertIn("aureumFlux.activeTab", dashboard)
+        self.assertIn("applyStoredTab", dashboard)
 
 
 class LocalFreeContextTests(unittest.TestCase):

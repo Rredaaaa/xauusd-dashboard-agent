@@ -7,6 +7,7 @@ from xauusd_agent import (
     GeopoliticalAnalysis,
     MarketRegimeAnalysis,
     NewsItem,
+    OfficialMacroRates,
     PricePoint,
     SymbolSnapshot,
     TechnicalReading,
@@ -15,6 +16,7 @@ from xauusd_agent import (
     build_market_regime_analysis,
     build_cross_asset_analysis,
     build_event_mode_analysis,
+    build_official_macro_rates,
     classify_bias,
     build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
@@ -159,6 +161,66 @@ class AnalysisShapeTests(unittest.TestCase):
             fetched_at="2026-04-24T00:00:00+00:00",
             points=points,
         )
+        fred_dgs10 = SymbolSnapshot(
+            symbol="DGS10",
+            label="US 10Y Treasury Yield",
+            price=4.18,
+            previous_close=4.20,
+            change_abs=-0.02,
+            change_pct=-0.48,
+            period_change_pct=-0.48,
+            day_high=4.20,
+            day_low=4.18,
+            support=4.18,
+            resistance=4.20,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
+        fred_dgs2 = SymbolSnapshot(
+            symbol="DGS2",
+            label="US 2Y Treasury Yield",
+            price=3.86,
+            previous_close=3.88,
+            change_abs=-0.02,
+            change_pct=-0.52,
+            period_change_pct=-0.52,
+            day_high=3.88,
+            day_low=3.86,
+            support=3.86,
+            resistance=3.88,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
+        fred_t10yie = SymbolSnapshot(
+            symbol="T10YIE",
+            label="US 10Y Breakeven Inflation",
+            price=2.31,
+            previous_close=2.28,
+            change_abs=0.03,
+            change_pct=1.32,
+            period_change_pct=1.32,
+            day_high=2.31,
+            day_low=2.28,
+            support=2.28,
+            resistance=2.31,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
+        fred_dfii10 = SymbolSnapshot(
+            symbol="DFII10",
+            label="US 10Y Real Yield",
+            price=1.87,
+            previous_close=1.92,
+            change_abs=-0.05,
+            change_pct=-2.60,
+            period_change_pct=-2.60,
+            day_high=1.92,
+            day_low=1.87,
+            support=1.87,
+            resistance=1.92,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+        )
         item = NewsItem(
             title="Gold rises on softer dollar",
             source="Reuters",
@@ -255,6 +317,14 @@ class AnalysisShapeTests(unittest.TestCase):
                 short_pct=58,
                 fetched_at="2026-04-24T00:00:00+00:00",
             ),
+            real_yield=fred_dfii10,
+            official_macro_rates=OfficialMacroRates(
+                dgs10=fred_dgs10,
+                dgs2=fred_dgs2,
+                t10yie=fred_t10yie,
+                dfii10=fred_dfii10,
+                yahoo_tnx_gap_bps=2.0,
+            ),
             market_regime=MarketRegimeAnalysis(
                 name="Hormuz / Oil Shock",
                 status="ACTIF",
@@ -287,6 +357,11 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Synthese prioritaire", dashboard)
         self.assertIn("Headlines expliquees", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)
+        self.assertIn("Bloc macro officiel", dashboard)
+        self.assertIn("FRED DGS10 | DGS2 | T10YIE | DFII10", dashboard)
+        self.assertIn("10Y nominal officiel", dashboard)
+        self.assertIn("Controle Yahoo ^TNX", dashboard)
+        self.assertIn("FRED DGS10 prioritaire", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
         self.assertIn('data-tab-target="dashboard"', dashboard)
         self.assertIn('data-tab-target="market"', dashboard)
@@ -353,6 +428,13 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertTrue(all(agent.experimental for agent in agents))
         self.assertTrue(any(agent.name == "ElliottWaveAgent" for agent in agents))
         self.assertEqual(official.verdict, "BUY")
+
+    def test_official_macro_rates_compare_yahoo_tnx_to_fred(self) -> None:
+        dgs10 = self.snapshot("DGS10", 4.50, 4.45)
+        yahoo_tnx = self.snapshot("^TNX", 4.55, 4.50)
+        rates = build_official_macro_rates(dgs10, None, None, None, yahoo_tnx)
+        self.assertIs(rates.dgs10, dgs10)
+        self.assertAlmostEqual(rates.yahoo_tnx_gap_bps, 5.0)
 
 
 class LocalFreeContextTests(unittest.TestCase):

@@ -54,7 +54,14 @@ FALLBACK_RSS_FEEDS = [
     ("markets", "https://www.investing.com/rss/news_25.rss"),
 ]
 
-FRED_DFII10_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10"
+FRED_CSV_URL_TEMPLATE = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+FRED_DFII10_CSV_URL = FRED_CSV_URL_TEMPLATE.format(series_id="DFII10")
+FRED_SERIES_LABELS = {
+    "DGS10": "US 10Y Treasury Yield",
+    "DGS2": "US 2Y Treasury Yield",
+    "T10YIE": "US 10Y Breakeven Inflation",
+    "DFII10": "US 10Y Real Yield",
+}
 CROSS_ASSET_SYMBOLS = {
     "gold_proxy": ("GC=F", "Gold Futures Proxy"),
     "usdjpy": ("JPY=X", "USD/JPY"),
@@ -372,6 +379,15 @@ class MarketRegimeAnalysis:
 
 
 @dataclass
+class OfficialMacroRates:
+    dgs10: SymbolSnapshot | None = None
+    dgs2: SymbolSnapshot | None = None
+    t10yie: SymbolSnapshot | None = None
+    dfii10: SymbolSnapshot | None = None
+    yahoo_tnx_gap_bps: float | None = None
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -415,6 +431,7 @@ class BriefingBundle:
     technical_timeframes: list["TechnicalReading"] | None = None
     executive_summary: str = ""
     real_yield: SymbolSnapshot | None = None
+    official_macro_rates: OfficialMacroRates | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
@@ -794,9 +811,10 @@ def parse_fred_date_to_timestamp(date_text: str) -> int:
     return int(datetime.strptime(date_text, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
+def fetch_fred_series_snapshot(series_id: str, label: str | None = None) -> SymbolSnapshot | None:
+    url = FRED_CSV_URL_TEMPLATE.format(series_id=urllib.parse.quote(series_id))
     try:
-        with urllib.request.urlopen(FRED_DFII10_CSV_URL, timeout=15) as response:
+        with urllib.request.urlopen(url, timeout=15) as response:
             csv_text = response.read().decode("utf-8", "ignore")
     except Exception:
         return None
@@ -824,8 +842,8 @@ def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
     support, resistance = compute_support_resistance(recent_points, lookback=min(60, len(recent_points)))
 
     return SymbolSnapshot(
-        symbol="DFII10",
-        label="US 10Y Real Yield",
+        symbol=series_id,
+        label=label or FRED_SERIES_LABELS.get(series_id, series_id),
         price=current,
         previous_close=previous,
         change_abs=current - previous,
@@ -839,6 +857,29 @@ def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
         resistance=resistance,
         fetched_at=iso_now(),
         points=recent_points,
+    )
+
+
+def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
+    return fetch_fred_series_snapshot("DFII10", FRED_SERIES_LABELS["DFII10"])
+
+
+def build_official_macro_rates(
+    dgs10: SymbolSnapshot | None,
+    dgs2: SymbolSnapshot | None,
+    t10yie: SymbolSnapshot | None,
+    dfii10: SymbolSnapshot | None,
+    yahoo_us10y: SymbolSnapshot | None,
+) -> OfficialMacroRates:
+    gap_bps = None
+    if dgs10 is not None and yahoo_us10y is not None:
+        gap_bps = (yahoo_us10y.price - dgs10.price) * 100
+    return OfficialMacroRates(
+        dgs10=dgs10,
+        dgs2=dgs2,
+        t10yie=t10yie,
+        dfii10=dfii10,
+        yahoo_tnx_gap_bps=gap_bps,
     )
 
 
@@ -2277,6 +2318,7 @@ def build_passive_agent_results(
     global_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
+    official_macro_rates: OfficialMacroRates | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -2323,12 +2365,17 @@ def build_passive_agent_results(
     )
     agents.append(build_elliott_wave_agent(gold))
 
-    macro_score = fundamental_recommendation.score if fundamental_recommendation else clamp_score(50 - dxy.change_pct * 18 - us10y.change_abs * 600)
+    official_10y = official_macro_rates.dgs10 if official_macro_rates and official_macro_rates.dgs10 else us10y
+    macro_score = fundamental_recommendation.score if fundamental_recommendation else clamp_score(50 - dxy.change_pct * 18 - official_10y.change_abs * 600)
     macro_evidence = [
         AgentEvidence("DXY", f"{dxy.price:.2f} ({dxy.change_pct:+.2f}%)", "Yahoo Finance"),
-        AgentEvidence("10Y US", f"{us10y.price:.2f}% ({us10y.change_abs * 100:+.1f} bps)", "Yahoo Finance"),
+        AgentEvidence("10Y US officiel", f"{official_10y.price:.2f}% ({official_10y.change_abs * 100:+.1f} bps)", "FRED DGS10" if official_macro_rates and official_macro_rates.dgs10 else "Yahoo Finance"),
     ]
-    if real_yield is not None:
+    if official_macro_rates and official_macro_rates.dgs2 is not None:
+        macro_evidence.append(AgentEvidence("2Y US officiel", f"{official_macro_rates.dgs2.price:.2f}% ({official_macro_rates.dgs2.change_abs * 100:+.1f} bps)", "FRED DGS2"))
+    if official_macro_rates and official_macro_rates.t10yie is not None:
+        macro_evidence.append(AgentEvidence("Breakeven 10Y", f"{official_macro_rates.t10yie.price:.2f}% ({official_macro_rates.t10yie.change_abs * 100:+.1f} bps)", "FRED T10YIE"))
+    if real_yield is not None and len(macro_evidence) < 4:
         macro_evidence.append(AgentEvidence("10Y reel", f"{real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)", "FRED DFII10"))
     agents.append(
         AgentResult(
@@ -2336,10 +2383,10 @@ def build_passive_agent_results(
             department="Macro",
             bias=normalize_agent_bias(fundamental_recommendation.verdict if fundamental_recommendation else score_to_bias(macro_score)),
             score=macro_score,
-            confidence=68 if real_yield is not None else 55,
+            confidence=78 if official_macro_rates and official_macro_rates.dgs10 else 68 if real_yield is not None else 55,
             summary=(fundamental_recommendation.summary if fundamental_recommendation else "Lecture macro passive basee sur dollar et taux."),
             evidence=macro_evidence,
-            risks=[AgentRisk("Source taux", "FRED officiel sera renforce en Phase 6.", "medium")] if real_yield is None else [],
+            risks=[] if official_macro_rates and official_macro_rates.dgs10 else [AgentRisk("Source taux", "FRED DGS10 indisponible, fallback actif.", "medium")],
         )
     )
 
@@ -3193,6 +3240,20 @@ def call_openai_analysis(payload: dict[str, Any]) -> str | None:
         return f"Analyse IA indisponible: {exc}"
 
 
+def macro_rate_payload(snapshot: SymbolSnapshot | None, source: str) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "symbol": snapshot.symbol,
+        "label": snapshot.label,
+        "source": source,
+        "price": round(snapshot.price, 3),
+        "previous_close": round(snapshot.previous_close, 3),
+        "change_bps": round(snapshot.change_abs * 100, 1),
+        "last_update": snapshot.fetched_at,
+    }
+
+
 def build_payload(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
@@ -3205,6 +3266,7 @@ def build_payload(
     global_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
+    official_macro_rates: OfficialMacroRates | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -3299,6 +3361,20 @@ def build_payload(
             "change_bps": round(real_yield.change_abs * 100, 1),
             "last_update": real_yield.fetched_at,
         }
+    if official_macro_rates:
+        payload["market_snapshot"]["official_macro_rates"] = {
+            "source": "FRED",
+            "dgs10": macro_rate_payload(official_macro_rates.dgs10, "FRED DGS10"),
+            "dgs2": macro_rate_payload(official_macro_rates.dgs2, "FRED DGS2"),
+            "t10yie": macro_rate_payload(official_macro_rates.t10yie, "FRED T10YIE"),
+            "dfii10": macro_rate_payload(official_macro_rates.dfii10, "FRED DFII10"),
+            "yahoo_tnx_gap_bps": (
+                round(official_macro_rates.yahoo_tnx_gap_bps, 1)
+                if official_macro_rates.yahoo_tnx_gap_bps is not None
+                else None
+            ),
+            "policy": "FRED rates are the official macro source; Yahoo ^TNX is kept as a cross-check.",
+        }
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -3349,12 +3425,36 @@ def build_price_points(entries: list[dict[str, Any]]) -> list[PricePoint]:
     return points
 
 
+def build_macro_rate_from_payload(data: dict[str, Any] | None, fallback_label: str) -> SymbolSnapshot | None:
+    if not isinstance(data, dict) or data.get("price") is None:
+        return None
+    price = float(data.get("price", 0.0) or 0.0)
+    change_bps = float(data.get("change_bps", 0.0) or 0.0)
+    previous = float(data.get("previous_close", price - (change_bps / 100.0)) or price)
+    return SymbolSnapshot(
+        symbol=str(data.get("symbol", "")),
+        label=str(data.get("label", fallback_label)),
+        price=price,
+        previous_close=previous,
+        change_abs=price - previous,
+        change_pct=((price - previous) / abs(previous) * 100) if previous else 0.0,
+        period_change_pct=0.0,
+        day_high=None,
+        day_low=None,
+        support=None,
+        resistance=None,
+        fetched_at=str(data.get("last_update", iso_now())),
+        points=[PricePoint(timestamp=int(time.time()), close=price)],
+    )
+
+
 def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     market_snapshot = payload.get("market_snapshot", {})
     gold_data = market_snapshot.get("xauusd_spot", {})
     weekend_gold_data = market_snapshot.get("weekend_gold", {})
     dxy_data = market_snapshot.get("dxy", {})
     us10y_data = market_snapshot.get("us10y_yield", {})
+    official_macro_data = market_snapshot.get("official_macro_rates", {})
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -3480,6 +3580,17 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         if isinstance(market_regime_payload, dict)
         else None
     )
+    official_macro_rates = (
+        OfficialMacroRates(
+            dgs10=build_macro_rate_from_payload(official_macro_data.get("dgs10"), FRED_SERIES_LABELS["DGS10"]),
+            dgs2=build_macro_rate_from_payload(official_macro_data.get("dgs2"), FRED_SERIES_LABELS["DGS2"]),
+            t10yie=build_macro_rate_from_payload(official_macro_data.get("t10yie"), FRED_SERIES_LABELS["T10YIE"]),
+            dfii10=build_macro_rate_from_payload(official_macro_data.get("dfii10"), FRED_SERIES_LABELS["DFII10"]),
+            yahoo_tnx_gap_bps=parse_float(official_macro_data.get("yahoo_tnx_gap_bps")),
+        )
+        if isinstance(official_macro_data, dict)
+        else None
+    )
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -3576,6 +3687,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
+        official_macro_rates=official_macro_rates,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         agent_results=agent_results,
@@ -3614,6 +3726,7 @@ def render_report(
     global_recommendation: TradeRecommendation | None = None,
     executive_summary: str | None = None,
     real_yield: SymbolSnapshot | None = None,
+    official_macro_rates: OfficialMacroRates | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -3672,6 +3785,23 @@ def render_report(
                 "- Note: prix week-end IG indicatif, distinct du spot officiel semaine.",
             ]
         )
+
+    if official_macro_rates:
+        lines.extend(["", "## Macro Officiel FRED"])
+        fred_rows = [
+            ("DGS10", "10Y nominal US", official_macro_rates.dgs10),
+            ("DGS2", "2Y nominal US", official_macro_rates.dgs2),
+            ("T10YIE", "Inflation breakeven 10Y", official_macro_rates.t10yie),
+            ("DFII10", "10Y reel US", official_macro_rates.dfii10),
+        ]
+        for symbol, label, snapshot in fred_rows:
+            if snapshot is not None:
+                lines.append(f"- {symbol} {label}: {snapshot.price:.2f}% ({snapshot.change_abs * 100:+.1f} bps) - FRED")
+            else:
+                lines.append(f"- {symbol} {label}: indisponible")
+        if official_macro_rates.yahoo_tnx_gap_bps is not None:
+            lines.append(f"- Ecart Yahoo ^TNX vs FRED DGS10: {official_macro_rates.yahoo_tnx_gap_bps:+.1f} bps")
+        lines.append("- Politique source: FRED est la source officielle pour les taux; Yahoo ^TNX reste un controle.")
 
     if global_recommendation:
         lines.extend(
@@ -4237,6 +4367,36 @@ def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: Sy
     <div class="geo-columns">
       <div><div class="section-kicker">Confirmations</div><ul class="reason-list">{confirmations}</ul></div>
       <div><div class="section-kicker">Contradictions</div><ul class="reason-list">{contradictions}</ul></div>
+    </div>
+    """.strip()
+
+
+def render_official_macro_panel(official_macro_rates: OfficialMacroRates | None, yahoo_us10y: SymbolSnapshot) -> str:
+    def rate_cell(title: str, snapshot: SymbolSnapshot | None, source: str) -> str:
+        if snapshot is None:
+            return f'<div class="geo-stat"><strong>{html.escape(title)}</strong><span>indisponible</span></div>'
+        return (
+            f'<div class="geo-stat"><strong>{html.escape(title)}</strong>'
+            f'<span>{snapshot.price:.2f}% ({snapshot.change_abs * 100:+.1f} bps)</span>'
+            f'<small>{html.escape(source)} · {html.escape(format_timestamp_for_humans(snapshot.fetched_at))}</small></div>'
+        )
+
+    if official_macro_rates is None:
+        return '<div class="footer-note">Bloc macro officiel FRED indisponible.</div>'
+
+    gap_line = (
+        f"{official_macro_rates.yahoo_tnx_gap_bps:+.1f} bps"
+        if official_macro_rates.yahoo_tnx_gap_bps is not None
+        else "indisponible"
+    )
+    return f"""
+    <div class="geo-grid">
+      {rate_cell("10Y nominal officiel", official_macro_rates.dgs10, "FRED DGS10")}
+      {rate_cell("2Y nominal officiel", official_macro_rates.dgs2, "FRED DGS2")}
+      {rate_cell("Breakeven inflation 10Y", official_macro_rates.t10yie, "FRED T10YIE")}
+      {rate_cell("10Y reel officiel", official_macro_rates.dfii10, "FRED DFII10")}
+      <div class="geo-stat"><strong>Controle Yahoo ^TNX</strong><span>{yahoo_us10y.price:.2f}%</span><small>Ecart vs FRED DGS10: {html.escape(gap_line)}</small></div>
+      <div class="geo-stat"><strong>Politique source</strong><span>FRED prioritaire pour les taux; Yahoo reste controle de marche.</span></div>
     </div>
     """.strip()
 
@@ -5396,6 +5556,7 @@ def render_dashboard_clarity(
     geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
     technical_readings = bundle.technical_timeframes or []
     real_yield = bundle.real_yield
+    official_macro_rates = bundle.official_macro_rates
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -5448,6 +5609,7 @@ def render_dashboard_clarity(
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -6565,6 +6727,7 @@ def render_dashboard_clarity_v2(
     geopolitical_analysis = bundle.geopolitical_analysis or analysis.geopolitical
     technical_readings = bundle.technical_timeframes or []
     real_yield = bundle.real_yield
+    official_macro_rates = bundle.official_macro_rates
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -6617,6 +6780,7 @@ def render_dashboard_clarity_v2(
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -7693,6 +7857,13 @@ def render_dashboard_clarity_v2(
       font-size: 13px;
       line-height: 1.45;
     }}
+    .geo-stat small {{
+      display: block;
+      margin-top: 4px;
+      color: var(--soft);
+      font-size: 11px;
+      line-height: 1.35;
+    }}
     .scenario {{
       padding: 11px;
     }}
@@ -8060,7 +8231,7 @@ def render_dashboard_clarity_v2(
           <section class="content-grid anchor-target">
             <article class="panel span-7">
               <div class="section-kicker">Macro | dollar | taux</div>
-              <h2>DXY, 10Y US, taux reel et lecture fondamentale</h2>
+              <h2>DXY, FRED officiel, taux reel et lecture fondamentale</h2>
               <div class="metrics-grid">
                 <div class="metric-chip">
                   <strong>DXY</strong>
@@ -8068,9 +8239,9 @@ def render_dashboard_clarity_v2(
                   <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
                 </div>
                 <div class="metric-chip">
-                  <strong>10Y US</strong>
+                  <strong>10Y US officiel</strong>
                   <span class="{us10y_class}">{us10y.price:.2f}%</span>
-                  <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
+                  <small>FRED DGS10 prioritaire; Yahoo ^TNX controle</small>
                 </div>
                 <div class="metric-chip">
                   <strong>10Y reel</strong>
@@ -8080,6 +8251,11 @@ def render_dashboard_clarity_v2(
               </div>
             </article>
             {render_trade_card(fundamental)}
+            <article class="panel span-12">
+              <div class="section-kicker">Bloc macro officiel</div>
+              <h2>FRED DGS10 | DGS2 | T10YIE | DFII10</h2>
+              {render_official_macro_panel(official_macro_rates, us10y)}
+            </article>
             <article class="panel span-12">
               <div class="section-kicker">Agents passifs experimentaux</div>
               <h2>Macro agents</h2>
@@ -8201,7 +8377,7 @@ def fetch_local_free_context(
     us10y: SymbolSnapshot,
     news: list[NewsItem],
     technical_readings: list[TechnicalReading],
-) -> tuple[SymbolSnapshot | None, CrossAssetAnalysis, EventModeAnalysis, MarketRegimeAnalysis]:
+) -> tuple[SymbolSnapshot | None, OfficialMacroRates, CrossAssetAnalysis, EventModeAnalysis, MarketRegimeAnalysis]:
     def cached_snapshot(key: str, loader: Any) -> SymbolSnapshot | None:
         now = time.time()
         cached = LOCAL_CONTEXT_SNAPSHOT_CACHE.get(key)
@@ -8211,7 +8387,11 @@ def fetch_local_free_context(
         LOCAL_CONTEXT_SNAPSHOT_CACHE[key] = (now, copy.deepcopy(snapshot))
         return snapshot
 
+    dgs10 = cached_snapshot("fred_dgs10", lambda: fetch_fred_series_snapshot("DGS10", FRED_SERIES_LABELS["DGS10"]))
+    dgs2 = cached_snapshot("fred_dgs2", lambda: fetch_fred_series_snapshot("DGS2", FRED_SERIES_LABELS["DGS2"]))
+    breakeven_10y = cached_snapshot("fred_t10yie", lambda: fetch_fred_series_snapshot("T10YIE", FRED_SERIES_LABELS["T10YIE"]))
     real_yield = cached_snapshot("fred_dfii10", fetch_real_yield_snapshot)
+    official_macro_rates = build_official_macro_rates(dgs10, dgs2, breakeven_10y, real_yield, us10y)
     dxy_cross = cached_snapshot(
         "dxy_cross",
         lambda: fetch_optional_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="6mo"),
@@ -8287,7 +8467,7 @@ def fetch_local_free_context(
     )
     event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
     market_regime = build_market_regime_analysis(gold, dxy, us10y, news, wti=wti, brent=brent, event_mode=event_mode)
-    return real_yield, cross_asset, event_mode, market_regime
+    return real_yield, official_macro_rates, cross_asset, event_mode, market_regime
 
 
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
@@ -8298,7 +8478,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
         gold,
         dxy,
         us10y,
@@ -8359,6 +8539,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8376,6 +8557,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8398,6 +8580,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.technical_timeframes = technical_readings
     live_bundle.executive_summary = executive_summary
     live_bundle.real_yield = real_yield
+    live_bundle.official_macro_rates = official_macro_rates
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
@@ -8414,7 +8597,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     news = fetch_news(top_news)
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
         gold,
         dxy,
         us10y,
@@ -8475,6 +8658,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8492,6 +8676,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8519,6 +8704,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_timeframes=technical_readings,
         executive_summary=executive_summary,
         real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8552,6 +8738,7 @@ def render_artifacts(
         bundle.global_recommendation,
         bundle.executive_summary,
         bundle.real_yield,
+        bundle.official_macro_rates,
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,
@@ -8626,6 +8813,7 @@ class DashboardLiveCache:
                 bundle.global_recommendation,
                 bundle.executive_summary,
                 bundle.real_yield,
+                bundle.official_macro_rates,
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
                 bundle.weekend_gold,

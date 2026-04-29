@@ -4,6 +4,7 @@ from xauusd_agent import (
     AnalysisResult,
     BriefingBundle,
     EventModeAnalysis,
+    EventFact,
     GeopoliticalAnalysis,
     MarketRegimeAnalysis,
     NewsItem,
@@ -17,6 +18,7 @@ from xauusd_agent import (
     build_cross_asset_analysis,
     build_event_mode_analysis,
     build_official_macro_rates,
+    build_event_facts,
     classify_bias,
     build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
@@ -325,6 +327,23 @@ class AnalysisShapeTests(unittest.TestCase):
                 dfii10=fred_dfii10,
                 yahoo_tnx_gap_bps=2.0,
             ),
+            event_facts=[
+                EventFact(
+                    title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
+                    source="Reuters",
+                    source_url="https://example.com",
+                    published_at="2026-04-24T00:00:00+00:00",
+                    category="geopolitical",
+                    actors=["Iran", "Oil market"],
+                    locations=["Hormuz", "Middle East"],
+                    themes=["Oil shock", "War risk"],
+                    confirmation_level="agence/finance majeure",
+                    market_chain="Fait source -> risque petrole/logistique -> WTI/Brent et inflation energie peuvent monter.",
+                    gold_impact="Le choc petrole peut soutenir le theme refuge mais aussi renforcer dollar/taux.",
+                    impact_bias="mixte",
+                    confidence=82,
+                )
+            ],
             market_regime=MarketRegimeAnalysis(
                 name="Hormuz / Oil Shock",
                 status="ACTIF",
@@ -362,6 +381,10 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("10Y nominal officiel", dashboard)
         self.assertIn("Controle Yahoo ^TNX", dashboard)
         self.assertIn("FRED DGS10 prioritaire", dashboard)
+        self.assertIn("Event Facts", dashboard)
+        self.assertIn("Faits detectes, sources et chaine marche", dashboard)
+        self.assertIn("Fait detecte", dashboard)
+        self.assertIn("agence/finance majeure", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
         self.assertIn('data-tab-target="dashboard"', dashboard)
         self.assertIn('data-tab-target="market"', dashboard)
@@ -435,6 +458,24 @@ class AnalysisShapeTests(unittest.TestCase):
         rates = build_official_macro_rates(dgs10, None, None, None, yahoo_tnx)
         self.assertIs(rates.dgs10, dgs10)
         self.assertAlmostEqual(rates.yahoo_tnx_gap_bps, 5.0)
+
+    def test_event_facts_extract_concrete_market_chain(self) -> None:
+        item = NewsItem(
+            title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
+            source="Reuters",
+            link="https://example.com",
+            published_at="2026-04-24T00:00:00+00:00",
+            category="geopolitical",
+            score=2,
+            score_reasons=["bullish:geopolitical risk"],
+        )
+        facts = build_event_facts([item])
+        self.assertEqual(len(facts), 1)
+        self.assertIn("Iran", facts[0].actors)
+        self.assertIn("Hormuz", facts[0].locations)
+        self.assertIn("Oil shock", facts[0].themes)
+        self.assertEqual(facts[0].confirmation_level, "agence/finance majeure")
+        self.assertIn("WTI/Brent", facts[0].market_chain)
 
 
 class LocalFreeContextTests(unittest.TestCase):

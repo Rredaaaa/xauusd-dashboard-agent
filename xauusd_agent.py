@@ -305,6 +305,23 @@ class NewsItem:
 
 
 @dataclass
+class EventFact:
+    title: str
+    source: str
+    source_url: str
+    published_at: str
+    category: str
+    actors: list[str]
+    locations: list[str]
+    themes: list[str]
+    confirmation_level: str
+    market_chain: str
+    gold_impact: str
+    impact_bias: str
+    confidence: int
+
+
+@dataclass
 class AnalysisResult:
     bias: str
     score: int
@@ -436,6 +453,7 @@ class BriefingBundle:
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
     market_regime: MarketRegimeAnalysis | None = None
+    event_facts: list[EventFact] = field(default_factory=list)
     agent_results: list[AgentResult] = field(default_factory=list)
 
 
@@ -2323,9 +2341,11 @@ def build_passive_agent_results(
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    event_facts: list[EventFact] | None = None,
 ) -> list[AgentResult]:
     readings = technical_timeframes or []
     agents: list[AgentResult] = []
+    primary_fact = event_facts[0] if event_facts else None
 
     price_score = clamp_score(50 + (gold.change_pct * 18) + (gold.period_change_pct * 6))
     price_risks = []
@@ -2401,6 +2421,7 @@ def build_passive_agent_results(
             summary=market_regime.summary if market_regime else "Regime geopolitique/petrole indisponible.",
             evidence=[
                 AgentEvidence("Regime", market_regime.name if market_regime else "indisponible", "Headlines + WTI/Brent"),
+                AgentEvidence("Fait detecte", primary_fact.title if primary_fact else "aucun fait structure", primary_fact.source if primary_fact else ""),
                 AgentEvidence("Pourquoi", "; ".join((market_regime.reasons if market_regime else [])[:3]) or "aucune raison dominante"),
             ],
             risks=[AgentRisk("Oil shock", "Le regime peut inverser le lien geopolitique -> gold si oil/dollar captent la liquidite.", "high")],
@@ -2419,6 +2440,7 @@ def build_passive_agent_results(
             evidence=[
                 AgentEvidence("Headlines", top_news_titles(news, limit=2), "RSS/Google News"),
                 AgentEvidence("Score headlines", str(analysis.score), "Moteur heuristique local"),
+                AgentEvidence("Faits structures", str(len(event_facts or [])), "EventFact"),
             ],
             risks=[AgentRisk("Bruit news", "Les titres peuvent etre redondants ou en retard sur le prix.", "medium")],
         )
@@ -2462,15 +2484,20 @@ def build_passive_agent_results(
         AgentResult(
             name="EventFactsAgent",
             department="Geopolitics & Flows",
-            bias="CAUTION" if event_mode and event_mode.active else "NEUTRAL",
-            score=event_mode.score if event_mode else 0,
-            confidence=60 if event_mode else 35,
-            summary=event_mode.action if event_mode else "Aucun regime event disponible.",
+            bias="CAUTION" if event_facts else "NEUTRAL",
+            score=clamp_score(45 + len(event_facts or []) * 6),
+            confidence=primary_fact.confidence if primary_fact else 35,
+            summary=(
+                f"{len(event_facts)} fait(s) structure(s) detecte(s); source principale: {primary_fact.source}."
+                if primary_fact
+                else "Aucun fait structure disponible."
+            ),
             evidence=[
-                AgentEvidence("Mode event", event_mode.status if event_mode else "indisponible", "Volatilite/volume"),
-                AgentEvidence("Events", top_news_titles(news, {"events_calendar", "events_fomc", "macro_fed", "macro_cpi", "macro_nfp"}, 2), "Headlines calendrier"),
+                AgentEvidence("Fait principal", primary_fact.title if primary_fact else "indisponible", primary_fact.source if primary_fact else ""),
+                AgentEvidence("Confirmation", primary_fact.confirmation_level if primary_fact else "indisponible", "EventFact"),
+                AgentEvidence("Chaine marche", primary_fact.market_chain if primary_fact else "indisponible", "EventFact"),
             ],
-            risks=[AgentRisk("Calendrier officiel", "Les faits macro seront fiabilises en Phase 7.", "medium")],
+            risks=[AgentRisk("Validation", "Un fait structure reste une lecture de headline: il doit rester source et confirme.", "medium")],
         )
     )
 
@@ -3106,6 +3133,147 @@ def find_story_for_categories(news: list[NewsItem], *categories: str) -> NewsIte
     return None
 
 
+FACT_ACTOR_KEYWORDS = {
+    "Iran": ("iran", "iranian", "tehran"),
+    "United States": ("united states", "u.s.", "us ", "usa", "washington", "white house", "trump", "fed", "powell"),
+    "Federal Reserve": ("fed", "fomc", "powell", "federal reserve"),
+    "Oil market": ("oil", "crude", "wti", "brent", "barrel", "opec"),
+    "Gold market": ("gold", "xauusd", "xau/usd", "precious metals"),
+    "China": ("china", "chinese", "pboc"),
+    "India": ("india", "indian"),
+    "ETF investors": ("etf", "gld", "iau", "holdings", "inflows", "outflows"),
+    "Futures traders": ("cot", "commitments of traders", "managed money", "open interest", "comex"),
+}
+
+FACT_LOCATION_KEYWORDS = {
+    "Hormuz": ("hormuz", "strait of hormuz"),
+    "Middle East": ("middle east", "gulf", "red sea", "israel", "iran"),
+    "United States": ("united states", "u.s.", "usa", "washington"),
+    "China": ("china", "beijing"),
+    "India": ("india", "mumbai"),
+    "COMEX": ("comex", "nymex"),
+}
+
+FACT_THEME_KEYWORDS = {
+    "Oil shock": ("oil", "crude", "wti", "brent", "barrel", "hormuz", "shipping", "blockade"),
+    "War risk": ("war", "conflict", "attack", "missile", "escalation", "sanction", "geopolitical"),
+    "Dollar liquidity": ("dollar", "usd", "liquidity", "cash"),
+    "Fed policy": ("fed", "fomc", "powell", "rate", "cut", "hike", "higher for longer"),
+    "Inflation": ("cpi", "inflation", "prices", "gasoline"),
+    "Positioning": ("cot", "managed money", "speculative", "open interest", "positions"),
+    "ETF flows": ("etf", "gld", "iau", "holdings", "inflows", "outflows"),
+    "Volatility": ("vix", "gvz", "fear", "volatility", "risk aversion"),
+}
+
+
+def detect_fact_labels(text: str, mapping: dict[str, tuple[str, ...]]) -> list[str]:
+    normalized = normalize_title_for_dedupe(text)
+    labels = [label for label, keywords in mapping.items() if text_contains_any(normalized, keywords)]
+    return labels[:4]
+
+
+def classify_confirmation_level(item: NewsItem) -> tuple[str, int]:
+    source = item.source.lower()
+    title = item.title.lower()
+    if any(token in source for token in ("white house", "federal reserve", "fred", "cftc", "treasury", "eia")):
+        return "source officielle", 88
+    if any(token in source for token in ("reuters", "associated press", "ap news", "bloomberg")):
+        return "agence/finance majeure", 82
+    if any(token in source for token in ("investing", "yahoo", "marketwatch", "cnbc", "economic times")):
+        return "media marche connu", 70
+    if any(token in title for token in ("report", "data", "minutes", "statement")):
+        return "headline a confirmer", 62
+    return "source secondaire / a confirmer", 55
+
+
+def build_event_market_chain(themes: list[str], item: NewsItem) -> str:
+    if "Oil shock" in themes:
+        return (
+            "Fait source -> risque petrole/logistique -> WTI/Brent et inflation energie peuvent monter -> "
+            "rendements/dollar peuvent capter la liquidite -> gold devient mixte, parfois sous pression court terme."
+        )
+    if "Dollar liquidity" in themes:
+        return (
+            "Fait source -> recherche de liquidite dollar -> DXY peut se renforcer -> "
+            "gold peut etre vendu temporairement meme si le risque reste defensif."
+        )
+    if "Fed policy" in themes or "Inflation" in themes:
+        return (
+            "Fait source -> attentes Fed/inflation changent -> rendements reels et DXY bougent -> "
+            "gold reagit surtout via le cout d'opportunite et le dollar."
+        )
+    if "Positioning" in themes or "ETF flows" in themes:
+        return (
+            "Fait source -> flux/positionnement institutionnel changent -> conviction de marche augmente ou baisse -> "
+            "gold est confirme seulement si prix et volumes suivent."
+        )
+    if "War risk" in themes:
+        return (
+            "Fait source -> aversion au risque -> demande de couverture peut soutenir gold -> "
+            "mais l'effet reste conditionne par dollar, oil et liquidite."
+        )
+    return (
+        "Fait source -> contexte de marche mis a jour -> impact gold a confirmer par DXY, taux, oil et prix spot."
+    )
+
+
+def build_event_fact_from_news(item: NewsItem) -> EventFact:
+    text = clean_display_text(item.title)
+    actors = detect_fact_labels(text, FACT_ACTOR_KEYWORDS) or ["Marche"]
+    locations = detect_fact_labels(text, FACT_LOCATION_KEYWORDS) or ["Global"]
+    themes = detect_fact_labels(text, FACT_THEME_KEYWORDS) or [item.category.replace("_", " ").title()]
+    confirmation_level, base_confidence = classify_confirmation_level(item)
+    impact_bias, impact_text = explain_headline_gold_impact(item)
+    confidence = round(clamp(base_confidence + min(abs(item.score) * 3, 9), 35, 92))
+    return EventFact(
+        title=text,
+        source=clean_display_text(item.source),
+        source_url=item.link,
+        published_at=item.published_at,
+        category=item.category,
+        actors=actors,
+        locations=locations,
+        themes=themes,
+        confirmation_level=confirmation_level,
+        market_chain=build_event_market_chain(themes, item),
+        gold_impact=impact_text,
+        impact_bias=impact_bias,
+        confidence=confidence,
+    )
+
+
+def build_event_facts(news: list[NewsItem], limit: int = 6) -> list[EventFact]:
+    facts: list[EventFact] = []
+    seen: set[str] = set()
+    priority_categories = {
+        "geopolitical",
+        "risk_vix",
+        "gold",
+        "events_fomc",
+        "events_calendar",
+        "macro_fed",
+        "macro_cpi",
+        "macro_nfp",
+        "sentiment_cot",
+        "sentiment_etf",
+        "sentiment_oi",
+    }
+    candidates = [
+        item
+        for item in pick_story_headlines(news, limit=max(limit * 3, 12))
+        if item.category in priority_categories or abs(item.score) >= 1
+    ]
+    for item in candidates:
+        key = normalize_title_for_dedupe(item.title)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        facts.append(build_event_fact_from_news(item))
+        if len(facts) >= limit:
+            break
+    return facts
+
+
 def build_information_digest_items(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
@@ -3271,6 +3439,7 @@ def build_payload(
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    event_facts: list[EventFact] | None = None,
     agent_results: list[AgentResult] | None = None,
 ) -> dict[str, Any]:
     payload = {
@@ -3381,6 +3550,8 @@ def build_payload(
         payload["event_mode"] = asdict(event_mode)
     if market_regime:
         payload["market_regime"] = asdict(market_regime)
+    if event_facts:
+        payload["event_facts"] = [asdict(fact) for fact in event_facts]
     if agent_results:
         payload["agent_results"] = [asdict(agent) for agent in agent_results]
     if weekend_gold:
@@ -3445,6 +3616,24 @@ def build_macro_rate_from_payload(data: dict[str, Any] | None, fallback_label: s
         resistance=None,
         fetched_at=str(data.get("last_update", iso_now())),
         points=[PricePoint(timestamp=int(time.time()), close=price)],
+    )
+
+
+def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
+    return EventFact(
+        title=str(data.get("title", "")),
+        source=str(data.get("source", "Source inconnue")),
+        source_url=str(data.get("source_url", "")),
+        published_at=str(data.get("published_at", iso_now())),
+        category=str(data.get("category", "gold")),
+        actors=list(data.get("actors", [])),
+        locations=list(data.get("locations", [])),
+        themes=list(data.get("themes", [])),
+        confirmation_level=str(data.get("confirmation_level", "source secondaire / a confirmer")),
+        market_chain=str(data.get("market_chain", "Chaine marche indisponible.")),
+        gold_impact=str(data.get("gold_impact", "Impact gold a confirmer.")),
+        impact_bias=str(data.get("impact_bias", "mixte")),
+        confidence=int(data.get("confidence", 50) or 50),
     )
 
 
@@ -3672,6 +3861,11 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         for item in payload.get("technical_timeframes", [])
     ]
     agent_results = parse_agent_results(payload.get("agent_results", []))
+    event_facts = [
+        build_event_fact_from_payload(item)
+        for item in payload.get("event_facts", [])
+        if isinstance(item, dict)
+    ]
 
     return BriefingBundle(
         gold=gold,
@@ -3690,6 +3884,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
         agent_results=agent_results,
     )
 
@@ -3731,6 +3926,7 @@ def render_report(
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    event_facts: list[EventFact] | None = None,
     agent_results: list[AgentResult] | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
@@ -3914,6 +4110,18 @@ def render_report(
             lines.append("- Evenements du jour / a surveiller:")
             for event in geopolitical_analysis.event_watch:
                 lines.append(f"  - {clean_display_text(event)}")
+
+    if event_facts:
+        lines.extend(["", "## Event Facts"])
+        for fact in event_facts[:6]:
+            lines.append(f"- Fait detecte: {clean_display_text(fact.title)}")
+            lines.append(f"  Source: {clean_display_text(fact.source)} ({fact.confirmation_level}, confiance {fact.confidence}/100)")
+            lines.append(f"  Acteurs: {', '.join(fact.actors) or 'n/a'} | Lieux: {', '.join(fact.locations) or 'n/a'}")
+            lines.append(f"  Themes: {', '.join(fact.themes) or 'n/a'}")
+            lines.append(f"  Chaine marche: {fact.market_chain}")
+            lines.append(f"  Impact gold ({fact.impact_bias}): {fact.gold_impact}")
+            if fact.source_url:
+                lines.append(f"  Source URL: {fact.source_url}")
 
     if analysis.reasons:
         lines.append("- Facteurs dominants:")
@@ -4413,6 +4621,43 @@ def render_event_mode_panel(event_mode: EventModeAnalysis | None) -> str:
     <ul class="reason-list">{reasons}</ul>
     <div class="metric-footnote">Multiplicateur SL en regime event: x{event_mode.stop_multiplier:.1f}</div>
     """.strip()
+
+
+def render_event_facts_panel(event_facts: list[EventFact]) -> str:
+    cards: list[str] = []
+    for fact in event_facts[:6]:
+        tone_class = "bullish" if fact.impact_bias == "bullish" else "bearish" if fact.impact_bias == "bearish" else "neutral"
+        source_link = (
+            f'<a href="{html.escape(fact.source_url)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>'
+            if fact.source_url
+            else ""
+        )
+        cards.append(
+            f"""
+            <article class="headline-brief {tone_class}">
+              <div class="headline-brief-top">
+                <div class="headline-brief-source">{html.escape(fact.source)}</div>
+                <div class="headline-brief-time">{html.escape(format_timestamp_for_humans(fact.published_at))}</div>
+              </div>
+              <div class="section-kicker">Fait detecte · {html.escape(fact.confirmation_level)} · confiance {fact.confidence}/100</div>
+              <h3>{html.escape(fact.title)}</h3>
+              <p><strong>Acteurs:</strong> {html.escape(", ".join(fact.actors))}</p>
+              <p><strong>Lieux:</strong> {html.escape(", ".join(fact.locations))}</p>
+              <p><strong>Themes:</strong> {html.escape(", ".join(fact.themes))}</p>
+              <p><strong>Chaine marche:</strong> {html.escape(fact.market_chain)}</p>
+              <p><strong>Impact gold:</strong> {html.escape(fact.gold_impact)}</p>
+              {source_link}
+            </article>
+            """.strip()
+        )
+
+    if not cards:
+        return (
+            '<div class="empty-state">'
+            "Aucun fait structure detecte pour le moment. Les headlines restent disponibles dans le bloc suivant."
+            "</div>"
+        )
+    return '<div class="headline-grid">' + "".join(cards) + "</div>"
 
 
 def render_market_regime_panel(regime: MarketRegimeAnalysis | None, cross_asset: CrossAssetAnalysis | None = None) -> str:
@@ -5561,6 +5806,7 @@ def render_dashboard_clarity(
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
     market_regime = bundle.market_regime
+    event_facts = bundle.event_facts
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -5614,6 +5860,7 @@ def render_dashboard_clarity(
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
     )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
@@ -6732,6 +6979,7 @@ def render_dashboard_clarity_v2(
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
     market_regime = bundle.market_regime
+    event_facts = bundle.event_facts
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -6785,6 +7033,7 @@ def render_dashboard_clarity_v2(
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
     )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
@@ -8294,8 +8543,15 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">Event Facts</div>
+              <h2>Faits detectes, sources et chaine marche</h2>
+              <p class="footer-note">Chaque conclusion geopolitique doit pouvoir pointer vers un fait concret, une source, un niveau de confirmation et une transmission marche.</p>
+              {render_event_facts_panel(event_facts)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Headlines expliquees</div>
-              <h2>Impact probable des actualites sur l'or</h2>
+              <h2>Titres sources et impact probable sur l'or</h2>
               <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
               <div class="headline-grid">
                 {render_headline_reason_cards(bundle.news, limit=6)}
@@ -8496,6 +8752,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         market_regime=market_regime,
     )
     geopolitical_analysis = analysis.geopolitical
+    event_facts = build_event_facts(live_bundle.news)
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -8544,6 +8801,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
     )
     payload = build_payload(
         gold,
@@ -8562,6 +8820,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
         agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
@@ -8585,6 +8844,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
     live_bundle.market_regime = market_regime
+    live_bundle.event_facts = event_facts
     live_bundle.agent_results = agent_results
     return live_bundle
 
@@ -8615,6 +8875,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         market_regime=market_regime,
     )
     geopolitical_analysis = analysis.geopolitical
+    event_facts = build_event_facts(news)
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -8663,6 +8924,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
     )
     payload = build_payload(
         gold,
@@ -8681,6 +8943,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
         agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
@@ -8709,6 +8972,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
+        event_facts=event_facts,
         agent_results=agent_results,
     )
 
@@ -8743,6 +9007,7 @@ def render_artifacts(
         bundle.event_mode,
         bundle.weekend_gold,
         bundle.market_regime,
+        bundle.event_facts,
         bundle.agent_results,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
@@ -8818,6 +9083,7 @@ class DashboardLiveCache:
                 bundle.event_mode,
                 bundle.weekend_gold,
                 bundle.market_regime,
+                bundle.event_facts,
                 bundle.agent_results,
             )
             write_text_file(self.save_path, report)

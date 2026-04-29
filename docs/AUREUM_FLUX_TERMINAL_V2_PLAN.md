@@ -1,8 +1,8 @@
 # Aureum Flux Terminal 2.0 - Plan de conception et d'implementation
 
-Version du document: 1.3
-Date: 2026-04-26
-Statut: roadmap stable approuvee avant Phase 2
+Version du document: 1.4
+Date: 2026-04-29
+Statut: roadmap stable mise a jour avec gouvernance des flux et suivi des trades
 Objectif: servir de base officielle pour toutes les evolutions v2.0 du dashboard XAU/USD.
 
 ## 0. Stabilite du plan
@@ -58,6 +58,23 @@ Exemple interdit:
 Exemple attendu:
 
 > AP rapporte que les Etats-Unis cherchent a ouvrir le detroit d'Hormuz et evoquent un risque de mines iraniennes. Pourquoi ca compte: Hormuz transporte une part majeure du petrole mondial; si les assureurs et transporteurs restent prudents, le petrole peut conserver une prime de risque. Chaine marche: Hormuz tendu -> WTI/Brent en hausse -> inflation/rendements/dollar potentiellement en hausse -> gold peut etre vendu pour liquidite a court terme. Impact gold: mixte a baissier tant que oil/DXY dominent.
+
+### 2.1 Signal live vs trade plan
+
+Aureum Flux ne doit jamais confondre le signal live avec un trade plan.
+
+Le signal live represente la lecture actuelle du marche. Il peut changer avec le prix, les news, les regimes et les agents.
+
+Un trade plan est une recommandation figee dans le temps. Quand le terminal valide une opportunite exploitable, il cree un Trade Snapshot avec prix, direction, entry, SL, TP, score, agents, sources, raisons et conditions d'invalidation.
+
+Le prix live peut changer ensuite, mais le trade plan historique ne doit jamais etre ecrase par le refresh du dashboard.
+
+Objectif:
+- conserver la decision live;
+- conserver les trades generes;
+- pouvoir revenir plus tard et voir exactement quelle recommandation avait ete donnee;
+- noter si le trade est win, loss, partial, expired ou invalidated;
+- expliquer pourquoi le trade a gagne ou perdu.
 
 ## 3. Definition de Aureum Flux
 
@@ -976,6 +993,130 @@ Utiliser:
 
 La version actuelle est principalement dans `xauusd_agent.py`. La v2.0 doit progressivement separer les responsabilites.
 
+### 13.1 Gouvernance des flux inspiree Fincept
+
+A partir de la Phase 8, Aureum Flux doit s'enrichir progressivement de l'experience Fincept, mais sans copier son architecture lourde.
+
+Principes a reprendre:
+- un registre officiel des sources autorisees;
+- un tier de fiabilite par source;
+- une duree de fraicheur attendue par type de donnee;
+- une detection des sources manquantes ou stale;
+- une deduplication des news et faits;
+- une separation entre donnees brutes, faits structures, sorties agents et decision finale;
+- une capacite d'audit: savoir quelles sources et quels agents ont influence un signal.
+
+Le terminal ne doit pas donner plus de poids a une information simplement parce qu'elle est repetee par plusieurs flux. Si Reuters, CNBC et BBC parlent du meme evenement, Aureum Flux doit creer un seul `EventFact` renforce par plusieurs sources, pas trois evenements independants.
+
+Structure minimale cible:
+
+```text
+SourceRegistry
+  source_id
+  source_name
+  category
+  tier
+  url_or_method
+  refresh_policy
+  agents_allowed
+
+SourceSnapshot
+  source_id
+  fetched_at
+  freshness_seconds
+  status
+  value_used
+  error
+
+DataQualitySnapshot
+  data_quality_score
+  missing_sources
+  stale_sources
+  source_conflicts
+  last_refresh_age
+```
+
+Fraicheur recommandee:
+- prix et actifs correles: 5 a 30 secondes selon source;
+- news et declarations politiques: 1 a 5 minutes;
+- macro officielle FRED/Fed/BLS/BEA: 1 heure ou plus selon serie;
+- CFTC COT: hebdomadaire;
+- ETF flows: quotidien;
+- Event Facts critiques: refresh rapide tant que le regime est actif.
+
+### 13.2 Trade Ledger / Signal Locking
+
+Aureum Flux doit historiser les trades exploitables dans un registre append-only.
+
+Le Trade Ledger ne remplace pas le signal live. Il fige une opportunite validee par le Quality Gate.
+
+Modele cible:
+
+```text
+TradePlan
+  trade_id
+  created_at
+  status
+  direction
+  entry_type
+  reference_price
+  entry_zone_low
+  entry_zone_high
+  stop_loss
+  tp1
+  tp2
+  tp3
+  risk_reward_tp1
+  risk_reward_tp2
+  risk_reward_tp3
+  max_valid_until
+  source_signal_id
+  global_score_at_creation
+  data_quality_score
+  confidence_score
+  market_regime
+  agents_validating
+  agents_contradicting
+  evidence_sources
+  event_facts_snapshot
+  technical_snapshot
+  macro_snapshot
+  geopolitical_snapshot
+  elliott_wave_snapshot
+  invalidation_rules
+  outcome
+  outcome_reason
+  closed_at
+```
+
+Statuts:
+- `pending`;
+- `active`;
+- `tp1_hit`;
+- `tp2_hit`;
+- `tp3_hit`;
+- `sl_hit`;
+- `expired`;
+- `invalidated`;
+- `closed_manual`.
+
+Regles:
+- Aureum Flux ne cree pas un trade a chaque refresh;
+- un trade est cree uniquement si le Quality Gate valide le signal;
+- SL et TP doivent etre calculables;
+- le risk/reward minimal doit etre acceptable;
+- les sources critiques ne doivent pas etre stale;
+- aucun trade identique recent ne doit deja etre actif;
+- le cooldown initial recommande est de 60 a 120 minutes pour une meme direction et un meme regime;
+- une exception est possible si un nouveau fait Tier 1 ou une cassure technique majeure change le contexte.
+
+Utilisation Elliott Wave:
+- le trade plan sauvegarde le comptage de vagues utilise;
+- pour une vague 3 bullish, le SL de reference peut etre sous la fin de vague 2;
+- les TP peuvent utiliser les extensions de vague 1: 1.0, 1.618, 2.618;
+- pour une vague 3 bearish, la logique est inverse;
+- le scenario alternatif et le niveau d'invalidation du comptage doivent etre conserves.
+
 Structure cible possible:
 
 ```text
@@ -989,6 +1130,7 @@ sources/
   wgc.py
   news.py
   trump.py
+  registry.py
 analysis/
   technical.py
   macro.py
@@ -996,6 +1138,8 @@ analysis/
   regimes.py
   scoring.py
   event_facts.py
+  data_quality.py
+  trade_ledger.py
 dashboard/
   render.py
   templates.py
@@ -1019,7 +1163,7 @@ Regle generale:
 - avant chaque phase: verifier Git/GitHub;
 - apres chaque phase finalisee: tests adaptes, commit et push GitHub;
 - les agents passifs ne remplacent pas le moteur principal;
-- l'orchestrateur ne devient principal qu'en Phase 12 et seulement apres validation.
+- l'orchestrateur ne devient principal qu'en Phase 14 et seulement apres validation.
 
 ### Phase 0 - Audit de reprise et cadrage officiel
 
@@ -1065,7 +1209,7 @@ Critere de fin:
 
 ### Phase 2 - Vrais onglets + departements officiels
 
-Statut: prochaine phase.
+Statut: fait.
 
 Objectif:
 - remplacer la longue page par des vues dediees;
@@ -1140,7 +1284,7 @@ Critere de fin:
 
 ### Phase 3 - Revue IG Weekend Gold
 
-Statut: deja code, a revalider apres Phase 2.
+Statut: fait.
 
 Objectif:
 - verifier que IG Weekend Gold est place au bon endroit apres creation des onglets.
@@ -1161,7 +1305,7 @@ Critere de fin:
 
 ### Phase 4 - Revue WTI/Brent et regime Hormuz/Oil Shock
 
-Statut: deja code, a revalider apres Phase 2.
+Statut: fait.
 
 Objectif:
 - verifier que WTI/Brent et le regime Hormuz/Oil Shock sont places au bon endroit apres creation des onglets.
@@ -1183,7 +1327,7 @@ Critere de fin:
 
 ### Phase 5 - Fondation multi-agents passive
 
-Statut: a faire apres Phase 2, Phase 3 review et Phase 4 review.
+Statut: fait.
 
 Objectif:
 - preparer Aureum Flux Terminal a une lecture multi-agents sans remplacer le moteur actuel.
@@ -1224,6 +1368,8 @@ Critere de fin:
 
 ### Phase 6 - Ajout FRED macro officiel
 
+Statut: fait.
+
 Objectif:
 - fiabiliser taux/inflation;
 - alimenter progressivement `MacroAgent`.
@@ -1243,6 +1389,8 @@ Critere de fin:
 - les taux affiches ont une source officielle.
 
 ### Phase 7 - Event Facts
+
+Statut: fait.
 
 Objectif:
 - remplacer les phrases vagues par des faits concrets;
@@ -1264,6 +1412,8 @@ Critere de fin:
 - chaque conclusion geopolitique cite un fait et une source.
 
 ### Phase 8 - Trump / Political Statements
+
+Statut: prochaine phase.
 
 Objectif:
 - suivre les declarations politiques a fort impact;
@@ -1342,17 +1492,115 @@ Livrable:
 Critere de fin:
 - le dashboard sait dire quel evenement macro arrive et pourquoi il compte.
 
-### Phase 12 - Refonte scoring global / orchestrateur
+### Phase 12 - Data Feed Governance inspire Fincept
+
+Objectif:
+- enrichir Aureum Flux avec une gouvernance des flux d'information;
+- eviter que les agents lisent un flux non filtre;
+- mesurer la qualite, la fraicheur et la fiabilite des sources;
+- preparer le Trade Ledger et l'orchestrateur final.
+
+Actions:
+1. Creer un `SourceRegistry` leger.
+2. Classer les sources par categorie:
+   - price;
+   - macro;
+   - rates;
+   - oil;
+   - geopolitics;
+   - political_statements;
+   - flows;
+   - news;
+   - technical.
+3. Ajouter un tier de fiabilite:
+   - Tier 1: source officielle, institution, regulateur, source primaire;
+   - Tier 2: grand media financier/geopolitique fiable;
+   - Tier 3: source specialisee ou blog utile mais a verifier;
+   - Tier 4: agregateur, rumeur, source faible.
+4. Ajouter une politique de fraicheur par source.
+5. Ajouter `SourceSnapshot` pour historiser la valeur utilisee.
+6. Ajouter `DataQualitySnapshot`.
+7. Detecter sources manquantes, stale ou contradictoires.
+8. Deduplicater les news et Event Facts.
+9. Exposer data_quality_score aux agents passifs.
+10. Ajouter tests de source stale, source manquante et deduplication.
+
+Livrable:
+- registre des sources officiel;
+- score de qualite des donnees;
+- snapshots des sources utilisees;
+- deduplication minimale des faits.
+
+Critere de fin:
+- un signal ne peut pas etre considere fort si une source critique est stale ou absente;
+- chaque agent sait quelles sources il a le droit d'utiliser;
+- le dashboard peut afficher pourquoi une donnee est fiable ou faible.
+
+### Phase 13 - Trade Ledger / Signal Locking / Suivi des recommandations
+
+Objectif:
+- separer le signal live du trade plan;
+- historiser chaque recommandation exploitable;
+- figer entry, SL, TP, score, sources et raisons au moment de creation;
+- suivre le cycle de vie du trade jusqu'a TP, SL, expiration ou invalidation;
+- mesurer la performance reelle des recommandations Aureum Flux.
+
+Actions:
+1. Creer le modele `TradePlan`.
+2. Creer un stockage append-only des trades.
+3. Ajouter un Trade Snapshot au moment ou le Quality Gate valide une opportunite.
+4. Ajouter lifecycle:
+   - pending;
+   - active;
+   - tp1_hit;
+   - tp2_hit;
+   - tp3_hit;
+   - sl_hit;
+   - expired;
+   - invalidated;
+   - closed_manual.
+5. Ajouter regles de cooldown pour eviter trop de trades similaires.
+6. Ajouter expiration automatique.
+7. Ajouter evaluation outcome:
+   - win;
+   - loss;
+   - partial;
+   - expired;
+   - invalidated.
+8. Ajouter `outcome_reason`.
+9. Ajouter integration Elliott Wave:
+   - wave count;
+   - invalidation;
+   - TP extensions.
+10. Ajouter snapshots des sources et agents au moment du trade.
+11. Ajouter bloc dashboard Trade Tracker.
+12. Ajouter section Reports pour historique des trades.
+13. Ajouter tests.
+
+Livrable:
+- registre de trades historise;
+- bloc dashboard Trade Tracker;
+- evaluation win/loss/partial/expired/invalidated;
+- aucun trade plan n'est ecrase par le refresh live.
+
+Critere de fin:
+- un trade cree a 10:00 garde toujours son entry, SL, TP et raisonnement meme si le dashboard live change a 10:15;
+- le terminal peut expliquer pourquoi le trade a gagne, perdu, expire ou ete invalide;
+- les statistiques de performance commencent a etre mesurables.
+
+### Phase 14 - Refonte scoring global / orchestrateur
 
 Objectif:
 - consolider tout dans une decision plus robuste;
-- decider si l'orchestrateur multi-agents devient le moteur principal.
+- decider si l'orchestrateur multi-agents devient le moteur principal;
+- utiliser les sources gouvernees et l'historique des trades pour calibrer la decision.
 
 Actions:
 1. Comparer le scoring actuel avec les resultats des agents passifs.
 2. Verifier les contradictions frequentes.
-3. Valider ou ajuster les ponderations agents.
-4. Implementer scores separes:
+3. Comparer les anciens trades generes avec les signaux live correspondants.
+4. Valider ou ajuster les ponderations agents.
+5. Implementer scores separes:
    - technique;
    - Elliott;
    - macro;
@@ -1361,24 +1609,28 @@ Actions:
    - flows;
    - regime;
    - data quality.
-5. Ajouter ponderation.
-6. Ajouter WAIT si contradictions fortes.
-7. Ajouter raisons top 3.
-8. Ajouter raisons contre-signal top 3.
-9. Activer l'orchestrateur comme moteur principal uniquement apres validation utilisateur.
+6. Ajouter ponderation.
+7. Ajouter WAIT si contradictions fortes.
+8. Ajouter raisons top 3.
+9. Ajouter raisons contre-signal top 3.
+10. Ajouter Quality Gate final avant creation d'un trade.
+11. Activer l'orchestrateur comme moteur principal uniquement apres validation utilisateur.
 
 Livrable:
 - score global v2.0;
-- orchestrateur multi-agents actif seulement si valide.
+- orchestrateur multi-agents actif seulement si valide;
+- decision BUY/SELL/WAIT reliee au Trade Ledger.
 
 Critere de fin:
 - le verdict explique ses preuves et ses contradictions;
-- l'ancien moteur peut encore servir de comparaison ou fallback.
+- l'ancien moteur peut encore servir de comparaison ou fallback;
+- le terminal ne cree pas un trade si le Quality Gate refuse le signal.
 
-### Phase 13 - Design Aureum Flux Terminal 2.0
+### Phase 15 - Design Aureum Flux Terminal 2.0
 
 Objectif:
-- appliquer le design terminal institutionnel multi-vues.
+- appliquer le design terminal institutionnel multi-vues;
+- integrer visuellement le Trade Tracker, la qualite des sources et les statuts agents.
 
 Actions:
 1. Refaire layout global.
@@ -1387,7 +1639,14 @@ Actions:
 4. Ajouter cartes compactes.
 5. Ajouter indicateurs visuels de regime.
 6. Ajouter tags de source/confiance.
-7. Verifier desktop/mobile.
+7. Ajouter bloc Trade Tracker.
+8. Ajouter etats visuels:
+   - live signal;
+   - trade locked;
+   - source stale;
+   - contradiction active;
+   - WAIT force.
+9. Verifier desktop/mobile.
 
 Livrable:
 - interface v2.0.
@@ -1395,12 +1654,14 @@ Livrable:
 Critere de fin:
 - design coherent avec les references Stitch;
 - pas de texte qui deborde;
-- onglets fonctionnels.
+- onglets fonctionnels;
+- les trades historises sont visibles sans confondre avec le signal live.
 
-### Phase 14 - Tests, validation et monitoring
+### Phase 16 - Monitoring / Audit / Inspector
 
 Objectif:
-- eviter de casser le dashboard.
+- rendre le terminal auditable;
+- verifier que les sources, agents et trades fonctionnent correctement.
 
 Actions:
 1. Tests unitaires existants.
@@ -1409,17 +1670,31 @@ Actions:
 4. Tests scoring regimes.
 5. Tests dashboard HTML.
 6. Test navigateur local.
+7. Ajouter vue ou bloc Inspector:
+   - sources actives;
+   - dernier refresh;
+   - erreurs source;
+   - sources stale;
+   - agents actifs;
+   - sorties agents recentes;
+   - trades crees;
+   - outcome des trades;
+   - data_quality_score.
+8. Ajouter logs exploitables pour les decisions et trades.
 
 Livrable:
-- verification complete.
+- verification complete;
+- inspector de flux/sources/trades;
+- monitoring minimal.
 
 Critere de fin:
 - tests OK;
 - dashboard charge;
 - chaque onglet fonctionne;
-- pas d'erreur console critique.
+- pas d'erreur console critique;
+- l'utilisateur peut auditer pourquoi une decision ou un trade existe.
 
-### Phase 15 - Documentation utilisateur
+### Phase 17 - Documentation utilisateur
 
 Objectif:
 - rendre le projet exploitable facilement.
@@ -1428,15 +1703,18 @@ Actions:
 1. Mettre a jour README.
 2. Documenter sources.
 3. Documenter scoring.
-4. Documenter launcher Mac.
-5. Documenter limites.
-6. Documenter avertissement financier.
+4. Documenter Trade Ledger.
+5. Documenter Signal Live vs Trade Plan.
+6. Documenter launcher Mac.
+7. Documenter limites.
+8. Documenter avertissement financier.
 
 Livrable:
 - documentation propre.
 
 Critere de fin:
-- un utilisateur peut lancer et comprendre le dashboard.
+- un utilisateur peut lancer et comprendre le dashboard;
+- un utilisateur comprend qu'un trade historise n'est pas modifie retroactivement par le prix live.
 
 ## 15. Ordre recommande de livraison
 
@@ -1454,15 +1732,18 @@ Ordre prioritaire:
 10. Ajouter Phase 9 - CFTC COT officiel.
 11. Ajouter Phase 10 - ETF flows officiels.
 12. Ajouter Phase 11 - Calendrier economique et Fed.
-13. Lancer Phase 12 - Refonte scoring global / orchestrateur.
-14. Finaliser Phase 13 - Design Aureum Flux Terminal 2.0.
-15. Faire Phase 14 - Tests, validation et monitoring.
-16. Faire Phase 15 - Documentation utilisateur.
+13. Ajouter Phase 12 - Data Feed Governance inspire Fincept.
+14. Ajouter Phase 13 - Trade Ledger / Signal Locking.
+15. Lancer Phase 14 - Refonte scoring global / orchestrateur.
+16. Finaliser Phase 15 - Design Aureum Flux Terminal 2.0.
+17. Faire Phase 16 - Monitoring / Audit / Inspector.
+18. Faire Phase 17 - Documentation utilisateur.
 
 Point de reprise officiel:
 - Phase 0: faite;
 - Phase 1: faite;
-- prochaine phase a lancer uniquement apres validation utilisateur: Phase 2.
+- Phases 2 a 7: finalisees et synchronisees;
+- prochaine phase a lancer uniquement apres validation utilisateur: Phase 8.
 
 ## 16. Regles de prudence
 
@@ -1470,6 +1751,8 @@ Le dashboard ne doit jamais:
 - inventer une news;
 - presenter une rumeur comme fait;
 - dire qu'un trade est garanti;
+- modifier retroactivement un trade plan deja cree;
+- confondre le signal live avec un trade historise;
 - confondre spot officiel et proxy week-end;
 - dire automatiquement "geopolitique = gold bullish";
 - ignorer le regime Hormuz/Oil Shock;
@@ -1480,6 +1763,8 @@ Le dashboard doit toujours:
 - afficher le niveau de confiance;
 - expliquer le pourquoi concret;
 - montrer les contradictions;
+- historiser les trades exploitables;
+- figer entry, SL et TP dans le Trade Ledger;
 - preferer WAIT quand les signaux sont incoherents;
 - indiquer qu'il ne s'agit pas d'un conseil financier personnalise.
 
@@ -1501,6 +1786,11 @@ La v2.0 est terminee quand:
 - Event Facts remplace les phrases vagues;
 - Hormuz/Oil Shock change reellement le scoring;
 - les agents passifs sont visibles avant activation de l'orchestrateur;
+- les sources sont gouvernees par tier, fraicheur et qualite;
+- les trades exploitables sont historises;
+- les SL/TP des trades historises ne changent pas retroactivement;
+- le terminal sait expliquer pourquoi une recommandation precedente a gagne, perdu, expire ou ete invalidee;
+- un inspector permet d'auditer sources, agents et trades;
 - les tests passent;
 - les sources sont documentees.
 
@@ -1511,6 +1801,9 @@ Avant implementation, l'utilisateur doit valider:
 - noms exacts des onglets;
 - priorite des sources;
 - poids du scoring;
+- regles de creation d'un trade;
+- duree de cooldown entre trades similaires;
+- niveaux de risk/reward minimum;
 - place de Trump/White House;
 - affichage du prix week-end IG;
 - formulation des alertes;
@@ -1527,19 +1820,23 @@ Commencer par les fondations les plus utiles:
 2. Phase 3 - revue IG Weekend Gold;
 3. Phase 4 - revue WTI/Brent + regime Hormuz/Oil Shock;
 4. Phase 5 - fondation multi-agents passive;
-5. Phase 6 et suivantes - nouvelles sources officielles.
+5. Phase 6 a 11 - nouvelles sources officielles et Event Facts;
+6. Phase 12 - gouvernance des flux inspiree Fincept;
+7. Phase 13 - Trade Ledger / Signal Locking;
+8. Phase 14 - orchestrateur et scoring global final.
 
-Decision Phase 2:
-- GO pour Phase 2;
-- condition obligatoire: traiter d'abord la persistance de l'onglet actif pendant le refresh live;
-- Phase 2 doit rester un changement UI controle, pas un redesign final ni un refactor backend massif;
-- le bandeau global et le maintien de l'onglet actif sont des criteres bloquants.
+Decision a partir de la Phase 8:
+- continuer dans l'ordre officiel sans relancer les phases finalisees;
+- enrichir les sources et les agents progressivement;
+- introduire la gouvernance des flux avant le Trade Ledger;
+- introduire le Trade Ledger avant l'orchestrateur final;
+- ne pas activer l'orchestrateur comme moteur principal avant validation utilisateur.
 
-Ces cinq elements corrigent les plus gros problemes actuels:
-- dashboard encore trop monopage;
-- prix week-end absent;
-- politique trop vague;
-- geopolitique trop generalisee;
-- manque de faits concrets.
+Ces elements corrigent les plus gros problemes restants:
+- politique et declarations Trump encore trop peu structurees;
+- sources nombreuses mais pas encore gouvernees par qualite/fraicheur;
+- recommandations live qui peuvent changer avec le prix;
+- absence d'historique win/loss/expired/invalidated;
+- besoin d'un audit clair des sources, agents et trades.
 
-Une fois ces bases solides, ajouter COT, ETF flows, FedWatch et refonte scoring globale.
+Une fois ces bases solides, le terminal peut passer a l'orchestrateur final et a la decision BUY/SELL/WAIT plus robuste.

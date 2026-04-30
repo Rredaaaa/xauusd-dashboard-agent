@@ -32,6 +32,7 @@ HEADERS = {
 INVESTING_XAUUSD_URL = "https://www.investing.com/currencies/xau-usd"
 INVESTING_XAUUSD_HISTORICAL_URL = "https://www.investing.com/currencies/xau-usd-historical-data"
 IG_WEEKEND_GOLD_URL = "https://www.ig.com/en/indices/markets-indices/weekend-gold"
+WHITE_HOUSE_NEWS_FEED_URL = "https://www.whitehouse.gov/news/feed/"
 
 NEWS_QUERIES = [
     ("gold", '"gold news today" OR XAUUSD when:2d'),
@@ -46,6 +47,17 @@ NEWS_QUERIES = [
     ("events_fomc", '"FOMC minutes speech today" gold when:7d'),
     ("risk_vix", '"VIX fear greed index today" OR "VIX today" gold when:2d'),
     ("physical_demand", '(China gold demand OR India gold demand OR "central bank gold buying") when:30d'),
+]
+
+POLITICAL_STATEMENT_QUERIES = [
+    ("political_trump_iran", '(Trump Iran OR "White House" Iran OR Trump Hormuz OR "Strait of Hormuz") oil gold when:7d'),
+    ("political_trump_fed", '(Trump Fed OR Trump Powell OR "White House" Federal Reserve) dollar gold rates when:14d'),
+    ("political_trump_dollar", '(Trump dollar OR Trump tariffs OR Trump sanctions) gold oil USD when:14d'),
+    ("political_confirmed_wire", '(Trump Iran oil gold OR Trump Fed dollar gold) (site:apnews.com OR site:reuters.com) when:14d'),
+]
+
+POLITICAL_RSS_FEEDS = [
+    ("political_white_house", WHITE_HOUSE_NEWS_FEED_URL),
 ]
 
 FALLBACK_RSS_FEEDS = [
@@ -322,6 +334,23 @@ class EventFact:
 
 
 @dataclass
+class PoliticalStatement:
+    title: str
+    source: str
+    source_url: str
+    published_at: str
+    theme: str
+    validation_level: str
+    source_tier: int
+    gold_impact: str
+    oil_impact: str
+    usd_impact: str
+    market_chain: str
+    score: int
+    confidence: int
+
+
+@dataclass
 class AnalysisResult:
     bias: str
     score: int
@@ -454,6 +483,7 @@ class BriefingBundle:
     weekend_gold: WeekendGoldSnapshot | None = None
     market_regime: MarketRegimeAnalysis | None = None
     event_facts: list[EventFact] = field(default_factory=list)
+    political_statements: list[PoliticalStatement] = field(default_factory=list)
     agent_results: list[AgentResult] = field(default_factory=list)
 
 
@@ -1714,6 +1744,68 @@ def fetch_news(top_n: int) -> list[NewsItem]:
     return items[:result_limit]
 
 
+def merge_news_items(primary: list[NewsItem], extra: list[NewsItem], limit: int) -> list[NewsItem]:
+    merged: list[NewsItem] = []
+    seen: set[str] = set()
+    for item in primary + extra:
+        key = normalize_title_for_dedupe(item.title)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    merged.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
+    return merged[:limit]
+
+
+def political_source_tier(item: NewsItem) -> int:
+    source = item.source.lower()
+    link = item.link.lower()
+    if "whitehouse.gov" in link or "white house" in source:
+        return 1
+    if any(token in source for token in ("reuters", "associated press", "ap news", "bloomberg")):
+        return 2
+    if any(token in source for token in ("cnbc", "marketwatch", "wsj", "bbc", "france 24", "al jazeera")):
+        return 3
+    return 4
+
+
+def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
+    items: list[NewsItem] = []
+    seen_titles: set[str] = set()
+    result_limit = max(limit, 12)
+    deadline = time.time() + 12
+
+    for category, url in POLITICAL_RSS_FEEDS:
+        if time.time() >= deadline:
+            break
+        try:
+            root = ET.fromstring(http_get_text(url))
+        except Exception:
+            continue
+        append_rss_items(root, category, items, seen_titles, result_limit)
+        items = keep_political_statement_candidates(items)
+        seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
+
+    for category, query in POLITICAL_STATEMENT_QUERIES:
+        if time.time() >= deadline or len(items) >= result_limit:
+            break
+        encoded_query = urllib.parse.quote(query, safe='()":')
+        url = (
+            "https://news.google.com/rss/search"
+            f"?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
+        )
+        try:
+            root = ET.fromstring(http_get_text(url))
+        except Exception:
+            continue
+        append_rss_items(root, category, items, seen_titles, result_limit)
+        items = keep_political_statement_candidates(items)
+        seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
+
+    items.sort(key=lambda item: (-political_source_tier(item), abs(item.score), item.published_at), reverse=True)
+    return items[:result_limit]
+
+
 def build_market_reasons(gold: SymbolSnapshot, dxy: SymbolSnapshot, us10y: SymbolSnapshot) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
@@ -2342,6 +2434,7 @@ def build_passive_agent_results(
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     event_facts: list[EventFact] | None = None,
+    political_statements: list[PoliticalStatement] | None = None,
 ) -> list[AgentResult]:
     readings = technical_timeframes or []
     agents: list[AgentResult] = []
@@ -2501,21 +2594,52 @@ def build_passive_agent_results(
         )
     )
 
+    political_items = political_statements or []
     trump_news = [item for item in news if text_contains_any(item.title, ("trump", "white house", "president", "tariff", "sanction"))]
+    primary_statement = political_items[0] if political_items else None
+    political_score = (
+        clamp_score(50 + (primary_statement.score * 8) + (primary_statement.confidence - 50) / 4)
+        if primary_statement
+        else 50
+    )
     agents.append(
         AgentResult(
             name="TrumpPoliticalStatementsAgent",
             department="Geopolitics & Flows",
-            bias="CAUTION" if trump_news else "NEUTRAL",
-            score=65 if trump_news else 50,
-            confidence=45 if trump_news else 30,
+            bias="CAUTION" if political_items or trump_news else "NEUTRAL",
+            score=political_score,
+            confidence=primary_statement.confidence if primary_statement else 45 if trump_news else 30,
             summary=(
-                "Declaration politique detectee dans les headlines; impact a confirmer par source primaire."
+                f"Declaration politique sourcee detectee: {primary_statement.theme} ({primary_statement.validation_level})."
+                if primary_statement
+                else "Declaration politique detectee dans les headlines; impact a confirmer par source primaire."
                 if trump_news
                 else "Aucune declaration Trump/politique exploitable detectee dans les donnees actuelles."
             ),
-            evidence=[AgentEvidence("Titres politiques", top_news_titles(trump_news, limit=2), "Headlines actuelles")],
-            risks=[AgentRisk("Source primaire", "Le module officiel declarations politiques arrive en Phase 8.", "medium")],
+            evidence=[
+                AgentEvidence(
+                    "Declaration principale",
+                    primary_statement.title if primary_statement else top_news_titles(trump_news, limit=2),
+                    primary_statement.source if primary_statement else "Headlines actuelles",
+                ),
+                AgentEvidence(
+                    "Validation",
+                    primary_statement.validation_level if primary_statement else "a confirmer",
+                    f"Tier {primary_statement.source_tier}" if primary_statement else "Phase 8",
+                ),
+                AgentEvidence(
+                    "Chaine marche",
+                    primary_statement.market_chain if primary_statement else "impact politique a confirmer par source primaire",
+                    "PoliticalStatements",
+                ),
+            ],
+            risks=[
+                AgentRisk(
+                    "Anti-rumeur",
+                    "Une declaration politique ne score fortement que si elle est officielle ou confirmee par source fiable.",
+                    "high",
+                )
+            ],
         )
     )
 
@@ -3165,6 +3289,48 @@ FACT_THEME_KEYWORDS = {
     "Volatility": ("vix", "gvz", "fear", "volatility", "risk aversion"),
 }
 
+POLITICAL_THEME_KEYWORDS = {
+    "Iran / Hormuz / Oil": ("iran", "hormuz", "oil", "crude", "shipping", "sanction", "missile", "gulf"),
+    "Fed / Rates": ("fed", "powell", "rate", "fomc", "interest", "central bank"),
+    "Dollar / Liquidity": ("dollar", "usd", "liquidity", "treasury"),
+    "Tariffs / Trade": ("tariff", "china", "trade", "import", "export"),
+    "Official White House": ("white house", "president trump", "presidential", "statement", "remarks"),
+}
+
+
+def is_political_statement_candidate(item: NewsItem) -> bool:
+    text = f"{item.title} {item.source} {item.category}".lower()
+    actor_match = text_contains_any(
+        text,
+        ("trump", "white house", "president trump", "administration", "treasury", "state department"),
+    )
+    market_trigger = text_contains_any(
+        text,
+        (
+            "iran",
+            "hormuz",
+            "oil",
+            "crude",
+            "fed",
+            "powell",
+            "fomc",
+            "rate",
+            "dollar",
+            "usd",
+            "tariff",
+            "sanction",
+            "trade",
+            "china",
+            "treasury",
+            "yield",
+        ),
+    )
+    return actor_match and market_trigger
+
+
+def keep_political_statement_candidates(items: list[NewsItem]) -> list[NewsItem]:
+    return [item for item in items if is_political_statement_candidate(item)]
+
 
 def detect_fact_labels(text: str, mapping: dict[str, tuple[str, ...]]) -> list[str]:
     normalized = normalize_title_for_dedupe(text)
@@ -3184,6 +3350,136 @@ def classify_confirmation_level(item: NewsItem) -> tuple[str, int]:
     if any(token in title for token in ("report", "data", "minutes", "statement")):
         return "headline a confirmer", 62
     return "source secondaire / a confirmer", 55
+
+
+def classify_political_theme(item: NewsItem) -> str:
+    text = f"{item.title} {item.source}".lower()
+    for theme, keywords in POLITICAL_THEME_KEYWORDS.items():
+        if text_contains_any(text, keywords):
+            return theme
+    return "Political context"
+
+
+def classify_political_validation(item: NewsItem) -> tuple[str, int, int]:
+    tier = political_source_tier(item)
+    if tier == 1:
+        return "official_confirmed", 1, 92
+    if tier == 2:
+        return "confirmed_secondary", 2, 82
+    if tier == 3:
+        return "market_media", 3, 68
+    return "unconfirmed_headline", 4, 48
+
+
+def build_political_market_chain(theme: str) -> str:
+    if theme == "Iran / Hormuz / Oil":
+        return (
+            "Declaration politique -> risque Iran/Hormuz/oil -> WTI/Brent peuvent integrer une prime -> "
+            "inflation, rendements et dollar peuvent monter -> gold devient mixte: refuge possible, pression liquidite possible."
+        )
+    if theme == "Fed / Rates":
+        return (
+            "Declaration politique -> attentes Fed/taux -> rendements reels et DXY bougent -> "
+            "gold reagit via cout d'opportunite et credibilite de politique monetaire."
+        )
+    if theme == "Dollar / Liquidity":
+        return (
+            "Declaration politique -> lecture dollar/liquidite -> DXY peut attirer les capitaux defensifs -> "
+            "gold peut etre freine meme en environnement de risque."
+        )
+    if theme == "Tariffs / Trade":
+        return (
+            "Declaration politique -> risque tarifs/inflation/croissance -> marche reprice dollar, taux et risque -> "
+            "gold depend de l'equilibre inflation refuge contre dollar fort."
+        )
+    return (
+        "Declaration politique -> contexte de risque mis a jour -> impact gold a confirmer par oil, DXY, taux et prix spot."
+    )
+
+
+def political_impacts(theme: str, item: NewsItem) -> tuple[str, str, str, int]:
+    text = item.title.lower()
+    if theme == "Iran / Hormuz / Oil":
+        if text_contains_any(text, ("ceasefire", "peace", "talks", "deal", "de-escalation")):
+            return (
+                "baisse possible de la prime refuge si desescalade confirmee.",
+                "baissier/moderateur si risque Hormuz recule.",
+                "neutre a baissier si demande de liquidite dollar recule.",
+                -1,
+            )
+        return (
+            "mixte: soutien refuge possible, mais pression possible si oil/USD captent la liquidite.",
+            "haussier si sanctions, menaces ou risque maritime augmentent.",
+            "haussier possible si le marche cherche du cash dollar.",
+            -1,
+        )
+    if theme == "Fed / Rates":
+        if text_contains_any(text, ("cut", "lower", "pressure", "fire powell", "replace powell")):
+            return (
+                "haussier si le marche price des taux plus bas ou une Fed moins restrictive.",
+                "neutre sauf impact inflation/risque.",
+                "baissier possible si les taux attendus reculent.",
+                1,
+            )
+        return (
+            "mixte: depend de la reaction des rendements reels.",
+            "neutre.",
+            "a confirmer par DXY et taux.",
+            0,
+        )
+    if theme == "Dollar / Liquidity":
+        return (
+            "souvent baissier si la declaration renforce le dollar ou la demande de liquidite USD.",
+            "neutre.",
+            "haussier pour USD si message pro-dollar ou risk-off.",
+            -1,
+        )
+    if theme == "Tariffs / Trade":
+        return (
+            "mixte: inflation/refuge bullish, dollar/taux potentiellement bearish.",
+            "legerement haussier si tarifs touchent energie/logistique.",
+            "haussier possible si risque commercial soutient le dollar.",
+            0,
+        )
+    return ("impact gold a confirmer.", "impact oil a confirmer.", "impact USD a confirmer.", 0)
+
+
+def build_political_statement_from_news(item: NewsItem) -> PoliticalStatement:
+    theme = classify_political_theme(item)
+    validation_level, source_tier, base_confidence = classify_political_validation(item)
+    gold_impact, oil_impact, usd_impact, score = political_impacts(theme, item)
+    if item.score:
+        score += 1 if item.score > 0 else -1
+    return PoliticalStatement(
+        title=clean_display_text(item.title),
+        source=clean_display_text(item.source),
+        source_url=item.link,
+        published_at=item.published_at,
+        theme=theme,
+        validation_level=validation_level,
+        source_tier=source_tier,
+        gold_impact=gold_impact,
+        oil_impact=oil_impact,
+        usd_impact=usd_impact,
+        market_chain=build_political_market_chain(theme),
+        score=int(clamp(score, -3, 3)),
+        confidence=round(clamp(base_confidence + min(abs(item.score) * 3, 6), 35, 95)),
+    )
+
+
+def build_political_statements(news: list[NewsItem], limit: int = 5) -> list[PoliticalStatement]:
+    statements: list[PoliticalStatement] = []
+    seen: set[str] = set()
+    for item in news:
+        if not is_political_statement_candidate(item):
+            continue
+        key = normalize_title_for_dedupe(item.title)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        statements.append(build_political_statement_from_news(item))
+    statements.sort(key=lambda item: (item.source_tier * -1, item.confidence, abs(item.score), item.published_at), reverse=True)
+    return statements[:limit]
 
 
 def build_event_market_chain(themes: list[str], item: NewsItem) -> str:
@@ -3440,6 +3736,7 @@ def build_payload(
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     event_facts: list[EventFact] | None = None,
+    political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
 ) -> dict[str, Any]:
     payload = {
@@ -3552,6 +3849,8 @@ def build_payload(
         payload["market_regime"] = asdict(market_regime)
     if event_facts:
         payload["event_facts"] = [asdict(fact) for fact in event_facts]
+    if political_statements:
+        payload["political_statements"] = [asdict(statement) for statement in political_statements]
     if agent_results:
         payload["agent_results"] = [asdict(agent) for agent in agent_results]
     if weekend_gold:
@@ -3633,6 +3932,24 @@ def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
         market_chain=str(data.get("market_chain", "Chaine marche indisponible.")),
         gold_impact=str(data.get("gold_impact", "Impact gold a confirmer.")),
         impact_bias=str(data.get("impact_bias", "mixte")),
+        confidence=int(data.get("confidence", 50) or 50),
+    )
+
+
+def build_political_statement_from_payload(data: dict[str, Any]) -> PoliticalStatement:
+    return PoliticalStatement(
+        title=str(data.get("title", "")),
+        source=str(data.get("source", "Source inconnue")),
+        source_url=str(data.get("source_url", "")),
+        published_at=str(data.get("published_at", iso_now())),
+        theme=str(data.get("theme", "Political context")),
+        validation_level=str(data.get("validation_level", "unconfirmed_headline")),
+        source_tier=int(data.get("source_tier", 4) or 4),
+        gold_impact=str(data.get("gold_impact", "Impact gold a confirmer.")),
+        oil_impact=str(data.get("oil_impact", "Impact oil a confirmer.")),
+        usd_impact=str(data.get("usd_impact", "Impact USD a confirmer.")),
+        market_chain=str(data.get("market_chain", "Chaine marche indisponible.")),
+        score=int(data.get("score", 0) or 0),
         confidence=int(data.get("confidence", 50) or 50),
     )
 
@@ -3866,6 +4183,11 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         for item in payload.get("event_facts", [])
         if isinstance(item, dict)
     ]
+    political_statements = [
+        build_political_statement_from_payload(item)
+        for item in payload.get("political_statements", [])
+        if isinstance(item, dict)
+    ]
 
     return BriefingBundle(
         gold=gold,
@@ -3885,6 +4207,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
         agent_results=agent_results,
     )
 
@@ -3927,6 +4250,7 @@ def render_report(
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     event_facts: list[EventFact] | None = None,
+    political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
@@ -4122,6 +4446,22 @@ def render_report(
             lines.append(f"  Impact gold ({fact.impact_bias}): {fact.gold_impact}")
             if fact.source_url:
                 lines.append(f"  Source URL: {fact.source_url}")
+
+    if political_statements:
+        lines.extend(["", "## Trump / White House Political Statements"])
+        for statement in political_statements[:5]:
+            lines.append(f"- Declaration: {clean_display_text(statement.title)}")
+            lines.append(
+                f"  Source: {clean_display_text(statement.source)} "
+                f"(tier {statement.source_tier}, {statement.validation_level}, confiance {statement.confidence}/100)"
+            )
+            lines.append(f"  Theme: {statement.theme}")
+            lines.append(f"  Chaine marche: {statement.market_chain}")
+            lines.append(f"  Impact gold: {statement.gold_impact}")
+            lines.append(f"  Impact oil: {statement.oil_impact}")
+            lines.append(f"  Impact USD: {statement.usd_impact}")
+            if statement.source_url:
+                lines.append(f"  Source URL: {statement.source_url}")
 
     if analysis.reasons:
         lines.append("- Facteurs dominants:")
@@ -4655,6 +4995,43 @@ def render_event_facts_panel(event_facts: list[EventFact]) -> str:
         return (
             '<div class="empty-state">'
             "Aucun fait structure detecte pour le moment. Les headlines restent disponibles dans le bloc suivant."
+            "</div>"
+        )
+    return '<div class="headline-grid">' + "".join(cards) + "</div>"
+
+
+def render_political_statements_panel(statements: list[PoliticalStatement]) -> str:
+    cards: list[str] = []
+    for statement in statements[:5]:
+        tone_class = "bullish" if statement.score > 0 else "bearish" if statement.score < 0 else "neutral"
+        source_link = (
+            f'<a href="{html.escape(statement.source_url)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>'
+            if statement.source_url
+            else ""
+        )
+        cards.append(
+            f"""
+            <article class="headline-brief {tone_class}">
+              <div class="headline-brief-top">
+                <div class="headline-brief-source">{html.escape(statement.source)}</div>
+                <div class="headline-brief-time">{html.escape(format_timestamp_for_humans(statement.published_at))}</div>
+              </div>
+              <div class="section-kicker">{html.escape(statement.theme)} · tier {statement.source_tier} · {html.escape(statement.validation_level)} · confiance {statement.confidence}/100</div>
+              <h3>{html.escape(statement.title)}</h3>
+              <p><strong>Chaine marche:</strong> {html.escape(statement.market_chain)}</p>
+              <p><strong>Impact gold:</strong> {html.escape(statement.gold_impact)}</p>
+              <p><strong>Impact oil:</strong> {html.escape(statement.oil_impact)}</p>
+              <p><strong>Impact USD:</strong> {html.escape(statement.usd_impact)}</p>
+              {source_link}
+            </article>
+            """.strip()
+        )
+
+    if not cards:
+        return (
+            '<div class="empty-state">'
+            "Aucune declaration politique sourcee detectee pour le moment. "
+            "L'agent reste en veille anti-rumeur."
             "</div>"
         )
     return '<div class="headline-grid">' + "".join(cards) + "</div>"
@@ -5807,6 +6184,7 @@ def render_dashboard_clarity(
     weekend_gold = bundle.weekend_gold
     market_regime = bundle.market_regime
     event_facts = bundle.event_facts
+    political_statements = bundle.political_statements
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -5861,6 +6239,7 @@ def render_dashboard_clarity(
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
     )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
@@ -6980,6 +7359,7 @@ def render_dashboard_clarity_v2(
     weekend_gold = bundle.weekend_gold
     market_regime = bundle.market_regime
     event_facts = bundle.event_facts
+    political_statements = bundle.political_statements
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -7034,6 +7414,7 @@ def render_dashboard_clarity_v2(
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
     )
     executive_summary = bundle.executive_summary or build_executive_summary(fundamental, technical, geopolitical_analysis)
 
@@ -8550,6 +8931,13 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">Trump / White House</div>
+              <h2>Declarations politiques sourcees</h2>
+              <p class="footer-note">L'agent separe source officielle, agence fiable et rumeur. Une declaration politique ne devient importante que si sa source et sa chaine marche sont explicites.</p>
+              {render_political_statements_panel(political_statements)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Headlines expliquees</div>
               <h2>Titres sources et impact probable sur l'or</h2>
               <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
@@ -8753,6 +9141,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(live_bundle.news)
+    political_statements = live_bundle.political_statements
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -8802,6 +9191,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
     )
     payload = build_payload(
         gold,
@@ -8821,6 +9211,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
         agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
@@ -8845,6 +9236,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.weekend_gold = weekend_gold
     live_bundle.market_regime = market_regime
     live_bundle.event_facts = event_facts
+    live_bundle.political_statements = political_statements
     live_bundle.agent_results = agent_results
     return live_bundle
 
@@ -8855,6 +9247,8 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
     news = fetch_news(top_news)
+    political_news = fetch_political_statement_news(limit=max(8, top_news))
+    news = merge_news_items(news, political_news, max(top_news, 24))
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
     real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
@@ -8876,6 +9270,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(news)
+    political_statements = build_political_statements(news)
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -8925,6 +9320,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
     )
     payload = build_payload(
         gold,
@@ -8944,6 +9340,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
         agent_results=agent_results,
     )
     payload["executive_summary"] = executive_summary
@@ -8973,6 +9370,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
+        political_statements=political_statements,
         agent_results=agent_results,
     )
 
@@ -9008,6 +9406,7 @@ def render_artifacts(
         bundle.weekend_gold,
         bundle.market_regime,
         bundle.event_facts,
+        bundle.political_statements,
         bundle.agent_results,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
@@ -9084,6 +9483,7 @@ class DashboardLiveCache:
                 bundle.weekend_gold,
                 bundle.market_regime,
                 bundle.event_facts,
+                bundle.political_statements,
                 bundle.agent_results,
             )
             write_text_file(self.save_path, report)

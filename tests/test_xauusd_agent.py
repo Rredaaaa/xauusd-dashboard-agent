@@ -9,6 +9,7 @@ from xauusd_agent import (
     MarketRegimeAnalysis,
     NewsItem,
     OfficialMacroRates,
+    PoliticalStatement,
     PricePoint,
     SymbolSnapshot,
     TechnicalReading,
@@ -19,6 +20,7 @@ from xauusd_agent import (
     build_event_mode_analysis,
     build_official_macro_rates,
     build_event_facts,
+    build_political_statements,
     classify_bias,
     build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
@@ -344,6 +346,23 @@ class AnalysisShapeTests(unittest.TestCase):
                     confidence=82,
                 )
             ],
+            political_statements=[
+                PoliticalStatement(
+                    title="President Trump says Iran sanctions remain on the table",
+                    source="White House",
+                    source_url="https://www.whitehouse.gov/news/",
+                    published_at="2026-04-24T00:00:00+00:00",
+                    theme="Iran / Hormuz / Oil",
+                    validation_level="official_confirmed",
+                    source_tier=1,
+                    gold_impact="mixte: risque refuge, mais oil/dollar peuvent aspirer la liquidite.",
+                    oil_impact="haussier si le marche price un risque sur offre/logistique.",
+                    usd_impact="haussier possible si demande de liquidite USD.",
+                    market_chain="Declaration politique -> Iran/Hormuz/sanctions -> oil et USD peuvent capter la liquidite -> gold devient mixte.",
+                    score=-1,
+                    confidence=90,
+                )
+            ],
             market_regime=MarketRegimeAnalysis(
                 name="Hormuz / Oil Shock",
                 status="ACTIF",
@@ -385,6 +404,10 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
         self.assertIn("agence/finance majeure", dashboard)
+        self.assertIn("Trump / White House", dashboard)
+        self.assertIn("Declarations politiques sourcees", dashboard)
+        self.assertIn("President Trump says Iran sanctions remain on the table", dashboard)
+        self.assertIn("official_confirmed", dashboard)
         self.assertIn("Lecture geo test.", dashboard)
         self.assertIn('data-tab-target="dashboard"', dashboard)
         self.assertIn('data-tab-target="market"', dashboard)
@@ -476,6 +499,99 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Oil shock", facts[0].themes)
         self.assertEqual(facts[0].confirmation_level, "agence/finance majeure")
         self.assertIn("WTI/Brent", facts[0].market_chain)
+
+    def test_political_statements_prioritize_official_sources(self) -> None:
+        items = [
+            NewsItem(
+                title="President Trump and the First Lady welcome foreign dignitaries for a state dinner",
+                source="News - The White House",
+                link="https://www.whitehouse.gov/news/state-dinner",
+                published_at="2026-04-24T00:02:00+00:00",
+                category="political_white_house",
+                score=0,
+                score_reasons=[],
+            ),
+            NewsItem(
+                title="President Trump says Iran oil sanctions remain possible",
+                source="White House",
+                link="https://www.whitehouse.gov/news/example",
+                published_at="2026-04-24T00:00:00+00:00",
+                category="political_white_house",
+                score=-1,
+                score_reasons=["bearish:strong dollar"],
+            ),
+            NewsItem(
+                title="Blog claims Trump may comment on gold soon",
+                source="Example Blog",
+                link="https://example.com/blog",
+                published_at="2026-04-24T00:01:00+00:00",
+                category="political_trump_iran",
+                score=1,
+                score_reasons=["bullish:geopolitical risk"],
+            ),
+        ]
+        statements = build_political_statements(items)
+        self.assertEqual(statements[0].source_tier, 1)
+        self.assertEqual(statements[0].validation_level, "official_confirmed")
+        self.assertIn("Iran / Hormuz / Oil", statements[0].theme)
+        self.assertIn("WTI/Brent", statements[0].market_chain)
+
+    def test_trump_agent_uses_structured_political_statement(self) -> None:
+        points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]
+        gold = SymbolSnapshot(
+            symbol="XAU/USD",
+            label="XAU/USD Spot",
+            price=114.0,
+            previous_close=112.0,
+            change_abs=2.0,
+            change_pct=1.79,
+            period_change_pct=1.79,
+            day_high=115.0,
+            day_low=111.0,
+            support=111.0,
+            resistance=115.0,
+            fetched_at="2026-04-24T00:00:00+00:00",
+            points=points,
+            intraday_points=points,
+        )
+        dxy = self.snapshot("DXY", 99.0, 100.0)
+        us10y = self.snapshot("^TNX", 4.1, 4.2)
+        analysis = AnalysisResult(
+            bias="neutral",
+            score=0,
+            confidence=60,
+            reasons=[],
+            bullish_news=[],
+            bearish_news=[],
+            neutral_news=[],
+        )
+        statement = PoliticalStatement(
+            title="President Trump says new sanctions are ready",
+            source="White House",
+            source_url="https://www.whitehouse.gov/news/",
+            published_at="2026-04-24T00:00:00+00:00",
+            theme="Iran / Hormuz / Oil",
+            validation_level="official_confirmed",
+            source_tier=1,
+            gold_impact="mixte",
+            oil_impact="haussier",
+            usd_impact="haussier possible",
+            market_chain="Declaration -> sanctions -> oil/USD -> gold mixte.",
+            score=-1,
+            confidence=90,
+        )
+        agents = build_passive_agent_results(
+            gold,
+            dxy,
+            us10y,
+            [],
+            analysis,
+            political_statements=[statement],
+        )
+        trump_agent = next(agent for agent in agents if agent.name == "TrumpPoliticalStatementsAgent")
+        self.assertEqual(trump_agent.confidence, 90)
+        self.assertIn("official_confirmed", trump_agent.summary)
+        self.assertIn("Declaration -> sanctions", trump_agent.evidence[2].value)
 
 
 class LocalFreeContextTests(unittest.TestCase):

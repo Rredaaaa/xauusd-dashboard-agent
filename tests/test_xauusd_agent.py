@@ -3,6 +3,7 @@ import unittest
 from xauusd_agent import (
     AnalysisResult,
     BriefingBundle,
+    CFTCPositioning,
     EventModeAnalysis,
     EventFact,
     GeopoliticalAnalysis,
@@ -20,6 +21,7 @@ from xauusd_agent import (
     build_event_mode_analysis,
     build_official_macro_rates,
     build_event_facts,
+    build_cftc_positioning_from_rows,
     build_political_statements,
     classify_bias,
     build_passive_agent_results,
@@ -329,6 +331,36 @@ class AnalysisShapeTests(unittest.TestCase):
                 dfii10=fred_dfii10,
                 yahoo_tnx_gap_bps=2.0,
             ),
+            cftc_positioning=CFTCPositioning(
+                market="GOLD - COMMODITY EXCHANGE INC.",
+                contract_code="088691",
+                report_date="2026-04-21",
+                source_url="https://www.cftc.gov/files/dea/history/fut_disagg_txt_2026.zip",
+                open_interest=365842,
+                open_interest_change=4200,
+                managed_money_long=123681,
+                managed_money_short=30705,
+                managed_money_spread=33896,
+                managed_money_net=92976,
+                managed_money_net_change=5200,
+                managed_money_net_pct_oi=25.42,
+                producer_long=12633,
+                producer_short=33051,
+                producer_net=-20418,
+                producer_net_change=-1100,
+                swap_long=28115,
+                swap_short=210637,
+                swap_spread=15513,
+                swap_net=-182522,
+                swap_net_change=-2800,
+                non_reportable_long=52223,
+                non_reportable_short=13289,
+                non_reportable_net=38934,
+                non_reportable_net_change=900,
+                score=68,
+                status="bullish positioning",
+                summary="Managed Money acheteurs nets de +92,976 contrats.",
+            ),
             event_facts=[
                 EventFact(
                     title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
@@ -400,6 +432,10 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("10Y nominal officiel", dashboard)
         self.assertIn("Controle Yahoo ^TNX", dashboard)
         self.assertIn("FRED DGS10 prioritaire", dashboard)
+        self.assertIn("COT officiel CFTC", dashboard)
+        self.assertIn("Positionnement Gold Futures COMEX", dashboard)
+        self.assertIn("Managed Money acheteurs nets", dashboard)
+        self.assertIn("365,842", dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -481,6 +517,51 @@ class AnalysisShapeTests(unittest.TestCase):
         rates = build_official_macro_rates(dgs10, None, None, None, yahoo_tnx)
         self.assertIs(rates.dgs10, dgs10)
         self.assertAlmostEqual(rates.yahoo_tnx_gap_bps, 5.0)
+
+    def test_cftc_positioning_calculates_weekly_net_changes(self) -> None:
+        rows = [
+            {
+                "Market_and_Exchange_Names": "GOLD - COMMODITY EXCHANGE INC.",
+                "Report_Date_as_YYYY-MM-DD": "2026-04-14",
+                "CFTC_Contract_Market_Code": "088691",
+                "Open_Interest_All": "360000",
+                "Prod_Merc_Positions_Long_All": "12000",
+                "Prod_Merc_Positions_Short_All": "31000",
+                "Swap_Positions_Long_All": "28000",
+                "Swap__Positions_Short_All": "208000",
+                "Swap__Positions_Spread_All": "15000",
+                "M_Money_Positions_Long_All": "118000",
+                "M_Money_Positions_Short_All": "32000",
+                "M_Money_Positions_Spread_All": "33000",
+                "NonRept_Positions_Long_All": "51000",
+                "NonRept_Positions_Short_All": "13500",
+            },
+            {
+                "Market_and_Exchange_Names": "GOLD - COMMODITY EXCHANGE INC.",
+                "Report_Date_as_YYYY-MM-DD": "2026-04-21",
+                "CFTC_Contract_Market_Code": "088691",
+                "Open_Interest_All": "365842",
+                "Prod_Merc_Positions_Long_All": "12633",
+                "Prod_Merc_Positions_Short_All": "33051",
+                "Swap_Positions_Long_All": "28115",
+                "Swap__Positions_Short_All": "210637",
+                "Swap__Positions_Spread_All": "15513",
+                "M_Money_Positions_Long_All": "123681",
+                "M_Money_Positions_Short_All": "30705",
+                "M_Money_Positions_Spread_All": "33896",
+                "NonRept_Positions_Long_All": "52223",
+                "NonRept_Positions_Short_All": "13289",
+            },
+        ]
+        positioning = build_cftc_positioning_from_rows(rows, "https://www.cftc.gov/example.zip")
+        self.assertIsNotNone(positioning)
+        assert positioning is not None
+        self.assertEqual(positioning.report_date, "2026-04-21")
+        self.assertEqual(positioning.managed_money_net, 92976)
+        self.assertEqual(positioning.managed_money_net_change, 6976)
+        self.assertEqual(positioning.open_interest_change, 5842)
+        self.assertEqual(positioning.producer_net, -20418)
+        self.assertGreater(positioning.score, 50)
 
     def test_event_facts_extract_concrete_market_chain(self) -> None:
         item = NewsItem(

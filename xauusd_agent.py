@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import copy
 import html
 import http.server
+import io
 import json
 import os
 import re
@@ -15,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -68,6 +71,35 @@ FALLBACK_RSS_FEEDS = [
 
 FRED_CSV_URL_TEMPLATE = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
 FRED_DFII10_CSV_URL = FRED_CSV_URL_TEMPLATE.format(series_id="DFII10")
+CFTC_GOLD_CONTRACT_CODE = "088691"
+CFTC_GOLD_MARKET_NAME = "GOLD - COMMODITY EXCHANGE INC."
+CFTC_DISAGG_CURRENT_URL = "https://www.cftc.gov/dea/newcot/f_disagg.txt"
+CFTC_DISAGG_HISTORY_URL_TEMPLATE = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
+CFTC_DISAGG_MIN_FIELDS = [
+    "Market_and_Exchange_Names",
+    "As_of_Date_In_Form_YYMMDD",
+    "Report_Date_as_YYYY-MM-DD",
+    "CFTC_Contract_Market_Code",
+    "CFTC_Market_Code",
+    "CFTC_Region_Code",
+    "CFTC_Commodity_Code",
+    "Open_Interest_All",
+    "Prod_Merc_Positions_Long_All",
+    "Prod_Merc_Positions_Short_All",
+    "Swap_Positions_Long_All",
+    "Swap__Positions_Short_All",
+    "Swap__Positions_Spread_All",
+    "M_Money_Positions_Long_All",
+    "M_Money_Positions_Short_All",
+    "M_Money_Positions_Spread_All",
+    "Other_Rept_Positions_Long_All",
+    "Other_Rept_Positions_Short_All",
+    "Other_Rept_Positions_Spread_All",
+    "Tot_Rept_Positions_Long_All",
+    "Tot_Rept_Positions_Short_All",
+    "NonRept_Positions_Long_All",
+    "NonRept_Positions_Short_All",
+]
 FRED_SERIES_LABELS = {
     "DGS10": "US 10Y Treasury Yield",
     "DGS2": "US 2Y Treasury Yield",
@@ -434,6 +466,38 @@ class OfficialMacroRates:
 
 
 @dataclass
+class CFTCPositioning:
+    market: str
+    contract_code: str
+    report_date: str
+    source_url: str
+    open_interest: int
+    open_interest_change: int
+    managed_money_long: int
+    managed_money_short: int
+    managed_money_spread: int
+    managed_money_net: int
+    managed_money_net_change: int
+    managed_money_net_pct_oi: float
+    producer_long: int
+    producer_short: int
+    producer_net: int
+    producer_net_change: int
+    swap_long: int
+    swap_short: int
+    swap_spread: int
+    swap_net: int
+    swap_net_change: int
+    non_reportable_long: int
+    non_reportable_short: int
+    non_reportable_net: int
+    non_reportable_net_change: int
+    score: int
+    status: str
+    summary: str
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -478,6 +542,7 @@ class BriefingBundle:
     executive_summary: str = ""
     real_yield: SymbolSnapshot | None = None
     official_macro_rates: OfficialMacroRates | None = None
+    cftc_positioning: CFTCPositioning | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
@@ -929,6 +994,171 @@ def build_official_macro_rates(
         dfii10=dfii10,
         yahoo_tnx_gap_bps=gap_bps,
     )
+
+
+def parse_int_field(row: dict[str, str], field_name: str) -> int:
+    value = row.get(field_name, "")
+    try:
+        return int(str(value).replace(",", "").strip() or "0")
+    except ValueError:
+        return 0
+
+
+def parse_cftc_disagg_history_text(text: str) -> list[dict[str, str]]:
+    rows = list(csv.DictReader(io.StringIO(text)))
+    return [
+        row
+        for row in rows
+        if row.get("CFTC_Contract_Market_Code", "").strip() == CFTC_GOLD_CONTRACT_CODE
+        or row.get("Market_and_Exchange_Names", "").strip() == CFTC_GOLD_MARKET_NAME
+    ]
+
+
+def parse_cftc_disagg_current_text(text: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for raw_row in csv.reader(io.StringIO(text)):
+        if len(raw_row) < len(CFTC_DISAGG_MIN_FIELDS):
+            continue
+        row = dict(zip(CFTC_DISAGG_MIN_FIELDS, raw_row[: len(CFTC_DISAGG_MIN_FIELDS)]))
+        if row.get("CFTC_Contract_Market_Code", "").strip() == CFTC_GOLD_CONTRACT_CODE:
+            rows.append(row)
+    return rows
+
+
+def cftc_net(row: dict[str, str], long_field: str, short_field: str) -> int:
+    return parse_int_field(row, long_field) - parse_int_field(row, short_field)
+
+
+def build_cftc_positioning_from_rows(
+    rows: list[dict[str, str]],
+    source_url: str,
+) -> CFTCPositioning | None:
+    valid_rows = [row for row in rows if row.get("Report_Date_as_YYYY-MM-DD")]
+    valid_rows.sort(key=lambda row: row.get("Report_Date_as_YYYY-MM-DD", ""))
+    if not valid_rows:
+        return None
+
+    latest = valid_rows[-1]
+    previous = valid_rows[-2] if len(valid_rows) >= 2 else None
+
+    open_interest = parse_int_field(latest, "Open_Interest_All")
+    previous_open_interest = parse_int_field(previous, "Open_Interest_All") if previous else open_interest
+    open_interest_change = open_interest - previous_open_interest
+
+    managed_money_long = parse_int_field(latest, "M_Money_Positions_Long_All")
+    managed_money_short = parse_int_field(latest, "M_Money_Positions_Short_All")
+    managed_money_spread = parse_int_field(latest, "M_Money_Positions_Spread_All")
+    managed_money_net = managed_money_long - managed_money_short
+    previous_managed_money_net = (
+        cftc_net(previous, "M_Money_Positions_Long_All", "M_Money_Positions_Short_All")
+        if previous
+        else managed_money_net
+    )
+    managed_money_net_change = managed_money_net - previous_managed_money_net
+    managed_money_net_pct_oi = (managed_money_net / open_interest * 100) if open_interest else 0.0
+
+    producer_long = parse_int_field(latest, "Prod_Merc_Positions_Long_All")
+    producer_short = parse_int_field(latest, "Prod_Merc_Positions_Short_All")
+    producer_net = producer_long - producer_short
+    previous_producer_net = (
+        cftc_net(previous, "Prod_Merc_Positions_Long_All", "Prod_Merc_Positions_Short_All")
+        if previous
+        else producer_net
+    )
+
+    swap_long = parse_int_field(latest, "Swap_Positions_Long_All")
+    swap_short = parse_int_field(latest, "Swap__Positions_Short_All")
+    swap_spread = parse_int_field(latest, "Swap__Positions_Spread_All")
+    swap_net = swap_long - swap_short
+    previous_swap_net = (
+        cftc_net(previous, "Swap_Positions_Long_All", "Swap__Positions_Short_All")
+        if previous
+        else swap_net
+    )
+
+    non_reportable_long = parse_int_field(latest, "NonRept_Positions_Long_All")
+    non_reportable_short = parse_int_field(latest, "NonRept_Positions_Short_All")
+    non_reportable_net = non_reportable_long - non_reportable_short
+    previous_non_reportable_net = (
+        cftc_net(previous, "NonRept_Positions_Long_All", "NonRept_Positions_Short_All")
+        if previous
+        else non_reportable_net
+    )
+
+    net_pct_component = clamp(managed_money_net_pct_oi * 1.4, -18, 18)
+    weekly_component = clamp((managed_money_net_change / open_interest * 220) if open_interest else 0, -12, 12)
+    oi_component = clamp((open_interest_change / open_interest * 120) if open_interest else 0, -5, 5)
+    score = clamp_score(50 + net_pct_component + weekly_component + oi_component)
+
+    if score >= 62:
+        status = "bullish positioning"
+    elif score <= 38:
+        status = "bearish positioning"
+    elif abs(managed_money_net_pct_oi) >= 28:
+        status = "crowded positioning"
+    else:
+        status = "neutral positioning"
+
+    direction = "acheteurs nets" if managed_money_net >= 0 else "vendeurs nets"
+    change_text = "augmente" if managed_money_net_change > 0 else "baisse" if managed_money_net_change < 0 else "stable"
+    summary = (
+        f"Managed Money {direction} de {managed_money_net:+,} contrats "
+        f"({managed_money_net_pct_oi:+.1f}% de l'open interest); variation hebdo {change_text} "
+        f"de {managed_money_net_change:+,} contrats."
+    )
+
+    return CFTCPositioning(
+        market=latest.get("Market_and_Exchange_Names", CFTC_GOLD_MARKET_NAME).strip(),
+        contract_code=latest.get("CFTC_Contract_Market_Code", CFTC_GOLD_CONTRACT_CODE).strip(),
+        report_date=latest.get("Report_Date_as_YYYY-MM-DD", ""),
+        source_url=source_url,
+        open_interest=open_interest,
+        open_interest_change=open_interest_change,
+        managed_money_long=managed_money_long,
+        managed_money_short=managed_money_short,
+        managed_money_spread=managed_money_spread,
+        managed_money_net=managed_money_net,
+        managed_money_net_change=managed_money_net_change,
+        managed_money_net_pct_oi=round(managed_money_net_pct_oi, 2),
+        producer_long=producer_long,
+        producer_short=producer_short,
+        producer_net=producer_net,
+        producer_net_change=producer_net - previous_producer_net,
+        swap_long=swap_long,
+        swap_short=swap_short,
+        swap_spread=swap_spread,
+        swap_net=swap_net,
+        swap_net_change=swap_net - previous_swap_net,
+        non_reportable_long=non_reportable_long,
+        non_reportable_short=non_reportable_short,
+        non_reportable_net=non_reportable_net,
+        non_reportable_net_change=non_reportable_net - previous_non_reportable_net,
+        score=score,
+        status=status,
+        summary=summary,
+    )
+
+
+def fetch_cftc_gold_positioning() -> CFTCPositioning | None:
+    year = datetime.now(timezone.utc).year
+    history_url = CFTC_DISAGG_HISTORY_URL_TEMPLATE.format(year=year)
+    try:
+        req = urllib.request.Request(history_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as response:
+            archive = zipfile.ZipFile(io.BytesIO(response.read()))
+        file_name = archive.namelist()[0]
+        text = archive.read(file_name).decode("latin-1", "ignore")
+        positioning = build_cftc_positioning_from_rows(parse_cftc_disagg_history_text(text), history_url)
+        if positioning is not None:
+            return positioning
+    except Exception:
+        pass
+
+    try:
+        current_text = http_get_text(CFTC_DISAGG_CURRENT_URL)
+        return build_cftc_positioning_from_rows(parse_cftc_disagg_current_text(current_text), CFTC_DISAGG_CURRENT_URL)
+    except Exception:
+        return None
 
 
 def align_proxy_points_to_spot(points: list[PricePoint], spot_price: float) -> list[PricePoint]:
@@ -2429,6 +2659,7 @@ def build_passive_agent_results(
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
+    cftc_positioning: CFTCPositioning | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -2556,20 +2787,44 @@ def build_passive_agent_results(
         )
     )
 
-    flow_summary = geopolitical_analysis.summary if geopolitical_analysis else "Flux et positionnement indisponibles."
+    flow_summary = cftc_positioning.summary if cftc_positioning else geopolitical_analysis.summary if geopolitical_analysis else "Flux et positionnement indisponibles."
+    flow_score = cftc_positioning.score if cftc_positioning else geopolitical_analysis.score if geopolitical_analysis else 50
+    flow_confidence = 82 if cftc_positioning else 55
     agents.append(
         AgentResult(
             name="FlowPositioningAgent",
             department="Geopolitics & Flows",
-            bias=score_to_bias(geopolitical_analysis.score if geopolitical_analysis else 50),
-            score=geopolitical_analysis.score if geopolitical_analysis else 50,
-            confidence=55,
+            bias=score_to_bias(flow_score),
+            score=flow_score,
+            confidence=flow_confidence,
             summary=flow_summary,
             evidence=[
-                AgentEvidence("Large specs", geopolitical_analysis.large_speculators if geopolitical_analysis else "indisponible", "News/COT proxy"),
-                AgentEvidence("ETF + OI", f"{geopolitical_analysis.etf_flows} / {geopolitical_analysis.comex_open_interest}" if geopolitical_analysis else "indisponible", "News/ETF/OI proxy"),
+                AgentEvidence(
+                    "Managed Money",
+                    f"{cftc_positioning.managed_money_net:+,} ({cftc_positioning.managed_money_net_change:+,} hebdo)"
+                    if cftc_positioning
+                    else geopolitical_analysis.large_speculators
+                    if geopolitical_analysis
+                    else "indisponible",
+                    "CFTC COT officiel" if cftc_positioning else "News/COT proxy",
+                ),
+                AgentEvidence(
+                    "Open interest",
+                    f"{cftc_positioning.open_interest:,} ({cftc_positioning.open_interest_change:+,} hebdo)"
+                    if cftc_positioning
+                    else f"{geopolitical_analysis.etf_flows} / {geopolitical_analysis.comex_open_interest}"
+                    if geopolitical_analysis
+                    else "indisponible",
+                    "CFTC COT officiel" if cftc_positioning else "News/ETF/OI proxy",
+                ),
             ],
-            risks=[AgentRisk("Source officielle", "COT et ETF flows officiels seront ajoutes en Phases 9 et 10.", "medium")],
+            risks=[
+                AgentRisk(
+                    "Frequence COT",
+                    "Le COT officiel est hebdomadaire et publie avec decalage; il cadre le positionnement, pas le timing intraday.",
+                    "medium",
+                )
+            ],
         )
     )
 
@@ -2778,7 +3033,7 @@ def resolve_signal_label(
     return neutral_label
 
 
-def build_geopolitical_analysis(news: list[NewsItem]) -> GeopoliticalAnalysis:
+def build_geopolitical_analysis(news: list[NewsItem], cftc_positioning: CFTCPositioning | None = None) -> GeopoliticalAnalysis:
     risk_items = filter_news_by_categories(news, {"geopolitical", "risk_vix"})
     central_bank_items = filter_news_by_categories(news, {"macro_fed", "macro_cpi", "macro_nfp", "events_fomc"})
     physical_items = filter_news_by_categories(news, {"physical_demand", "gold"})
@@ -2880,14 +3135,15 @@ def build_geopolitical_analysis(news: list[NewsItem]) -> GeopoliticalAnalysis:
     else:
         reasons.append("La demande physique reste mixte dans les headlines recuperees.")
 
-    if large_speculators == "net long":
-        score += 6
-        reasons.append("Les large speculators ressortent plutot net long sur les Gold Futures.")
-    elif large_speculators == "net short":
-        score -= 6
-        reasons.append("Les large speculators ressortent plutot net short.")
-    else:
-        reasons.append("Le positionnement COT des large speculators reste peu lisible.")
+    if cftc_positioning is None:
+        if large_speculators == "net long":
+            score += 6
+            reasons.append("Les large speculators ressortent plutot net long sur les Gold Futures.")
+        elif large_speculators == "net short":
+            score -= 6
+            reasons.append("Les large speculators ressortent plutot net short.")
+        else:
+            reasons.append("Le positionnement COT des large speculators reste peu lisible.")
 
     if etf_flows == "inflows":
         score += 6
@@ -2898,14 +3154,35 @@ def build_geopolitical_analysis(news: list[NewsItem]) -> GeopoliticalAnalysis:
     else:
         reasons.append("Les flux ETF restent mixtes.")
 
-    if comex_open_interest == "en hausse":
-        score += 4
-        reasons.append("L'open interest COMEX monte, signe d'engagement croissant.")
-    elif comex_open_interest == "en baisse":
-        score -= 4
-        reasons.append("L'open interest COMEX recule, signe possible de de-risking.")
-    else:
-        reasons.append("L'open interest COMEX ne donne pas encore de direction propre.")
+    if cftc_positioning is None:
+        if comex_open_interest == "en hausse":
+            score += 4
+            reasons.append("L'open interest COMEX monte, signe d'engagement croissant.")
+        elif comex_open_interest == "en baisse":
+            score -= 4
+            reasons.append("L'open interest COMEX recule, signe possible de de-risking.")
+        else:
+            reasons.append("L'open interest COMEX ne donne pas encore de direction propre.")
+
+    if cftc_positioning is not None:
+        managed_label = (
+            "net long"
+            if cftc_positioning.managed_money_net > 0
+            else "net short"
+            if cftc_positioning.managed_money_net < 0
+            else "neutre"
+        )
+        large_speculators = (
+            f"Managed Money {managed_label} "
+            f"({cftc_positioning.managed_money_net:+,}, {cftc_positioning.managed_money_net_change:+,} hebdo)"
+        )
+        comex_open_interest = (
+            f"{cftc_positioning.open_interest:,} contrats "
+            f"({cftc_positioning.open_interest_change:+,} hebdo)"
+        )
+        cot_tilt = round(clamp((cftc_positioning.score - 50) / 5, -8, 8))
+        score += cot_tilt
+        reasons.append(f"COT officiel CFTC {cftc_positioning.report_date}: {cftc_positioning.summary}")
 
     if vix_tone == "risk-off":
         score += 5
@@ -2959,6 +3236,7 @@ def analyze_market(
     cross_asset: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
+    cftc_positioning: CFTCPositioning | None = None,
 ) -> AnalysisResult:
     market_score, market_reasons = build_market_reasons(gold, dxy, us10y)
     if real_yield is not None:
@@ -2990,7 +3268,7 @@ def analyze_market(
 
     normalized_news_score = sum(clamp(value, -2, 2) for value in category_scores.values())
     news_score = round(clamp(normalized_news_score / 2, -4, 4))
-    geopolitical = build_geopolitical_analysis(news)
+    geopolitical = build_geopolitical_analysis(news, cftc_positioning=cftc_positioning)
     if market_regime is not None:
         if market_regime.name == "Hormuz / Oil Shock" and market_regime.score >= 58:
             geopolitical.score = round(clamp(geopolitical.score - 12, 20, 85))
@@ -3731,6 +4009,7 @@ def build_payload(
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
+    cftc_positioning: CFTCPositioning | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -3841,6 +4120,8 @@ def build_payload(
             ),
             "policy": "FRED rates are the official macro source; Yahoo ^TNX is kept as a cross-check.",
         }
+    if cftc_positioning:
+        payload["cftc_positioning"] = asdict(cftc_positioning)
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -3918,6 +4199,41 @@ def build_macro_rate_from_payload(data: dict[str, Any] | None, fallback_label: s
     )
 
 
+def build_cftc_positioning_from_payload(data: dict[str, Any] | None) -> CFTCPositioning | None:
+    if not isinstance(data, dict):
+        return None
+    return CFTCPositioning(
+        market=str(data.get("market", CFTC_GOLD_MARKET_NAME)),
+        contract_code=str(data.get("contract_code", CFTC_GOLD_CONTRACT_CODE)),
+        report_date=str(data.get("report_date", "")),
+        source_url=str(data.get("source_url", CFTC_DISAGG_CURRENT_URL)),
+        open_interest=int(data.get("open_interest", 0) or 0),
+        open_interest_change=int(data.get("open_interest_change", 0) or 0),
+        managed_money_long=int(data.get("managed_money_long", 0) or 0),
+        managed_money_short=int(data.get("managed_money_short", 0) or 0),
+        managed_money_spread=int(data.get("managed_money_spread", 0) or 0),
+        managed_money_net=int(data.get("managed_money_net", 0) or 0),
+        managed_money_net_change=int(data.get("managed_money_net_change", 0) or 0),
+        managed_money_net_pct_oi=float(data.get("managed_money_net_pct_oi", 0.0) or 0.0),
+        producer_long=int(data.get("producer_long", 0) or 0),
+        producer_short=int(data.get("producer_short", 0) or 0),
+        producer_net=int(data.get("producer_net", 0) or 0),
+        producer_net_change=int(data.get("producer_net_change", 0) or 0),
+        swap_long=int(data.get("swap_long", 0) or 0),
+        swap_short=int(data.get("swap_short", 0) or 0),
+        swap_spread=int(data.get("swap_spread", 0) or 0),
+        swap_net=int(data.get("swap_net", 0) or 0),
+        swap_net_change=int(data.get("swap_net_change", 0) or 0),
+        non_reportable_long=int(data.get("non_reportable_long", 0) or 0),
+        non_reportable_short=int(data.get("non_reportable_short", 0) or 0),
+        non_reportable_net=int(data.get("non_reportable_net", 0) or 0),
+        non_reportable_net_change=int(data.get("non_reportable_net_change", 0) or 0),
+        score=int(data.get("score", 50) or 50),
+        status=str(data.get("status", "neutral positioning")),
+        summary=str(data.get("summary", "COT officiel indisponible.")),
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -3961,6 +4277,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     dxy_data = market_snapshot.get("dxy", {})
     us10y_data = market_snapshot.get("us10y_yield", {})
     official_macro_data = market_snapshot.get("official_macro_rates", {})
+    cftc_positioning_payload = payload.get("cftc_positioning")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -4097,6 +4414,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         if isinstance(official_macro_data, dict)
         else None
     )
+    cftc_positioning = build_cftc_positioning_from_payload(cftc_positioning_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -4204,6 +4522,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
@@ -4245,6 +4564,7 @@ def render_report(
     executive_summary: str | None = None,
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
+    cftc_positioning: CFTCPositioning | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -4322,6 +4642,23 @@ def render_report(
         if official_macro_rates.yahoo_tnx_gap_bps is not None:
             lines.append(f"- Ecart Yahoo ^TNX vs FRED DGS10: {official_macro_rates.yahoo_tnx_gap_bps:+.1f} bps")
         lines.append("- Politique source: FRED est la source officielle pour les taux; Yahoo ^TNX reste un controle.")
+
+    if cftc_positioning:
+        lines.extend(
+            [
+                "",
+                "## COT Officiel CFTC",
+                f"- Source: {cftc_positioning.source_url}",
+                f"- Rapport: {cftc_positioning.report_date} | {cftc_positioning.market} | code {cftc_positioning.contract_code}",
+                f"- Open interest: {cftc_positioning.open_interest:,} ({cftc_positioning.open_interest_change:+,} hebdo)",
+                f"- Managed Money net: {cftc_positioning.managed_money_net:+,} ({cftc_positioning.managed_money_net_change:+,} hebdo, {cftc_positioning.managed_money_net_pct_oi:+.1f}% OI)",
+                f"- Producer/Merchant net: {cftc_positioning.producer_net:+,} ({cftc_positioning.producer_net_change:+,} hebdo)",
+                f"- Swap Dealers net: {cftc_positioning.swap_net:+,} ({cftc_positioning.swap_net_change:+,} hebdo)",
+                f"- Non-reportable net: {cftc_positioning.non_reportable_net:+,} ({cftc_positioning.non_reportable_net_change:+,} hebdo)",
+                f"- Score positioning: {cftc_positioning.score}/100 ({cftc_positioning.status})",
+                f"- Lecture: {cftc_positioning.summary}",
+            ]
+        )
 
     if global_recommendation:
         lines.extend(
@@ -4840,6 +5177,59 @@ def render_geopolitical_panel(analysis: GeopoliticalAnalysis | None) -> str:
         f'<div><div class="section-kicker">Evenements du jour</div><ul class="reason-list">{events}</ul></div>'
         f"</div>"
     )
+
+
+def render_cftc_positioning_panel(positioning: CFTCPositioning | None) -> str:
+    if positioning is None:
+        return (
+            '<div class="empty-state">'
+            "COT officiel CFTC indisponible pour le moment. Le dashboard conserve les proxies headlines, "
+            "mais le FlowPositioningAgent attend la source officielle."
+            "</div>"
+        )
+
+    status_class = "bullish" if positioning.score >= 56 else "bearish" if positioning.score <= 44 else "neutral"
+
+    def row(label: str, net: int, change: int, long_value: int, short_value: int) -> str:
+        change_class = "bullish" if change > 0 else "bearish" if change < 0 else "neutral"
+        return f"""
+        <tr>
+          <td>{html.escape(label)}</td>
+          <td>{long_value:,}</td>
+          <td>{short_value:,}</td>
+          <td class="{status_class if label == 'Managed Money' else ''}">{net:+,}</td>
+          <td class="{change_class}">{change:+,}</td>
+        </tr>
+        """.strip()
+
+    rows = [
+        row("Managed Money", positioning.managed_money_net, positioning.managed_money_net_change, positioning.managed_money_long, positioning.managed_money_short),
+        row("Producer/Merchant", positioning.producer_net, positioning.producer_net_change, positioning.producer_long, positioning.producer_short),
+        row("Swap Dealers", positioning.swap_net, positioning.swap_net_change, positioning.swap_long, positioning.swap_short),
+        row("Non-reportable", positioning.non_reportable_net, positioning.non_reportable_net_change, positioning.non_reportable_long, positioning.non_reportable_short),
+    ]
+    source_link = (
+        f'<a href="{html.escape(positioning.source_url)}" target="_blank" rel="noopener noreferrer">Source CFTC officielle</a>'
+        if positioning.source_url
+        else ""
+    )
+    return f"""
+    <div class="trade-verdict {status_class}">{html.escape(positioning.status)} · {positioning.score}/100</div>
+    <p class="trade-summary">{html.escape(positioning.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Rapport</strong><span>{html.escape(positioning.report_date)}</span></div>
+      <div class="geo-stat"><strong>Open interest</strong><span>{positioning.open_interest:,} ({positioning.open_interest_change:+,})</span></div>
+      <div class="geo-stat"><strong>MM net / OI</strong><span>{positioning.managed_money_net_pct_oi:+.1f}%</span></div>
+      <div class="geo-stat"><strong>Code</strong><span>{html.escape(positioning.contract_code)}</span></div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Categorie</th><th>Long</th><th>Short</th><th>Net</th><th>Var hebdo</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    <div class="metric-footnote">{source_link}</div>
+    """.strip()
 
 
 def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: SymbolSnapshot | None) -> str:
@@ -6124,6 +6514,12 @@ def render_dashboard(
       </article>
 
       <article class="panel span-12">
+        <div class="section-kicker">COT officiel CFTC</div>
+        <h2>Positionnement Gold Futures COMEX</h2>
+        {render_cftc_positioning_panel(cftc_positioning)}
+      </article>
+
+      <article class="panel span-12">
         <div class="section-kicker">Technical Matrix</div>
         <h2>EMA 20/50/100/200 · RSI7 · MACD 5/34/5 · Volume Proxy</h2>
         {technical_matrix}
@@ -6179,6 +6575,7 @@ def render_dashboard_clarity(
     technical_readings = bundle.technical_timeframes or []
     real_yield = bundle.real_yield
     official_macro_rates = bundle.official_macro_rates
+    cftc_positioning = bundle.cftc_positioning
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -6234,6 +6631,7 @@ def render_dashboard_clarity(
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -7300,6 +7698,12 @@ def render_dashboard_clarity(
       </article>
 
       <article class="panel span-12">
+        <div class="section-kicker">COT officiel CFTC</div>
+        <h2>Positionnement Gold Futures COMEX</h2>
+        {render_cftc_positioning_panel(cftc_positioning)}
+      </article>
+
+      <article class="panel span-12">
         <div class="section-kicker">Lecture technique detaillee</div>
         <h2>EMA 20/50/100/200 · RSI7 · MACD 5/34/5 · Volume</h2>
         {technical_matrix}
@@ -7354,6 +7758,7 @@ def render_dashboard_clarity_v2(
     technical_readings = bundle.technical_timeframes or []
     real_yield = bundle.real_yield
     official_macro_rates = bundle.official_macro_rates
+    cftc_positioning = bundle.cftc_positioning
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -7409,6 +7814,7 @@ def render_dashboard_clarity_v2(
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -8762,6 +9168,13 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">COT officiel CFTC</div>
+              <h2>Positionnement Gold Futures COMEX</h2>
+              <p class="footer-note">Lecture hebdomadaire officielle CFTC: Managed Money, Producer/Merchant, Swap Dealers, Non-reportable et open interest.</p>
+              {render_cftc_positioning_panel(cftc_positioning)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Agents passifs experimentaux</div>
               <h2>Market agents</h2>
               {render_agent_department_panel(agent_results, "Market")}
@@ -9138,6 +9551,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
         market_regime=market_regime,
+        cftc_positioning=live_bundle.cftc_positioning,
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(live_bundle.news)
@@ -9186,6 +9600,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=live_bundle.cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9206,6 +9621,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=live_bundle.cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9231,6 +9647,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.executive_summary = executive_summary
     live_bundle.real_yield = real_yield
     live_bundle.official_macro_rates = official_macro_rates
+    live_bundle.cftc_positioning = live_bundle.cftc_positioning
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
@@ -9249,6 +9666,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     news = fetch_news(top_news)
     political_news = fetch_political_statement_news(limit=max(8, top_news))
     news = merge_news_items(news, political_news, max(top_news, 24))
+    cftc_positioning = fetch_cftc_gold_positioning()
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
     real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
@@ -9267,6 +9685,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cross_asset=cross_asset_analysis,
         event_mode=event_mode,
         market_regime=market_regime,
+        cftc_positioning=cftc_positioning,
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(news)
@@ -9315,6 +9734,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9335,6 +9755,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_timeframes=technical_readings,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9365,6 +9786,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         executive_summary=executive_summary,
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9401,6 +9823,7 @@ def render_artifacts(
         bundle.executive_summary,
         bundle.real_yield,
         bundle.official_macro_rates,
+        bundle.cftc_positioning,
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,
@@ -9478,6 +9901,7 @@ class DashboardLiveCache:
                 bundle.executive_summary,
                 bundle.real_yield,
                 bundle.official_macro_rates,
+                bundle.cftc_positioning,
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
                 bundle.weekend_gold,

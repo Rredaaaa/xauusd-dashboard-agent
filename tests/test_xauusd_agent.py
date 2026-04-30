@@ -4,6 +4,8 @@ from xauusd_agent import (
     AnalysisResult,
     BriefingBundle,
     CFTCPositioning,
+    ETFFlowsAnalysis,
+    ETFHoldingRecord,
     EventModeAnalysis,
     EventFact,
     GeopoliticalAnalysis,
@@ -21,11 +23,13 @@ from xauusd_agent import (
     build_event_mode_analysis,
     build_official_macro_rates,
     build_event_facts,
+    build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
     classify_bias,
     build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
+    parse_ishares_iau_official_data,
     render_dashboard,
     score_headline,
 )
@@ -361,6 +365,52 @@ class AnalysisShapeTests(unittest.TestCase):
                 status="bullish positioning",
                 summary="Managed Money acheteurs nets de +92,976 contrats.",
             ),
+            etf_flows_analysis=ETFFlowsAnalysis(
+                as_of_date="2026-04-24",
+                source_name="World Gold Council ETF holdings and flows",
+                source_url="https://www.gold.org/goldhub/data/gold-etfs-holdings-and-flows",
+                global_holdings_tonnes=4136.64,
+                global_weekly_demand_tonnes=-10.54,
+                global_monthly_demand_tonnes=-84.26,
+                global_weekly_flows_usd_mn=-1435.8,
+                global_monthly_flows_usd_mn=-11740.6,
+                score=24,
+                status="outflows",
+                summary="WGC ETF: sorties sur la semaine.",
+                holdings=[
+                    ETFHoldingRecord(
+                        fund="SPDR Gold Shares",
+                        ticker="GLD",
+                        source_name="World Gold Council ETF archive",
+                        source_url="https://fsapi.gold.org/api/v11/charts/etfv2/revised/archive-tablegroup/all?break-cache=27Apr26",
+                        as_of_date="2026-04-24",
+                        holdings_tonnes=1046.35,
+                        daily_flow_tonnes=None,
+                        weekly_flow_tonnes=-14.09,
+                        monthly_flow_tonnes=-54.13,
+                        ytd_flow_tonnes=-23.86,
+                        flow_usd_mn=-2137.0,
+                        status="outflows",
+                        note="WGC test.",
+                    ),
+                    ETFHoldingRecord(
+                        fund="iShares Gold Trust",
+                        ticker="IAU",
+                        source_name="BlackRock iShares official page",
+                        source_url="https://www.blackrock.com/us/financial-professionals/products/239561/",
+                        as_of_date="Apr 29, 2026",
+                        holdings_tonnes=482.11,
+                        daily_flow_tonnes=0.35,
+                        weekly_flow_tonnes=0.35,
+                        monthly_flow_tonnes=-23.27,
+                        ytd_flow_tonnes=-12.0,
+                        flow_usd_mn=-3677.6,
+                        status="flat",
+                        note="BlackRock test.",
+                    ),
+                ],
+                source_note="WGC official test.",
+            ),
             event_facts=[
                 EventFact(
                     title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
@@ -436,6 +486,11 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Positionnement Gold Futures COMEX", dashboard)
         self.assertIn("Managed Money acheteurs nets", dashboard)
         self.assertIn("365,842", dashboard)
+        self.assertIn("ETF flows officiels", dashboard)
+        self.assertIn("WGC + GLD + IAU", dashboard)
+        self.assertIn("World Gold Council ETF holdings and flows", dashboard)
+        self.assertIn("SPDR Gold Shares", dashboard)
+        self.assertIn("iShares Gold Trust", dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -562,6 +617,80 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(positioning.open_interest_change, 5842)
         self.assertEqual(positioning.producer_net, -20418)
         self.assertGreater(positioning.score, 50)
+
+    def test_wgc_etf_flows_analysis_builds_global_and_fund_rows(self) -> None:
+        archive = {
+            "regional": {
+                "Weekly": {
+                    "asOfDate": "2026-04-24",
+                    "data": {
+                        "columns": [],
+                        "0": ["Total", "607.1", "-1435.8", "4136.64", "-10.54", "-0.25"],
+                    },
+                },
+                "Monthly": {
+                    "asOfDate": "2026-04-24",
+                    "data": {
+                        "columns": [],
+                        "0": ["Total", "607.1", "-11740.6", "4091.85", "-84.26", "-2.02"],
+                    },
+                },
+            },
+            "bottom10_ca": {
+                "Weekly": {
+                    "asOfDate": "2026-04-24",
+                    "data": {
+                        "columns": [],
+                        "0": ["SPDR Gold Shares", "US", "-2137.0", "1046.35", "-14.09", "-1.33"],
+                    },
+                },
+                "Monthly": {
+                    "asOfDate": "2026-04-24",
+                    "data": {
+                        "columns": [],
+                        "0": ["SPDR Gold Shares", "US", "-8426.8", "1046.90", "-54.13", "-4.92"],
+                        "1": ["iShares Gold Trust", "US", "-3677.6", "475.96", "-23.27", "-4.66"],
+                    },
+                },
+            },
+            "top10_ca": {},
+        }
+        analysis = build_wgc_etf_flows_analysis(archive)
+        self.assertIsNotNone(analysis)
+        assert analysis is not None
+        self.assertEqual(analysis.status, "outflows")
+        self.assertLess(analysis.score, 50)
+        self.assertEqual(analysis.global_weekly_demand_tonnes, -10.54)
+        self.assertEqual(analysis.holdings[0].ticker, "GLD")
+        self.assertEqual(analysis.holdings[0].weekly_flow_tonnes, -14.09)
+        self.assertEqual(analysis.holdings[1].ticker, "IAU")
+        self.assertEqual(analysis.holdings[1].monthly_flow_tonnes, -23.27)
+
+    def test_ishares_iau_parser_estimates_daily_and_weekly_flows(self) -> None:
+        page_html = """
+        <div>Shares Outstanding as of Apr 29, 2026 823,600,000</div>
+        <div>Ounces in Trust as of Apr 29, 2026 15,500,217.67</div>
+        <div>Tonnes in Trust as of Apr 29, 2026 482.11</div>
+        """
+        spreadsheet_xml = """
+        <ss:Workbook>
+          <ss:Row><ss:Cell><ss:Data>As Of</ss:Data></ss:Cell><ss:Cell><ss:Data>NAV</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>Shares Outstanding</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 29, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>823600000</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 28, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>823000000</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 27, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>823000000</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 24, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>822400000</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 23, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>822400000</ss:Data></ss:Cell></ss:Row>
+          <ss:Row><ss:Cell><ss:Data>Apr 22, 2026</ss:Data></ss:Cell><ss:Cell><ss:Data>85</ss:Data></ss:Cell><ss:Cell><ss:Data>--</ss:Data></ss:Cell><ss:Cell><ss:Data>821600000</ss:Data></ss:Cell></ss:Row>
+        </ss:Workbook>
+        """
+        record = parse_ishares_iau_official_data(page_html, spreadsheet_xml)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.ticker, "IAU")
+        self.assertEqual(record.holdings_tonnes, 482.11)
+        self.assertGreater(record.daily_flow_tonnes or 0, 0)
+        self.assertGreater(record.weekly_flow_tonnes or 0, 0)
+        self.assertEqual(record.source_name, "BlackRock iShares official page")
 
     def test_event_facts_extract_concrete_market_chain(self) -> None:
         item = NewsItem(

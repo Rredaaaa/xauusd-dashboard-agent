@@ -75,6 +75,13 @@ CFTC_GOLD_CONTRACT_CODE = "088691"
 CFTC_GOLD_MARKET_NAME = "GOLD - COMMODITY EXCHANGE INC."
 CFTC_DISAGG_CURRENT_URL = "https://www.cftc.gov/dea/newcot/f_disagg.txt"
 CFTC_DISAGG_HISTORY_URL_TEMPLATE = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
+WGC_ETF_FLOWS_PAGE_URL = "https://www.gold.org/goldhub/data/gold-etfs-holdings-and-flows"
+WGC_ETF_ARCHIVE_TABLE_URL = "https://fsapi.gold.org/api/v11/charts/etfv2/revised/archive-tablegroup/all?break-cache=27Apr26"
+ISHARES_IAU_PAGE_URL = "https://www.blackrock.com/us/financial-professionals/products/239561/"
+ISHARES_IAU_DATA_URL = (
+    "https://www.blackrock.com/us/financial-professionals/products/239561/"
+    "ishares-gold-trust-fund/1527781476618.ajax?fileType=xls&fileName=iShares-Gold-Trust_fund&dataType=fund"
+)
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -498,6 +505,40 @@ class CFTCPositioning:
 
 
 @dataclass
+class ETFHoldingRecord:
+    fund: str
+    ticker: str
+    source_name: str
+    source_url: str
+    as_of_date: str
+    holdings_tonnes: float | None
+    daily_flow_tonnes: float | None
+    weekly_flow_tonnes: float | None
+    monthly_flow_tonnes: float | None
+    ytd_flow_tonnes: float | None
+    flow_usd_mn: float | None
+    status: str
+    note: str
+
+
+@dataclass
+class ETFFlowsAnalysis:
+    as_of_date: str
+    source_name: str
+    source_url: str
+    global_holdings_tonnes: float | None
+    global_weekly_demand_tonnes: float | None
+    global_monthly_demand_tonnes: float | None
+    global_weekly_flows_usd_mn: float | None
+    global_monthly_flows_usd_mn: float | None
+    score: int
+    status: str
+    summary: str
+    holdings: list[ETFHoldingRecord] = field(default_factory=list)
+    source_note: str = ""
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -543,6 +584,7 @@ class BriefingBundle:
     real_yield: SymbolSnapshot | None = None
     official_macro_rates: OfficialMacroRates | None = None
     cftc_positioning: CFTCPositioning | None = None
+    etf_flows_analysis: ETFFlowsAnalysis | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
@@ -1159,6 +1201,302 @@ def fetch_cftc_gold_positioning() -> CFTCPositioning | None:
         return build_cftc_positioning_from_rows(parse_cftc_disagg_current_text(current_text), CFTC_DISAGG_CURRENT_URL)
     except Exception:
         return None
+
+
+def parse_etf_number(value: Any) -> float | None:
+    if value in (None, "", "--"):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_etf_flow(weekly_flow: float | None, monthly_flow: float | None = None) -> str:
+    primary = weekly_flow if weekly_flow is not None else monthly_flow
+    if primary is None:
+        return "unknown"
+    if primary >= 1.0:
+        return "inflows"
+    if primary <= -1.0:
+        return "outflows"
+    return "flat"
+
+
+def clean_wgc_columns(row: list[Any]) -> list[Any]:
+    return [compact_whitespace(html.unescape(str(value))) for value in row]
+
+
+def wgc_numeric_rows(period_payload: dict[str, Any] | None) -> list[list[str]]:
+    if not isinstance(period_payload, dict):
+        return []
+    data = period_payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    rows: list[list[str]] = []
+    for key, value in data.items():
+        if str(key).isdigit() and isinstance(value, list):
+            rows.append(clean_wgc_columns(value))
+    return rows
+
+
+def find_wgc_total_row(archive_data: dict[str, Any], period: str) -> list[str] | None:
+    regional = archive_data.get("regional", {})
+    period_payload = regional.get(period) if isinstance(regional, dict) else None
+    for row in wgc_numeric_rows(period_payload):
+        if row and row[0].lower() == "total":
+            return row
+    return None
+
+
+def find_wgc_fund_row(archive_data: dict[str, Any], fund_name: str, period: str) -> list[str] | None:
+    fund_name_lower = fund_name.lower()
+    for group_name in ("top10_ca", "bottom10_ca"):
+        group = archive_data.get(group_name, {})
+        period_payload = group.get(period) if isinstance(group, dict) else None
+        for row in wgc_numeric_rows(period_payload):
+            if row and row[0].lower() == fund_name_lower:
+                return row
+    return None
+
+
+def wgc_as_of_date(archive_data: dict[str, Any], period: str = "Weekly") -> str:
+    regional = archive_data.get("regional", {})
+    payload = regional.get(period) if isinstance(regional, dict) else None
+    if isinstance(payload, dict):
+        return str(payload.get("asOfDate") or payload.get("periodTitle") or "")
+    return ""
+
+
+def build_wgc_etf_holding_record(
+    archive_data: dict[str, Any],
+    fund_name: str,
+    ticker: str,
+    fallback_source_url: str = WGC_ETF_ARCHIVE_TABLE_URL,
+) -> ETFHoldingRecord | None:
+    weekly = find_wgc_fund_row(archive_data, fund_name, "Weekly")
+    monthly = find_wgc_fund_row(archive_data, fund_name, "Monthly")
+    ytd = find_wgc_fund_row(archive_data, fund_name, "Year to date")
+    source_row = weekly or monthly or ytd
+    if not source_row:
+        return None
+
+    holdings_tonnes = parse_etf_number(source_row[3] if len(source_row) > 3 else None)
+    weekly_flow = parse_etf_number(weekly[4] if weekly and len(weekly) > 4 else None)
+    monthly_flow = parse_etf_number(monthly[4] if monthly and len(monthly) > 4 else None)
+    ytd_flow = parse_etf_number(ytd[4] if ytd and len(ytd) > 4 else None)
+    flow_usd_mn = parse_etf_number((weekly or monthly or ytd)[2] if len(weekly or monthly or ytd) > 2 else None)
+    return ETFHoldingRecord(
+        fund=fund_name,
+        ticker=ticker,
+        source_name="World Gold Council ETF archive",
+        source_url=fallback_source_url,
+        as_of_date=wgc_as_of_date(archive_data),
+        holdings_tonnes=round(holdings_tonnes, 2) if holdings_tonnes is not None else None,
+        daily_flow_tonnes=None,
+        weekly_flow_tonnes=round(weekly_flow, 2) if weekly_flow is not None else None,
+        monthly_flow_tonnes=round(monthly_flow, 2) if monthly_flow is not None else None,
+        ytd_flow_tonnes=round(ytd_flow, 2) if ytd_flow is not None else None,
+        flow_usd_mn=round(flow_usd_mn, 1) if flow_usd_mn is not None else None,
+        status=classify_etf_flow(weekly_flow, monthly_flow),
+        note="Flux fund-specific WGC: demande en tonnes et flows USD; si le fonds n'est pas top/bottom hebdo, le mensuel/YTD sert de fallback.",
+    )
+
+
+def html_to_plain_text(text: str) -> str:
+    return compact_whitespace(re.sub(r"<[^>]+>", " ", html.unescape(text)))
+
+
+def extract_blackrock_metric(plain_text: str, label: str) -> tuple[str, float] | None:
+    pattern = rf"{re.escape(label)}\s+as of\s+([A-Za-z]{{3}}\s+\d{{1,2}},\s+\d{{4}})\s+\$?([0-9,.\-]+)"
+    match = re.search(pattern, plain_text)
+    if not match:
+        return None
+    value = parse_etf_number(match.group(2))
+    if value is None:
+        return None
+    return match.group(1), value
+
+
+def parse_blackrock_spreadsheet_rows(xml_text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row_text in re.findall(r"<ss:Row[^>]*>(.*?)</ss:Row>", xml_text, re.DOTALL):
+        cells = [
+            compact_whitespace(html.unescape(re.sub(r"<[^>]+>", "", cell)))
+            for cell in re.findall(r"<ss:Data[^>]*>(.*?)</ss:Data>", row_text, re.DOTALL)
+        ]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def parse_ishares_iau_official_data(page_html: str, spreadsheet_xml: str) -> ETFHoldingRecord | None:
+    plain = html_to_plain_text(page_html)
+    tonnes_metric = extract_blackrock_metric(plain, "Tonnes in Trust")
+    ounces_metric = extract_blackrock_metric(plain, "Ounces in Trust")
+    shares_metric = extract_blackrock_metric(plain, "Shares Outstanding")
+    if tonnes_metric is None and ounces_metric is None:
+        return None
+
+    as_of_date = tonnes_metric[0] if tonnes_metric else ounces_metric[0] if ounces_metric else shares_metric[0]
+    holdings_tonnes = tonnes_metric[1] if tonnes_metric else (ounces_metric[1] / 32150.7465686 if ounces_metric else None)
+
+    share_rows: list[tuple[str, float]] = []
+    for row in parse_blackrock_spreadsheet_rows(spreadsheet_xml):
+        if len(row) >= 4 and re.match(r"^[A-Za-z]{3}\s+\d{1,2},\s+\d{4}$", row[0]):
+            shares = parse_etf_number(row[3])
+            if shares is not None:
+                share_rows.append((row[0], shares))
+
+    daily_flow = None
+    weekly_flow = None
+    if holdings_tonnes is not None and share_rows:
+        latest_shares = share_rows[0][1]
+        tonnes_per_share = holdings_tonnes / latest_shares if latest_shares else None
+        if tonnes_per_share is not None and len(share_rows) >= 2:
+            daily_flow = (share_rows[0][1] - share_rows[1][1]) * tonnes_per_share
+        if tonnes_per_share is not None:
+            target_index = min(5, len(share_rows) - 1)
+            if target_index > 0:
+                weekly_flow = (share_rows[0][1] - share_rows[target_index][1]) * tonnes_per_share
+
+    return ETFHoldingRecord(
+        fund="iShares Gold Trust",
+        ticker="IAU",
+        source_name="BlackRock iShares official page",
+        source_url=ISHARES_IAU_PAGE_URL,
+        as_of_date=as_of_date or "",
+        holdings_tonnes=round(holdings_tonnes, 2) if holdings_tonnes is not None else None,
+        daily_flow_tonnes=round(daily_flow, 2) if daily_flow is not None else None,
+        weekly_flow_tonnes=round(weekly_flow, 2) if weekly_flow is not None else None,
+        monthly_flow_tonnes=None,
+        ytd_flow_tonnes=None,
+        flow_usd_mn=None,
+        status=classify_etf_flow(weekly_flow, daily_flow),
+        note="Flux estime par variation des shares outstanding BlackRock; holdings Tonnes/Ounces in Trust officiels.",
+    )
+
+
+def merge_etf_holding_records(records: list[ETFHoldingRecord]) -> list[ETFHoldingRecord]:
+    merged: dict[str, ETFHoldingRecord] = {}
+    for record in records:
+        existing = merged.get(record.ticker)
+        if existing is None:
+            merged[record.ticker] = record
+            continue
+        if record.source_name.startswith("BlackRock"):
+            record.monthly_flow_tonnes = existing.monthly_flow_tonnes
+            record.ytd_flow_tonnes = existing.ytd_flow_tonnes
+            record.flow_usd_mn = existing.flow_usd_mn
+            record.note = f"{record.note} WGC conserve les flux mensuels/YTD si disponibles."
+            merged[record.ticker] = record
+        elif existing.source_name.startswith("BlackRock"):
+            existing.monthly_flow_tonnes = record.monthly_flow_tonnes
+            existing.ytd_flow_tonnes = record.ytd_flow_tonnes
+            existing.flow_usd_mn = record.flow_usd_mn
+        else:
+            merged[record.ticker] = record
+    return list(merged.values())
+
+
+def build_wgc_etf_flows_analysis(archive_data: dict[str, Any]) -> ETFFlowsAnalysis | None:
+    weekly_total = find_wgc_total_row(archive_data, "Weekly")
+    monthly_total = find_wgc_total_row(archive_data, "Monthly")
+    ytd_total = find_wgc_total_row(archive_data, "Year to date")
+    if not weekly_total and not monthly_total and not ytd_total:
+        return None
+
+    source_total = weekly_total or monthly_total or ytd_total or []
+    global_holdings = parse_etf_number(source_total[3] if len(source_total) > 3 else None)
+    weekly_flow_usd = parse_etf_number(weekly_total[2] if weekly_total and len(weekly_total) > 2 else None)
+    weekly_demand = parse_etf_number(weekly_total[4] if weekly_total and len(weekly_total) > 4 else None)
+    monthly_flow_usd = parse_etf_number(monthly_total[2] if monthly_total and len(monthly_total) > 2 else None)
+    monthly_demand = parse_etf_number(monthly_total[4] if monthly_total and len(monthly_total) > 4 else None)
+
+    score = clamp_score(
+        50
+        + clamp((weekly_demand or 0.0) * 1.1, -16, 16)
+        + clamp((monthly_demand or 0.0) * 0.18, -14, 14)
+    )
+    status = classify_etf_flow(weekly_demand, monthly_demand)
+    if status == "inflows":
+        flow_word = "entrees"
+    elif status == "outflows":
+        flow_word = "sorties"
+    else:
+        flow_word = "flux mixtes"
+    summary = (
+        f"WGC ETF: {flow_word} sur la semaine "
+        f"({weekly_demand:+.1f}t, {weekly_flow_usd:+.0f} M$) et mois "
+        f"({monthly_demand:+.1f}t, {monthly_flow_usd:+.0f} M$)."
+        if weekly_demand is not None and monthly_demand is not None and weekly_flow_usd is not None and monthly_flow_usd is not None
+        else "WGC ETF: flux officiels disponibles mais partiels."
+    )
+    holdings = [
+        record
+        for record in (
+            build_wgc_etf_holding_record(archive_data, "SPDR Gold Shares", "GLD"),
+            build_wgc_etf_holding_record(archive_data, "iShares Gold Trust", "IAU"),
+        )
+        if record is not None
+    ]
+    return ETFFlowsAnalysis(
+        as_of_date=wgc_as_of_date(archive_data),
+        source_name="World Gold Council ETF holdings and flows",
+        source_url=WGC_ETF_FLOWS_PAGE_URL,
+        global_holdings_tonnes=round(global_holdings, 2) if global_holdings is not None else None,
+        global_weekly_demand_tonnes=round(weekly_demand, 2) if weekly_demand is not None else None,
+        global_monthly_demand_tonnes=round(monthly_demand, 2) if monthly_demand is not None else None,
+        global_weekly_flows_usd_mn=round(weekly_flow_usd, 1) if weekly_flow_usd is not None else None,
+        global_monthly_flows_usd_mn=round(monthly_flow_usd, 1) if monthly_flow_usd is not None else None,
+        score=score,
+        status=status,
+        summary=summary,
+        holdings=holdings,
+        source_note="WGC agrège plus de 100 produits gold-backed ETF; sources WGC: Bloomberg, company filings, ICE Benchmark Administration.",
+    )
+
+
+def fetch_ishares_iau_holding_record() -> ETFHoldingRecord | None:
+    try:
+        page_html = http_get_text(ISHARES_IAU_PAGE_URL)
+        spreadsheet_xml = http_get_text(ISHARES_IAU_DATA_URL)
+        return parse_ishares_iau_official_data(page_html, spreadsheet_xml)
+    except Exception:
+        return None
+
+
+def fetch_etf_flows_analysis() -> ETFFlowsAnalysis | None:
+    try:
+        payload = http_get_json(WGC_ETF_ARCHIVE_TABLE_URL)
+        archive_data = payload.get("chartData", {}).get("data", {})
+        analysis = build_wgc_etf_flows_analysis(archive_data)
+    except Exception:
+        analysis = None
+
+    iau_record = fetch_ishares_iau_holding_record()
+    if analysis is None:
+        if iau_record is None:
+            return None
+        return ETFFlowsAnalysis(
+            as_of_date=iau_record.as_of_date,
+            source_name="BlackRock iShares official page",
+            source_url=ISHARES_IAU_PAGE_URL,
+            global_holdings_tonnes=None,
+            global_weekly_demand_tonnes=iau_record.weekly_flow_tonnes,
+            global_monthly_demand_tonnes=None,
+            global_weekly_flows_usd_mn=None,
+            global_monthly_flows_usd_mn=None,
+            score=clamp_score(50 + clamp((iau_record.weekly_flow_tonnes or 0.0) * 2.0, -12, 12)),
+            status=iau_record.status,
+            summary=f"IAU officiel: holdings {format_number(iau_record.holdings_tonnes, 2, 't')}, flux hebdo estime {format_signed_tonnes(iau_record.weekly_flow_tonnes)}.",
+            holdings=[iau_record],
+            source_note="Fallback IAU BlackRock; WGC ETF global indisponible.",
+        )
+
+    if iau_record is not None:
+        analysis.holdings = merge_etf_holding_records([*analysis.holdings, iau_record])
+    return analysis
 
 
 def align_proxy_points_to_spot(points: list[PricePoint], spot_price: float) -> list[PricePoint]:
@@ -2660,6 +2998,7 @@ def build_passive_agent_results(
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -2771,6 +3110,18 @@ def build_passive_agent_results(
     )
 
     correlation_score = cross_asset_analysis.score if cross_asset_analysis else 50
+    correlation_evidence = [
+        AgentEvidence("Confirmations", "; ".join((cross_asset_analysis.confirmations if cross_asset_analysis else [])[:2]) or "aucune confirmation nette"),
+        AgentEvidence("Contradictions", "; ".join((cross_asset_analysis.contradictions if cross_asset_analysis else [])[:2]) or "aucune contradiction nette"),
+    ]
+    if etf_flows_analysis is not None:
+        correlation_evidence.append(
+            AgentEvidence(
+                "ETF flows",
+                f"{etf_flows_analysis.status} {format_signed_tonnes(etf_flows_analysis.global_weekly_demand_tonnes)} hebdo",
+                etf_flows_analysis.source_name,
+            )
+        )
     agents.append(
         AgentResult(
             name="CorrelationAgent",
@@ -2779,17 +3130,56 @@ def build_passive_agent_results(
             score=correlation_score,
             confidence=70 if cross_asset_analysis else 40,
             summary=cross_asset_analysis.summary if cross_asset_analysis else "Confluence inter-marches indisponible.",
-            evidence=[
-                AgentEvidence("Confirmations", "; ".join((cross_asset_analysis.confirmations if cross_asset_analysis else [])[:2]) or "aucune confirmation nette"),
-                AgentEvidence("Contradictions", "; ".join((cross_asset_analysis.contradictions if cross_asset_analysis else [])[:2]) or "aucune contradiction nette"),
-            ],
+            evidence=correlation_evidence,
             risks=[AgentRisk("Correlation", "Une correlation court terme peut casser pendant un regime special.", "medium")],
         )
     )
 
-    flow_summary = cftc_positioning.summary if cftc_positioning else geopolitical_analysis.summary if geopolitical_analysis else "Flux et positionnement indisponibles."
-    flow_score = cftc_positioning.score if cftc_positioning else geopolitical_analysis.score if geopolitical_analysis else 50
-    flow_confidence = 82 if cftc_positioning else 55
+    flow_components: list[int] = []
+    if cftc_positioning is not None:
+        flow_components.append(cftc_positioning.score)
+    if etf_flows_analysis is not None:
+        flow_components.append(etf_flows_analysis.score)
+    if not flow_components and geopolitical_analysis is not None:
+        flow_components.append(geopolitical_analysis.score)
+    flow_score = round(sum(flow_components) / len(flow_components)) if flow_components else 50
+    flow_summary_parts = []
+    if cftc_positioning is not None:
+        flow_summary_parts.append(cftc_positioning.summary)
+    if etf_flows_analysis is not None:
+        flow_summary_parts.append(etf_flows_analysis.summary)
+    flow_summary = " ".join(flow_summary_parts) or (
+        geopolitical_analysis.summary if geopolitical_analysis else "Flux et positionnement indisponibles."
+    )
+    flow_confidence = 88 if cftc_positioning and etf_flows_analysis else 82 if cftc_positioning else 72 if etf_flows_analysis else 55
+    flow_evidence = [
+        AgentEvidence(
+            "Managed Money",
+            f"{cftc_positioning.managed_money_net:+,} ({cftc_positioning.managed_money_net_change:+,} hebdo)"
+            if cftc_positioning
+            else geopolitical_analysis.large_speculators
+            if geopolitical_analysis
+            else "indisponible",
+            "CFTC COT officiel" if cftc_positioning else "News/COT proxy",
+        ),
+        AgentEvidence(
+            "Open interest",
+            f"{cftc_positioning.open_interest:,} ({cftc_positioning.open_interest_change:+,} hebdo)"
+            if cftc_positioning
+            else geopolitical_analysis.comex_open_interest
+            if geopolitical_analysis
+            else "indisponible",
+            "CFTC COT officiel" if cftc_positioning else "News/OI proxy",
+        ),
+    ]
+    if etf_flows_analysis is not None:
+        flow_evidence.append(
+            AgentEvidence(
+                "ETF officiels",
+                f"{etf_flows_analysis.status}: {format_signed_tonnes(etf_flows_analysis.global_weekly_demand_tonnes)} hebdo / {format_signed_tonnes(etf_flows_analysis.global_monthly_demand_tonnes)} mensuel",
+                etf_flows_analysis.source_name,
+            )
+        )
     agents.append(
         AgentResult(
             name="FlowPositioningAgent",
@@ -2798,30 +3188,11 @@ def build_passive_agent_results(
             score=flow_score,
             confidence=flow_confidence,
             summary=flow_summary,
-            evidence=[
-                AgentEvidence(
-                    "Managed Money",
-                    f"{cftc_positioning.managed_money_net:+,} ({cftc_positioning.managed_money_net_change:+,} hebdo)"
-                    if cftc_positioning
-                    else geopolitical_analysis.large_speculators
-                    if geopolitical_analysis
-                    else "indisponible",
-                    "CFTC COT officiel" if cftc_positioning else "News/COT proxy",
-                ),
-                AgentEvidence(
-                    "Open interest",
-                    f"{cftc_positioning.open_interest:,} ({cftc_positioning.open_interest_change:+,} hebdo)"
-                    if cftc_positioning
-                    else f"{geopolitical_analysis.etf_flows} / {geopolitical_analysis.comex_open_interest}"
-                    if geopolitical_analysis
-                    else "indisponible",
-                    "CFTC COT officiel" if cftc_positioning else "News/ETF/OI proxy",
-                ),
-            ],
+            evidence=flow_evidence,
             risks=[
                 AgentRisk(
                     "Frequence COT",
-                    "Le COT officiel est hebdomadaire et publie avec decalage; il cadre le positionnement, pas le timing intraday.",
+                    "Le COT officiel est hebdomadaire; les ETF sont plus frequents mais cadrent les flux de fond, pas l'entree intraday.",
                     "medium",
                 )
             ],
@@ -3033,7 +3404,11 @@ def resolve_signal_label(
     return neutral_label
 
 
-def build_geopolitical_analysis(news: list[NewsItem], cftc_positioning: CFTCPositioning | None = None) -> GeopoliticalAnalysis:
+def build_geopolitical_analysis(
+    news: list[NewsItem],
+    cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
+) -> GeopoliticalAnalysis:
     risk_items = filter_news_by_categories(news, {"geopolitical", "risk_vix"})
     central_bank_items = filter_news_by_categories(news, {"macro_fed", "macro_cpi", "macro_nfp", "events_fomc"})
     physical_items = filter_news_by_categories(news, {"physical_demand", "gold"})
@@ -3145,7 +3520,16 @@ def build_geopolitical_analysis(news: list[NewsItem], cftc_positioning: CFTCPosi
         else:
             reasons.append("Le positionnement COT des large speculators reste peu lisible.")
 
-    if etf_flows == "inflows":
+    if etf_flows_analysis is not None:
+        etf_flows = (
+            f"{etf_flows_analysis.status} "
+            f"({format_signed_tonnes(etf_flows_analysis.global_weekly_demand_tonnes)} hebdo, "
+            f"{format_signed_tonnes(etf_flows_analysis.global_monthly_demand_tonnes)} mensuel)"
+        )
+        etf_tilt = round(clamp((etf_flows_analysis.score - 50) / 4, -8, 8))
+        score += etf_tilt
+        reasons.append(f"ETF officiels {etf_flows_analysis.as_of_date}: {etf_flows_analysis.summary}")
+    elif etf_flows == "inflows":
         score += 6
         reasons.append("Les flux ETF GLD/IAU paraissent orientes en entrees.")
     elif etf_flows == "outflows":
@@ -3237,6 +3621,7 @@ def analyze_market(
     event_mode: EventModeAnalysis | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
 ) -> AnalysisResult:
     market_score, market_reasons = build_market_reasons(gold, dxy, us10y)
     if real_yield is not None:
@@ -3268,7 +3653,11 @@ def analyze_market(
 
     normalized_news_score = sum(clamp(value, -2, 2) for value in category_scores.values())
     news_score = round(clamp(normalized_news_score / 2, -4, 4))
-    geopolitical = build_geopolitical_analysis(news, cftc_positioning=cftc_positioning)
+    geopolitical = build_geopolitical_analysis(
+        news,
+        cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
+    )
     if market_regime is not None:
         if market_regime.name == "Hormuz / Oil Shock" and market_regime.score >= 58:
             geopolitical.score = round(clamp(geopolitical.score - 12, 20, 85))
@@ -4010,6 +4399,7 @@ def build_payload(
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -4122,6 +4512,8 @@ def build_payload(
         }
     if cftc_positioning:
         payload["cftc_positioning"] = asdict(cftc_positioning)
+    if etf_flows_analysis:
+        payload["etf_flows_analysis"] = asdict(etf_flows_analysis)
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -4234,6 +4626,48 @@ def build_cftc_positioning_from_payload(data: dict[str, Any] | None) -> CFTCPosi
     )
 
 
+def build_etf_holding_record_from_payload(data: dict[str, Any]) -> ETFHoldingRecord:
+    return ETFHoldingRecord(
+        fund=str(data.get("fund", "")),
+        ticker=str(data.get("ticker", "")),
+        source_name=str(data.get("source_name", "")),
+        source_url=str(data.get("source_url", "")),
+        as_of_date=str(data.get("as_of_date", "")),
+        holdings_tonnes=parse_float(data.get("holdings_tonnes")),
+        daily_flow_tonnes=parse_float(data.get("daily_flow_tonnes")),
+        weekly_flow_tonnes=parse_float(data.get("weekly_flow_tonnes")),
+        monthly_flow_tonnes=parse_float(data.get("monthly_flow_tonnes")),
+        ytd_flow_tonnes=parse_float(data.get("ytd_flow_tonnes")),
+        flow_usd_mn=parse_float(data.get("flow_usd_mn")),
+        status=str(data.get("status", "unknown")),
+        note=str(data.get("note", "")),
+    )
+
+
+def build_etf_flows_analysis_from_payload(data: dict[str, Any] | None) -> ETFFlowsAnalysis | None:
+    if not isinstance(data, dict):
+        return None
+    return ETFFlowsAnalysis(
+        as_of_date=str(data.get("as_of_date", "")),
+        source_name=str(data.get("source_name", "ETF official flows")),
+        source_url=str(data.get("source_url", "")),
+        global_holdings_tonnes=parse_float(data.get("global_holdings_tonnes")),
+        global_weekly_demand_tonnes=parse_float(data.get("global_weekly_demand_tonnes")),
+        global_monthly_demand_tonnes=parse_float(data.get("global_monthly_demand_tonnes")),
+        global_weekly_flows_usd_mn=parse_float(data.get("global_weekly_flows_usd_mn")),
+        global_monthly_flows_usd_mn=parse_float(data.get("global_monthly_flows_usd_mn")),
+        score=int(data.get("score", 50) or 50),
+        status=str(data.get("status", "unknown")),
+        summary=str(data.get("summary", "Flux ETF officiels indisponibles.")),
+        holdings=[
+            build_etf_holding_record_from_payload(item)
+            for item in data.get("holdings", [])
+            if isinstance(item, dict)
+        ],
+        source_note=str(data.get("source_note", "")),
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -4278,6 +4712,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     us10y_data = market_snapshot.get("us10y_yield", {})
     official_macro_data = market_snapshot.get("official_macro_rates", {})
     cftc_positioning_payload = payload.get("cftc_positioning")
+    etf_flows_payload = payload.get("etf_flows_analysis")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -4415,6 +4850,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         else None
     )
     cftc_positioning = build_cftc_positioning_from_payload(cftc_positioning_payload)
+    etf_flows_analysis = build_etf_flows_analysis_from_payload(etf_flows_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -4523,6 +4959,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         executive_summary=str(payload.get("executive_summary", "")),
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
@@ -4565,6 +5002,7 @@ def render_report(
     real_yield: SymbolSnapshot | None = None,
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -4659,6 +5097,28 @@ def render_report(
                 f"- Lecture: {cftc_positioning.summary}",
             ]
         )
+
+    if etf_flows_analysis:
+        lines.extend(
+            [
+                "",
+                "## ETF Flows Officiels",
+                f"- Source: {etf_flows_analysis.source_name} ({etf_flows_analysis.source_url})",
+                f"- Date: {etf_flows_analysis.as_of_date}",
+                f"- Holdings globales: {format_number(etf_flows_analysis.global_holdings_tonnes, 2, 't')}",
+                f"- Flux hebdo global: {format_signed_tonnes(etf_flows_analysis.global_weekly_demand_tonnes)}",
+                f"- Flux mensuel global: {format_signed_tonnes(etf_flows_analysis.global_monthly_demand_tonnes)}",
+                f"- Score ETF: {etf_flows_analysis.score}/100 ({etf_flows_analysis.status})",
+                f"- Lecture: {etf_flows_analysis.summary}",
+            ]
+        )
+        for record in etf_flows_analysis.holdings:
+            lines.append(
+                f"- {record.ticker}: holdings {format_number(record.holdings_tonnes, 2, 't')}, "
+                f"jour {format_signed_tonnes(record.daily_flow_tonnes)}, "
+                f"hebdo {format_signed_tonnes(record.weekly_flow_tonnes)}, "
+                f"mensuel {format_signed_tonnes(record.monthly_flow_tonnes)}; source {record.source_name}"
+            )
 
     if global_recommendation:
         lines.extend(
@@ -4883,6 +5343,12 @@ def format_number(value: float | None, decimals: int = 2, suffix: str = "") -> s
     if value is None:
         return "n/a"
     return f"{value:.{decimals}f}{suffix}"
+
+
+def format_signed_tonnes(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:+.2f}t"
 
 
 def render_weekend_gold_proxy(snapshot: WeekendGoldSnapshot | None, spot: SymbolSnapshot) -> str:
@@ -5229,6 +5695,54 @@ def render_cftc_positioning_panel(positioning: CFTCPositioning | None) -> str:
       </table>
     </div>
     <div class="metric-footnote">{source_link}</div>
+    """.strip()
+
+
+def render_etf_flows_panel(analysis: ETFFlowsAnalysis | None) -> str:
+    if analysis is None:
+        return (
+            '<div class="empty-state">'
+            "ETF flows officiels indisponibles. Le terminal attend WGC/GLD/IAU avant de remplacer les proxies headlines."
+            "</div>"
+        )
+
+    status_class = "bullish" if analysis.score >= 56 else "bearish" if analysis.score <= 44 else "neutral"
+    rows = []
+    for record in analysis.holdings:
+        record_class = "bullish" if record.status == "inflows" else "bearish" if record.status == "outflows" else "neutral"
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(record.ticker)}</strong><br><span class="soft">{html.escape(record.fund)}</span></td>
+              <td>{format_number(record.holdings_tonnes, 2, 't')}</td>
+              <td class="{record_class}">{format_signed_tonnes(record.daily_flow_tonnes)}</td>
+              <td class="{record_class}">{format_signed_tonnes(record.weekly_flow_tonnes)}</td>
+              <td class="{record_class}">{format_signed_tonnes(record.monthly_flow_tonnes)}</td>
+              <td>{html.escape(record.source_name)}</td>
+            </tr>
+            """.strip()
+        )
+    source_link = (
+        f'<a href="{html.escape(analysis.source_url)}" target="_blank" rel="noopener noreferrer">Source ETF officielle</a>'
+        if analysis.source_url
+        else ""
+    )
+    return f"""
+    <div class="trade-verdict {status_class}">{html.escape(analysis.status)} · {analysis.score}/100</div>
+    <p class="trade-summary">{html.escape(analysis.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Date WGC</strong><span>{html.escape(analysis.as_of_date or "n/a")}</span></div>
+      <div class="geo-stat"><strong>Holdings globales</strong><span>{format_number(analysis.global_holdings_tonnes, 2, 't')}</span></div>
+      <div class="geo-stat"><strong>Flux hebdo</strong><span>{format_signed_tonnes(analysis.global_weekly_demand_tonnes)}</span></div>
+      <div class="geo-stat"><strong>Flux mensuel</strong><span>{format_signed_tonnes(analysis.global_monthly_demand_tonnes)}</span></div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>ETF</th><th>Holdings</th><th>Jour</th><th>Hebdo</th><th>Mensuel</th><th>Source</th></tr></thead>
+        <tbody>{''.join(rows) or '<tr><td colspan="6">Aucun detail GLD/IAU disponible.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="metric-footnote">{html.escape(analysis.source_note)} {source_link}</div>
     """.strip()
 
 
@@ -6576,6 +7090,7 @@ def render_dashboard_clarity(
     real_yield = bundle.real_yield
     official_macro_rates = bundle.official_macro_rates
     cftc_positioning = bundle.cftc_positioning
+    etf_flows_analysis = bundle.etf_flows_analysis
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -7759,6 +8274,7 @@ def render_dashboard_clarity_v2(
     real_yield = bundle.real_yield
     official_macro_rates = bundle.official_macro_rates
     cftc_positioning = bundle.cftc_positioning
+    etf_flows_analysis = bundle.etf_flows_analysis
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -7815,6 +8331,7 @@ def render_dashboard_clarity_v2(
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9175,6 +9692,13 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">ETF flows officiels</div>
+              <h2>WGC + GLD + IAU</h2>
+              <p class="footer-note">Lecture des flux institutionnels gold-backed ETF: WGC global, SPDR GLD via WGC, iShares IAU via BlackRock.</p>
+              {render_etf_flows_panel(etf_flows_analysis)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Agents passifs experimentaux</div>
               <h2>Market agents</h2>
               {render_agent_department_panel(agent_results, "Market")}
@@ -9325,6 +9849,12 @@ def render_dashboard_clarity_v2(
               <div class="section-kicker">Regime politique / petrole</div>
               <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
               {render_market_regime_panel(market_regime, cross_asset_analysis)}
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">ETF flows officiels</div>
+              <h2>Demande papier institutionnelle</h2>
+              {render_etf_flows_panel(etf_flows_analysis)}
             </article>
 
             <article class="panel span-12">
@@ -9552,6 +10082,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_mode=event_mode,
         market_regime=market_regime,
         cftc_positioning=live_bundle.cftc_positioning,
+        etf_flows_analysis=live_bundle.etf_flows_analysis,
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(live_bundle.news)
@@ -9601,6 +10132,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=live_bundle.cftc_positioning,
+        etf_flows_analysis=live_bundle.etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9622,6 +10154,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=live_bundle.cftc_positioning,
+        etf_flows_analysis=live_bundle.etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9648,6 +10181,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.real_yield = real_yield
     live_bundle.official_macro_rates = official_macro_rates
     live_bundle.cftc_positioning = live_bundle.cftc_positioning
+    live_bundle.etf_flows_analysis = live_bundle.etf_flows_analysis
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
@@ -9667,6 +10201,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     political_news = fetch_political_statement_news(limit=max(8, top_news))
     news = merge_news_items(news, political_news, max(top_news, 24))
     cftc_positioning = fetch_cftc_gold_positioning()
+    etf_flows_analysis = fetch_etf_flows_analysis()
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
     real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
@@ -9686,6 +10221,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_mode=event_mode,
         market_regime=market_regime,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
     )
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(news)
@@ -9735,6 +10271,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9756,6 +10293,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9787,6 +10325,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         real_yield=real_yield,
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9824,6 +10363,7 @@ def render_artifacts(
         bundle.real_yield,
         bundle.official_macro_rates,
         bundle.cftc_positioning,
+        bundle.etf_flows_analysis,
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,

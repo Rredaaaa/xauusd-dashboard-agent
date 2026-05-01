@@ -1,9 +1,11 @@
 import unittest
+from datetime import datetime, timezone
 
 from xauusd_agent import (
     AnalysisResult,
     BriefingBundle,
     CFTCPositioning,
+    DataQualitySnapshot,
     ETFFlowsAnalysis,
     ETFHoldingRecord,
     EventModeAnalysis,
@@ -16,6 +18,7 @@ from xauusd_agent import (
     OfficialMacroRates,
     PoliticalStatement,
     PricePoint,
+    SourceSnapshot,
     SymbolSnapshot,
     TechnicalReading,
     TradeRecommendation,
@@ -25,6 +28,7 @@ from xauusd_agent import (
     build_event_mode_analysis,
     build_official_macro_rates,
     build_event_facts,
+    build_data_quality_snapshot,
     build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
@@ -449,6 +453,31 @@ class AnalysisShapeTests(unittest.TestCase):
                     ),
                 ],
             ),
+            data_quality=DataQualitySnapshot(
+                generated_at="2026-04-24T00:00:00+00:00",
+                score=88,
+                status="HIGH",
+                summary="Data quality HIGH 88/100: sources critiques ok.",
+                missing_sources=[],
+                stale_sources=[],
+                weak_sources=["Google News RSS / fallback feeds"],
+                contradictions=[],
+                snapshots=[
+                    SourceSnapshot(
+                        source_id="fred_dgs10",
+                        name="FRED DGS10",
+                        category="rates",
+                        tier=1,
+                        status="ok",
+                        last_update="2026-04-24T00:00:00+00:00",
+                        age_minutes=0,
+                        value_summary="10Y 4.18%",
+                        source_url="https://fred.stlouisfed.org/",
+                        critical=True,
+                        allowed_agents=["MacroAgent", "RiskManagerAgent"],
+                    )
+                ],
+            ),
             event_facts=[
                 EventFact(
                     title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
@@ -534,6 +563,10 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Federal Reserve FOMC calendar", dashboard)
         self.assertIn("CME FedWatch officiel", dashboard)
         self.assertIn("Personal Income and Outlays", dashboard)
+        self.assertIn("Data Feed Governance", dashboard)
+        self.assertIn("Qualite, fraicheur et fiabilite des sources", dashboard)
+        self.assertIn("Source Registry", dashboard)
+        self.assertIn("FRED DGS10", dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -587,6 +620,46 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         self.assertEqual(fed_events[0].event_type, "Fed speech")
         self.assertEqual(fed_events[0].impact_level, "HIGH")
+
+    def test_data_quality_flags_missing_and_stale_critical_sources(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        gold.fetched_at = "2026-04-25T00:00:00+00:00"
+        dxy = self.snapshot("DXY", 99.0, 98.5)
+        us10y = self.snapshot("^TNX", 4.2, 4.1)
+        quality = build_data_quality_snapshot(
+            gold,
+            dxy,
+            us10y,
+            [],
+            now=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        )
+        self.assertLess(quality.score, 70)
+        self.assertIn("Investing.com XAU/USD", quality.stale_sources)
+        self.assertIn("FRED DGS10", quality.missing_sources)
+        self.assertIn("World Gold Council ETF flows", quality.missing_sources)
+
+    def test_event_fact_deduplication_keeps_single_fact_per_headline(self) -> None:
+        item = NewsItem(
+            title="Gold rises as Fed rate cut bets grow",
+            source="Reuters",
+            link="https://example.com/a",
+            published_at="2026-04-24T00:00:00+00:00",
+            category="macro_fed",
+            score=2,
+            score_reasons=["bullish:rate cut"],
+        )
+        duplicate = NewsItem(
+            title="Gold rises as Fed rate cut bets grow",
+            source="Aggregator",
+            link="https://example.com/b",
+            published_at="2026-04-24T00:05:00+00:00",
+            category="macro_fed",
+            score=2,
+            score_reasons=["bullish:rate cut"],
+        )
+        facts = build_event_facts([item, duplicate], limit=6)
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0].source, "Reuters")
 
     def test_passive_agents_do_not_replace_official_scoring(self) -> None:
         points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]

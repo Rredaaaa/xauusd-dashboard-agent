@@ -570,6 +570,46 @@ class MacroCatalystCalendar:
 
 
 @dataclass
+class SourceRegistryEntry:
+    source_id: str
+    name: str
+    category: str
+    tier: int
+    max_age_minutes: int
+    critical: bool
+    source_url: str
+    allowed_agents: list[str]
+
+
+@dataclass
+class SourceSnapshot:
+    source_id: str
+    name: str
+    category: str
+    tier: int
+    status: str
+    last_update: str | None
+    age_minutes: int | None
+    value_summary: str
+    source_url: str
+    critical: bool
+    allowed_agents: list[str]
+
+
+@dataclass
+class DataQualitySnapshot:
+    generated_at: str
+    score: int
+    status: str
+    summary: str
+    missing_sources: list[str]
+    stale_sources: list[str]
+    weak_sources: list[str]
+    contradictions: list[str]
+    snapshots: list[SourceSnapshot] = field(default_factory=list)
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -617,6 +657,7 @@ class BriefingBundle:
     cftc_positioning: CFTCPositioning | None = None
     etf_flows_analysis: ETFFlowsAnalysis | None = None
     macro_catalysts: MacroCatalystCalendar | None = None
+    data_quality: DataQualitySnapshot | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
@@ -747,6 +788,181 @@ def keyword_matches(text: str, keyword: str) -> bool:
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
+    "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceAgent", "RiskManagerAgent", "OrchestratorAgent"]),
+    "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 2, 120, False, IG_WEEKEND_GOLD_URL, ["PriceAgent", "RiskManagerAgent"]),
+    "fred_dgs10": SourceRegistryEntry("fred_dgs10", "FRED DGS10", "rates", 1, 10080, True, FRED_CSV_URL_TEMPLATE.format(series_id="DGS10"), ["MacroAgent", "RiskManagerAgent"]),
+    "fred_dgs2": SourceRegistryEntry("fred_dgs2", "FRED DGS2", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS2"), ["MacroAgent"]),
+    "fred_t10yie": SourceRegistryEntry("fred_t10yie", "FRED T10YIE", "macro", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="T10YIE"), ["MacroAgent"]),
+    "fred_dfii10": SourceRegistryEntry("fred_dfii10", "FRED DFII10", "rates", 1, 10080, True, FRED_DFII10_CSV_URL, ["MacroAgent", "RiskManagerAgent"]),
+    "cftc_cot_gold": SourceRegistryEntry("cftc_cot_gold", "CFTC COT Gold", "flows", 1, 14400, True, CFTC_DISAGG_CURRENT_URL, ["FlowPositioningAgent", "RiskManagerAgent"]),
+    "wgc_etf_flows": SourceRegistryEntry("wgc_etf_flows", "World Gold Council ETF flows", "flows", 1, 14400, True, WGC_ETF_FLOWS_PAGE_URL, ["FlowPositioningAgent", "CorrelationAgent"]),
+    "macro_catalysts": SourceRegistryEntry("macro_catalysts", "Fed/BEA Macro Catalysts", "macro", 1, 1440, True, FED_FOMC_CALENDAR_URL, ["MacroAgent", "RiskManagerAgent"]),
+    "google_news_rss": SourceRegistryEntry("google_news_rss", "Google News RSS / fallback feeds", "news", 4, 2880, True, "https://news.google.com/rss", ["SentimentNewsAgent", "EventFactsAgent"]),
+    "white_house_feed": SourceRegistryEntry("white_house_feed", "White House News feed", "political_statements", 1, 10080, False, WHITE_HOUSE_NEWS_FEED_URL, ["TrumpPoliticalStatementsAgent"]),
+    "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceAgent"]),
+    "oil_context": SourceRegistryEntry("oil_context", "WTI/Brent oil context", "oil", 2, 240, False, "https://finance.yahoo.com/", ["GeopoliticalOilShockAgent", "RiskManagerAgent"]),
+}
+
+
+def source_registry_entries() -> list[SourceRegistryEntry]:
+    return list(SOURCE_REGISTRY.values())
+
+
+def age_minutes_from_iso(iso_text: str | None, now: datetime | None = None) -> int | None:
+    if not iso_text:
+        return None
+    parsed = parse_iso_datetime(str(iso_text))
+    if parsed is None:
+        return None
+    reference = now or datetime.now(timezone.utc)
+    return max(0, round((reference - parsed).total_seconds() / 60))
+
+
+def snapshot_status(entry: SourceRegistryEntry, present: bool, age_minutes: int | None) -> str:
+    if not present:
+        return "missing"
+    if age_minutes is not None and age_minutes > entry.max_age_minutes:
+        return "stale"
+    if entry.tier >= 4:
+        return "weak"
+    return "ok"
+
+
+def make_source_snapshot(
+    source_id: str,
+    present: bool,
+    last_update: str | None,
+    value_summary: str,
+    now: datetime | None = None,
+) -> SourceSnapshot:
+    entry = SOURCE_REGISTRY[source_id]
+    age = age_minutes_from_iso(last_update, now=now)
+    status = snapshot_status(entry, present, age)
+    return SourceSnapshot(
+        source_id=entry.source_id,
+        name=entry.name,
+        category=entry.category,
+        tier=entry.tier,
+        status=status,
+        last_update=last_update if present else None,
+        age_minutes=age if present else None,
+        value_summary=value_summary if present else "source absente",
+        source_url=entry.source_url,
+        critical=entry.critical,
+        allowed_agents=entry.allowed_agents,
+    )
+
+
+def data_quality_status(score: int) -> str:
+    if score >= 85:
+        return "HIGH"
+    if score >= 70:
+        return "USABLE"
+    if score >= 55:
+        return "DEGRADED"
+    return "WEAK"
+
+
+def latest_iso(values: list[str | None]) -> str | None:
+    parsed_values = [(parse_iso_datetime(value), value) for value in values if value]
+    valid = [(parsed, value) for parsed, value in parsed_values if parsed is not None]
+    if not valid:
+        return None
+    return max(valid, key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc))[1]
+
+
+def build_data_quality_snapshot(
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    news: list[NewsItem],
+    real_yield: SymbolSnapshot | None = None,
+    official_macro_rates: OfficialMacroRates | None = None,
+    cftc_positioning: CFTCPositioning | None = None,
+    etf_flows_analysis: ETFFlowsAnalysis | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
+    cross_asset_analysis: CrossAssetAnalysis | None = None,
+    weekend_gold: WeekendGoldSnapshot | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
+    political_statements: list[PoliticalStatement] | None = None,
+    now: datetime | None = None,
+) -> DataQualitySnapshot:
+    reference = now or datetime.now(timezone.utc)
+    latest_news = latest_iso([item.published_at for item in news])
+    latest_political = latest_iso([item.published_at for item in political_statements or []])
+    latest_macro = latest_iso([item.scheduled_at for item in (macro_catalysts.catalysts if macro_catalysts else [])])
+
+    snapshots = [
+        make_source_snapshot("investing_xauusd", gold.price > 0, gold.fetched_at, f"spot {format_number(gold.price)}", now=reference),
+        make_source_snapshot("ig_weekend_gold", weekend_gold is not None, weekend_gold.fetched_at if weekend_gold else None, f"mid {format_number(weekend_gold.mid if weekend_gold else None)}", now=reference),
+        make_source_snapshot(
+            "fred_dgs10",
+            bool(official_macro_rates and official_macro_rates.dgs10),
+            official_macro_rates.dgs10.fetched_at if official_macro_rates and official_macro_rates.dgs10 else None,
+            f"10Y {format_number(official_macro_rates.dgs10.price if official_macro_rates and official_macro_rates.dgs10 else None, 2, '%')}",
+            now=reference,
+        ),
+        make_source_snapshot(
+            "fred_dgs2",
+            bool(official_macro_rates and official_macro_rates.dgs2),
+            official_macro_rates.dgs2.fetched_at if official_macro_rates and official_macro_rates.dgs2 else None,
+            f"2Y {format_number(official_macro_rates.dgs2.price if official_macro_rates and official_macro_rates.dgs2 else None, 2, '%')}",
+            now=reference,
+        ),
+        make_source_snapshot(
+            "fred_t10yie",
+            bool(official_macro_rates and official_macro_rates.t10yie),
+            official_macro_rates.t10yie.fetched_at if official_macro_rates and official_macro_rates.t10yie else None,
+            f"breakeven {format_number(official_macro_rates.t10yie.price if official_macro_rates and official_macro_rates.t10yie else None, 2, '%')}",
+            now=reference,
+        ),
+        make_source_snapshot("fred_dfii10", real_yield is not None, real_yield.fetched_at if real_yield else None, f"real yield {format_number(real_yield.price if real_yield else None, 2, '%')}", now=reference),
+        make_source_snapshot("cftc_cot_gold", cftc_positioning is not None, f"{cftc_positioning.report_date}T21:30:00+00:00" if cftc_positioning else None, cftc_positioning.summary if cftc_positioning else "", now=reference),
+        make_source_snapshot("wgc_etf_flows", etf_flows_analysis is not None, f"{etf_flows_analysis.as_of_date}T21:30:00+00:00" if etf_flows_analysis and etf_flows_analysis.as_of_date else None, etf_flows_analysis.summary if etf_flows_analysis else "", now=reference),
+        make_source_snapshot("macro_catalysts", macro_catalysts is not None and bool(macro_catalysts.catalysts), macro_catalysts.generated_at if macro_catalysts else None, f"{len(macro_catalysts.catalysts) if macro_catalysts else 0} events", now=reference),
+        make_source_snapshot("google_news_rss", bool(news), latest_news, f"{len(news)} headlines dedup", now=reference),
+        make_source_snapshot("white_house_feed", bool(political_statements), latest_political, f"{len(political_statements or [])} statements", now=reference),
+        make_source_snapshot("cross_asset_yahoo", cross_asset_analysis is not None, gold.fetched_at, cross_asset_analysis.summary if cross_asset_analysis else "", now=reference),
+        make_source_snapshot("oil_context", market_regime is not None, gold.fetched_at, market_regime.summary if market_regime else "", now=reference),
+    ]
+
+    missing = [snap.name for snap in snapshots if snap.status == "missing" and snap.critical]
+    stale = [snap.name for snap in snapshots if snap.status == "stale" and snap.critical]
+    weak = [snap.name for snap in snapshots if snap.status == "weak"]
+    contradictions = []
+    if cross_asset_analysis and cross_asset_analysis.contradictions:
+        contradictions.extend(cross_asset_analysis.contradictions[:3])
+    if cftc_positioning and etf_flows_analysis and cftc_positioning.score >= 60 and etf_flows_analysis.score <= 40:
+        contradictions.append("CFTC positioning bullish mais ETF flows officiels en sorties.")
+    if cftc_positioning and etf_flows_analysis and cftc_positioning.score <= 40 and etf_flows_analysis.score >= 60:
+        contradictions.append("CFTC positioning bearish mais ETF flows officiels en entrees.")
+
+    score = 100
+    score -= 18 * len(missing)
+    score -= 12 * len(stale)
+    score -= 4 * len(weak)
+    score -= min(18, 6 * len(contradictions))
+    score = clamp_score(score)
+    status = data_quality_status(score)
+    summary = (
+        f"Data quality {status} {score}/100: "
+        f"{len(missing)} critique(s) absente(s), {len(stale)} critique(s) stale, "
+        f"{len(weak)} source(s) faible(s), {len(contradictions)} contradiction(s)."
+    )
+    return DataQualitySnapshot(
+        generated_at=reference.replace(microsecond=0).isoformat(),
+        score=score,
+        status=status,
+        summary=summary,
+        missing_sources=missing,
+        stale_sources=stale,
+        weak_sources=weak,
+        contradictions=contradictions,
+        snapshots=snapshots,
+    )
 
 
 def current_month_name_en() -> str:
@@ -3426,6 +3642,7 @@ def build_passive_agent_results(
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
     macro_catalysts: MacroCatalystCalendar | None = None,
+    data_quality: DataQualitySnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -3436,6 +3653,23 @@ def build_passive_agent_results(
     readings = technical_timeframes or []
     agents: list[AgentResult] = []
     primary_fact = event_facts[0] if event_facts else None
+    data_quality_score = data_quality.score if data_quality else 50
+    data_quality_evidence = AgentEvidence(
+        "Data quality",
+        f"{data_quality.status} {data_quality.score}/100" if data_quality else "indisponible",
+        "SourceRegistry",
+    )
+    data_quality_risks = (
+        [
+            AgentRisk(
+                "Data quality",
+                f"Sources critiques faibles: missing={len(data_quality.missing_sources)}, stale={len(data_quality.stale_sources)}.",
+                "high" if data_quality.score < 70 else "medium",
+            )
+        ]
+        if data_quality and (data_quality.missing_sources or data_quality.stale_sources or data_quality.score < 70)
+        else []
+    )
 
     price_score = clamp_score(50 + (gold.change_pct * 18) + (gold.period_change_pct * 6))
     price_risks = []
@@ -3452,6 +3686,7 @@ def build_passive_agent_results(
             evidence=[
                 AgentEvidence("Spot XAU/USD", f"{gold.price:.2f} ({gold.change_pct:+.2f}%)", "Investing.com XAU/USD"),
                 AgentEvidence("Support / resistance", f"{format_number(gold.support)} / {format_number(gold.resistance)}", "Calcul local"),
+                data_quality_evidence,
             ],
             risks=price_risks,
         )
@@ -3508,7 +3743,9 @@ def build_passive_agent_results(
             confidence=78 if official_macro_rates and official_macro_rates.dgs10 else 68 if real_yield is not None else 55,
             summary=(fundamental_recommendation.summary if fundamental_recommendation else "Lecture macro passive basee sur dollar et taux."),
             evidence=macro_evidence,
-            risks=[] if official_macro_rates and official_macro_rates.dgs10 else [AgentRisk("Source taux", "FRED DGS10 indisponible, fallback actif.", "medium")],
+            risks=(
+                [] if official_macro_rates and official_macro_rates.dgs10 else [AgentRisk("Source taux", "FRED DGS10 indisponible, fallback actif.", "medium")]
+            ) + data_quality_risks,
         )
     )
 
@@ -3543,8 +3780,9 @@ def build_passive_agent_results(
                 AgentEvidence("Headlines", top_news_titles(news, limit=2), "RSS/Google News"),
                 AgentEvidence("Score headlines", str(analysis.score), "Moteur heuristique local"),
                 AgentEvidence("Faits structures", str(len(event_facts or [])), "EventFact"),
+                data_quality_evidence,
             ],
-            risks=[AgentRisk("Bruit news", "Les titres peuvent etre redondants ou en retard sur le prix.", "medium")],
+            risks=[AgentRisk("Bruit news", "Les titres peuvent etre redondants ou en retard sur le prix.", "medium")] + data_quality_risks,
         )
     )
 
@@ -3726,6 +3964,8 @@ def build_passive_agent_results(
     )
     if next_high_macro is not None:
         risk_reasons.append(f"Macro high impact proche: {next_high_macro.event_type}")
+    if data_quality and data_quality.score < 70:
+        risk_reasons.append(f"Data quality degradee {data_quality.score}/100")
     agents.append(
         AgentResult(
             name="RiskManagerAgent",
@@ -3737,8 +3977,9 @@ def build_passive_agent_results(
             evidence=[
                 AgentEvidence("Decision officielle", f"{global_recommendation.verdict} {global_recommendation.score}/100" if global_recommendation else "indisponible", "Scoring actuel"),
                 AgentEvidence("Alertes risque", "; ".join(risk_reasons) if risk_reasons else "aucune alerte majeure", "Event/regime"),
+                data_quality_evidence,
             ],
-            risks=[AgentRisk("Execution", "La lecture agent ne constitue pas un ordre; elle surveille les risques autour du plan.", "high")],
+            risks=[AgentRisk("Execution", "La lecture agent ne constitue pas un ordre; elle surveille les risques autour du plan.", "high")] + data_quality_risks,
         )
     )
 
@@ -3755,8 +3996,9 @@ def build_passive_agent_results(
             evidence=[
                 AgentEvidence("Verdict officiel conserve", global_recommendation.verdict if global_recommendation else "indisponible", "Moteur actuel"),
                 AgentEvidence("Agents actifs", f"{len(agents) + 1} lectures passives", "Fondation Phase 5"),
+                AgentEvidence("SourceRegistry", f"{data_quality_score}/100", "Phase 12"),
             ],
-            risks=orchestrator_risks or [AgentRisk("Contradictions", "Aucune contradiction majeure entre agents passifs.", "low")],
+            risks=orchestrator_risks + data_quality_risks or [AgentRisk("Contradictions", "Aucune contradiction majeure entre agents passifs.", "low")],
         )
     )
 
@@ -4852,6 +5094,7 @@ def build_payload(
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
     macro_catalysts: MacroCatalystCalendar | None = None,
+    data_quality: DataQualitySnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -4968,6 +5211,8 @@ def build_payload(
         payload["etf_flows_analysis"] = asdict(etf_flows_analysis)
     if macro_catalysts:
         payload["macro_catalysts"] = asdict(macro_catalysts)
+    if data_quality:
+        payload["data_quality"] = asdict(data_quality)
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -5154,6 +5399,42 @@ def build_macro_catalyst_calendar_from_payload(data: dict[str, Any] | None) -> M
     )
 
 
+def build_source_snapshot_from_payload(data: dict[str, Any]) -> SourceSnapshot:
+    return SourceSnapshot(
+        source_id=str(data.get("source_id", "")),
+        name=str(data.get("name", "")),
+        category=str(data.get("category", "")),
+        tier=int(data.get("tier", 4) or 4),
+        status=str(data.get("status", "missing")),
+        last_update=str(data.get("last_update")) if data.get("last_update") is not None else None,
+        age_minutes=int(data["age_minutes"]) if data.get("age_minutes") is not None else None,
+        value_summary=str(data.get("value_summary", "")),
+        source_url=str(data.get("source_url", "")),
+        critical=bool(data.get("critical", False)),
+        allowed_agents=[str(item) for item in data.get("allowed_agents", [])],
+    )
+
+
+def build_data_quality_from_payload(data: dict[str, Any] | None) -> DataQualitySnapshot | None:
+    if not isinstance(data, dict):
+        return None
+    return DataQualitySnapshot(
+        generated_at=str(data.get("generated_at", iso_now())),
+        score=int(data.get("score", 50) or 50),
+        status=str(data.get("status", "UNKNOWN")),
+        summary=str(data.get("summary", "Data quality indisponible.")),
+        missing_sources=[str(item) for item in data.get("missing_sources", [])],
+        stale_sources=[str(item) for item in data.get("stale_sources", [])],
+        weak_sources=[str(item) for item in data.get("weak_sources", [])],
+        contradictions=[str(item) for item in data.get("contradictions", [])],
+        snapshots=[
+            build_source_snapshot_from_payload(item)
+            for item in data.get("snapshots", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -5200,6 +5481,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     cftc_positioning_payload = payload.get("cftc_positioning")
     etf_flows_payload = payload.get("etf_flows_analysis")
     macro_catalysts_payload = payload.get("macro_catalysts")
+    data_quality_payload = payload.get("data_quality")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -5339,6 +5621,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     cftc_positioning = build_cftc_positioning_from_payload(cftc_positioning_payload)
     etf_flows_analysis = build_etf_flows_analysis_from_payload(etf_flows_payload)
     macro_catalysts = build_macro_catalyst_calendar_from_payload(macro_catalysts_payload)
+    data_quality = build_data_quality_from_payload(data_quality_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -5449,6 +5732,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
         macro_catalysts=macro_catalysts,
+        data_quality=data_quality,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
@@ -5493,6 +5777,7 @@ def render_report(
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
     macro_catalysts: MacroCatalystCalendar | None = None,
+    data_quality: DataQualitySnapshot | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -5624,6 +5909,25 @@ def render_report(
             lines.append(
                 f"- {catalyst.event_type}: {catalyst.title} | {format_timestamp_for_humans(catalyst.scheduled_at)} "
                 f"({format_macro_countdown(catalyst.minutes_to_event)}) | {catalyst.impact_level} | {catalyst.gold_impact}"
+            )
+
+    if data_quality:
+        lines.extend(
+            [
+                "",
+                "## Data Feed Governance",
+                f"- Score qualite: {data_quality.score}/100 ({data_quality.status})",
+                f"- Resume: {data_quality.summary}",
+                "- Sources missing: " + (", ".join(data_quality.missing_sources) if data_quality.missing_sources else "aucune"),
+                "- Sources stale: " + (", ".join(data_quality.stale_sources) if data_quality.stale_sources else "aucune"),
+                "- Sources faibles: " + (", ".join(data_quality.weak_sources) if data_quality.weak_sources else "aucune"),
+                "- Contradictions: " + ("; ".join(data_quality.contradictions) if data_quality.contradictions else "aucune"),
+            ]
+        )
+        for snapshot in data_quality.snapshots:
+            lines.append(
+                f"- {snapshot.name}: {snapshot.status}, Tier {snapshot.tier}, categorie {snapshot.category}, "
+                f"age {snapshot.age_minutes if snapshot.age_minutes is not None else 'n/a'} min, agents {', '.join(snapshot.allowed_agents[:3])}"
             )
 
     if global_recommendation:
@@ -6305,6 +6609,50 @@ def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
     </div>
     <div class="metric-footnote">
       {html.escape(calendar.source_note)} {fedwatch_link}. {html.escape(calendar.fedwatch_note)}
+    </div>
+    """.strip()
+
+
+def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
+    if data_quality is None:
+        return '<div class="empty-state">Data quality indisponible: SourceRegistry non calcule sur ce snapshot.</div>'
+
+    status_class = "bullish" if data_quality.score >= 80 else "neutral" if data_quality.score >= 60 else "bearish"
+    rows = []
+    for snapshot in data_quality.snapshots:
+        row_class = "bullish" if snapshot.status == "ok" else "bearish" if snapshot.status in {"missing", "stale"} else "neutral"
+        agents = ", ".join(snapshot.allowed_agents[:3])
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(snapshot.name)}</strong><br><span class="soft">{html.escape(snapshot.category)} · Tier {snapshot.tier}</span></td>
+              <td class="{row_class}">{html.escape(snapshot.status.upper())}</td>
+              <td>{html.escape(format_timestamp_for_humans(snapshot.last_update) if snapshot.last_update else "n/a")}<br><span class="soft">{snapshot.age_minutes if snapshot.age_minutes is not None else "n/a"} min</span></td>
+              <td>{html.escape(snapshot.value_summary)}</td>
+              <td>{html.escape(agents)}</td>
+            </tr>
+            """.strip()
+        )
+    issue_items = data_quality.missing_sources + data_quality.stale_sources + data_quality.weak_sources + data_quality.contradictions
+    issues = "".join(f"<li>{html.escape(item)}</li>" for item in issue_items[:8]) or "<li>Aucune faiblesse critique detectee.</li>"
+    return f"""
+    <div class="trade-verdict {status_class}">Data quality {html.escape(data_quality.status)} · {data_quality.score}/100</div>
+    <p class="trade-summary">{html.escape(data_quality.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Missing</strong><span>{len(data_quality.missing_sources)}</span></div>
+      <div class="geo-stat"><strong>Stale</strong><span>{len(data_quality.stale_sources)}</span></div>
+      <div class="geo-stat"><strong>Weak</strong><span>{len(data_quality.weak_sources)}</span></div>
+      <div class="geo-stat"><strong>Contradictions</strong><span>{len(data_quality.contradictions)}</span></div>
+    </div>
+    <div class="geo-columns">
+      <div><div class="section-kicker">Alertes sources</div><ul class="reason-list">{issues}</ul></div>
+      <div><div class="section-kicker">Politique</div><p class="footer-note">Tier 1 = source officielle/primaire, Tier 2 = media ou donnees financieres fiables, Tier 3 = specialiste a verifier, Tier 4 = agregateur/faible. Un signal fort doit etre degrade si une source critique est absente ou stale.</p></div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Source</th><th>Status</th><th>Fraicheur</th><th>Valeur utilisee</th><th>Agents autorises</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
     </div>
     """.strip()
 
@@ -7655,6 +8003,7 @@ def render_dashboard_clarity(
     cftc_positioning = bundle.cftc_positioning
     etf_flows_analysis = bundle.etf_flows_analysis
     macro_catalysts = bundle.macro_catalysts
+    data_quality = bundle.data_quality
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -8840,6 +9189,7 @@ def render_dashboard_clarity_v2(
     cftc_positioning = bundle.cftc_positioning
     etf_flows_analysis = bundle.etf_flows_analysis
     macro_catalysts = bundle.macro_catalysts
+    data_quality = bundle.data_quality
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -8898,6 +9248,7 @@ def render_dashboard_clarity_v2(
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
         macro_catalysts=macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10315,6 +10666,11 @@ def render_dashboard_clarity_v2(
               {render_market_regime_panel(market_regime, cross_asset_analysis)}
             </article>
             <article class="panel span-12">
+              <div class="section-kicker">Data Feed Governance</div>
+              <h2>Qualite, fraicheur et fiabilite des sources</h2>
+              {render_data_quality_panel(data_quality)}
+            </article>
+            <article class="panel span-12">
               <div class="section-kicker">Agents passifs experimentaux</div>
               <h2>Decision agents & contradictions</h2>
               {render_agent_department_panel(agent_results, "Decision")}
@@ -10503,6 +10859,12 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">Source Registry</div>
+              <h2>Gouvernance des flux d'information</h2>
+              {render_data_quality_panel(data_quality)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Avertissement</div>
               <div class="footer-note">
                 Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
@@ -10659,6 +11021,21 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(live_bundle.news)
     political_statements = live_bundle.political_statements
+    data_quality = build_data_quality_snapshot(
+        gold,
+        dxy,
+        us10y,
+        live_bundle.news,
+        real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
+        cftc_positioning=live_bundle.cftc_positioning,
+        etf_flows_analysis=live_bundle.etf_flows_analysis,
+        macro_catalysts=live_bundle.macro_catalysts,
+        cross_asset_analysis=cross_asset_analysis,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
+        political_statements=political_statements,
+    )
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -10706,6 +11083,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         cftc_positioning=live_bundle.cftc_positioning,
         etf_flows_analysis=live_bundle.etf_flows_analysis,
         macro_catalysts=live_bundle.macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10729,6 +11107,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         cftc_positioning=live_bundle.cftc_positioning,
         etf_flows_analysis=live_bundle.etf_flows_analysis,
         macro_catalysts=live_bundle.macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10757,6 +11136,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.cftc_positioning = live_bundle.cftc_positioning
     live_bundle.etf_flows_analysis = live_bundle.etf_flows_analysis
     live_bundle.macro_catalysts = live_bundle.macro_catalysts
+    live_bundle.data_quality = data_quality
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
@@ -10802,6 +11182,21 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     geopolitical_analysis = analysis.geopolitical
     event_facts = build_event_facts(news)
     political_statements = build_political_statements(news)
+    data_quality = build_data_quality_snapshot(
+        gold,
+        dxy,
+        us10y,
+        news,
+        real_yield=real_yield,
+        official_macro_rates=official_macro_rates,
+        cftc_positioning=cftc_positioning,
+        etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
+        cross_asset_analysis=cross_asset_analysis,
+        weekend_gold=weekend_gold,
+        market_regime=market_regime,
+        political_statements=political_statements,
+    )
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
         gold,
@@ -10849,6 +11244,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
         macro_catalysts=macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10872,6 +11268,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
         macro_catalysts=macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10905,6 +11302,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
         macro_catalysts=macro_catalysts,
+        data_quality=data_quality,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10944,6 +11342,7 @@ def render_artifacts(
         bundle.cftc_positioning,
         bundle.etf_flows_analysis,
         bundle.macro_catalysts,
+        bundle.data_quality,
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,
@@ -11024,6 +11423,7 @@ class DashboardLiveCache:
                 bundle.cftc_positioning,
                 bundle.etf_flows_analysis,
                 bundle.macro_catalysts,
+                bundle.data_quality,
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
                 bundle.weekend_gold,

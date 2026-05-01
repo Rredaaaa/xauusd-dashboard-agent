@@ -7271,6 +7271,7 @@ def render_trade_card(recommendation: TradeRecommendation) -> str:
     mode_key = recommendation.mode.lower()
     card_id = "fundamental" if mode_key.startswith("fond") else "technical-card" if mode_key.startswith("tech") else ""
     id_attr = f' id="{card_id}"' if card_id else ""
+    source_label = recommendation.source_note.split("+")[0].strip() if recommendation.source_note else "Source locale"
     return f"""
     <article{id_attr} class="trade-card {badge_class} anchor-target">
       <div class="trade-card-head">
@@ -7281,6 +7282,11 @@ def render_trade_card(recommendation: TradeRecommendation) -> str:
         <div class="trade-score">{recommendation.score}<small>/100</small></div>
       </div>
       <div class="trade-verdict {badge_class}">{html.escape(recommendation.verdict)}</div>
+      <div class="tag-row">
+        <span class="source-tag">Source · {html.escape(source_label[:42])}</span>
+        <span class="source-tag">Confiance · {recommendation.score}/100</span>
+        <span class="source-tag {badge_class}">Live signal</span>
+      </div>
       <p class="trade-summary">{html.escape(recommendation.summary)}</p>
       {render_trade_levels(recommendation)}
       <ul class="trade-reasons">{reasons}</ul>
@@ -7592,6 +7598,11 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
     gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in ledger.quality_gate_reasons[:6]) or "<li>Quality Gate non evalue.</li>"
     return f"""
     <div class="trade-verdict neutral">Trade Tracker · {html.escape(ledger.quality_gate_status)} · {ledger.total_trades} plan(s)</div>
+    <div class="tag-row">
+      <span class="source-tag {'bullish' if ledger.active_trades else 'neutral'}">Trade locked · {len(ledger.active_trades)}</span>
+      <span class="source-tag">Historique · {ledger.total_trades}</span>
+      <span class="source-tag {state_tone_class(ledger.quality_gate_status)}">Gate · {html.escape(ledger.quality_gate_status)}</span>
+    </div>
     <p class="trade-summary">Le signal live peut changer, mais chaque TradePlan conserve entry, SL, TP, sources et raison au moment de creation.</p>
     <div class="geo-grid">
       <div class="geo-stat"><strong>Wins</strong><span>{ledger.wins}</span></div>
@@ -7641,6 +7652,11 @@ def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) ->
     badge_class = recommendation_css_class(decision.verdict)
     return f"""
     <div class="trade-verdict {badge_class}">Orchestrateur v2 · {html.escape(decision.verdict)} · {decision.score}/100 · {html.escape(decision.status)}</div>
+    <div class="tag-row">
+      <span class="source-tag">Engine · {html.escape(decision.engine)}</span>
+      <span class="source-tag">Legacy · {html.escape(decision.legacy_verdict)} {decision.legacy_score}/100</span>
+      <span class="source-tag {state_tone_class(decision.status)}">Gate · {html.escape(decision.status)}</span>
+    </div>
     <p class="trade-summary">
       Score pondere bullish {decision.bullish_score:.1f}/100. Ancien moteur:
       {html.escape(decision.legacy_verdict)} {decision.legacy_score}/100.
@@ -7666,6 +7682,55 @@ def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) ->
       </table>
     </div>
     """.strip()
+
+
+def state_tone_class(status: str) -> str:
+    upper = status.upper()
+    if upper in {"OK", "ONLINE", "VALIDATED", "ACTIVE", "LOCKED"}:
+        return "bullish"
+    if upper in {"WAIT", "CAUTION", "STALE", "MISSING", "FORCED"}:
+        return "caution"
+    if upper in {"ERROR", "WEAK", "BLOCKED"}:
+        return "bearish"
+    return "neutral"
+
+
+def render_terminal_state_board(
+    global_recommendation: TradeRecommendation,
+    trade_ledger: TradeLedgerSummary | None,
+    data_quality: DataQualitySnapshot | None,
+    orchestrator_decision: OrchestratorDecision | None,
+    market_regime: MarketRegimeAnalysis | None,
+) -> str:
+    active_trades = len(trade_ledger.active_trades) if trade_ledger else 0
+    source_alerts = 0
+    source_status = "OK"
+    source_detail = "Sources critiques utilisables"
+    if data_quality is not None:
+        source_alerts = len(data_quality.missing_sources) + len(data_quality.stale_sources)
+        source_status = data_quality.status
+        source_detail = f"{data_quality.score}/100 · missing {len(data_quality.missing_sources)} · stale {len(data_quality.stale_sources)}"
+    contradiction_count = len(orchestrator_decision.contradictions) if orchestrator_decision else 0
+    gate_status = orchestrator_decision.status if orchestrator_decision else "WAIT"
+    wait_forced = global_recommendation.verdict == "WAIT" or gate_status == "WAIT"
+    cards = [
+        ("Live signal", global_recommendation.verdict, f"{global_recommendation.score}/100 · {global_recommendation.mode}", recommendation_css_class(global_recommendation.verdict)),
+        ("Trade locked", "LOCKED" if active_trades else "WAIT", f"{active_trades} trade(s) actif(s)", "bullish" if active_trades else "neutral"),
+        ("Sources", "STALE" if source_alerts else source_status, source_detail, "caution" if source_alerts else state_tone_class(source_status)),
+        ("Contradictions", "ACTIVE" if contradiction_count else "OK", f"{contradiction_count} contradiction(s)", "caution" if contradiction_count else "bullish"),
+        ("Quality gate", "WAIT force" if wait_forced else gate_status, (market_regime.name if market_regime else "Normal Macro"), "caution" if wait_forced else state_tone_class(gate_status)),
+    ]
+    nodes = "".join(
+        f"""
+        <div class="state-card {tone}">
+          <small>{html.escape(label)}</small>
+          <strong>{html.escape(status)}</strong>
+          <span>{html.escape(detail)}</span>
+        </div>
+        """.strip()
+        for label, status, detail, tone in cards
+    )
+    return f'<section class="state-board" aria-label="Etats visuels Aureum Flux">{nodes}</section>'
 
 
 def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: SymbolSnapshot | None) -> str:
@@ -9348,6 +9413,53 @@ def render_dashboard_clarity(
       background: rgba(2, 6, 23, 0.72);
       backdrop-filter: blur(18px);
     }}
+    .topbar-left {{
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 18px;
+    }}
+    .topbar-brand {{
+      color: var(--amber);
+      font-family: "Space Grotesk", monospace;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.32);
+    }}
+    .top-nav {{
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }}
+    .top-nav::-webkit-scrollbar {{
+      display: none;
+    }}
+    .top-nav a {{
+      flex: 0 0 auto;
+      min-height: 34px;
+      padding: 10px 9px 8px;
+      border-bottom: 2px solid transparent;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }}
+    .top-nav a:hover {{
+      color: var(--text);
+      text-decoration: none;
+    }}
+    .top-nav a.active {{
+      color: var(--amber);
+      border-bottom-color: var(--amber);
+    }}
     .topbar-title {{
       color: var(--amber);
       font-family: "Space Grotesk", monospace;
@@ -9356,12 +9468,34 @@ def render_dashboard_clarity(
       letter-spacing: 0.26em;
       text-transform: uppercase;
     }}
-    .topbar-meta {{
+      .topbar-meta {{
+        white-space: normal;
+        line-height: 1.35;
+      }}
+      .terminal-header h1 {{
+        font-size: 28px;
+        line-height: 1.05;
+      }}
+      .terminal-header p {{
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }}
+      .view-tabs {{
+        overflow-x: auto;
+      }}
+      .global-live-strip {{
+        width: 100%;
+      }}
+      .live-cell strong,
+      .state-card strong {{
+        overflow-wrap: anywhere;
+      }}
       color: var(--soft);
       font-family: "Space Grotesk", monospace;
       font-size: 11px;
       letter-spacing: 0.16em;
       text-transform: uppercase;
+      white-space: nowrap;
     }}
     .terminal-header {{
       display: flex;
@@ -10002,13 +10136,24 @@ def render_dashboard_clarity(
       </aside>
       <div class="workspace">
         <header class="topbar">
-          <div class="topbar-title">XAUUSD Intelligence Terminal</div>
+          <div class="topbar-left">
+            <div class="topbar-brand">AUREUM FLUX</div>
+            <nav class="top-nav" aria-label="Navigation principale">
+              <a class="active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
+              <a href="#market" data-tab-target="market" aria-selected="false">Market</a>
+              <a href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
+              <a href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
+              <a href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
+              <a href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics</a>
+              <a href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
+            </nav>
+          </div>
           <div class="topbar-meta">System online | {html.escape(generated_at)}</div>
         </header>
         <section class="terminal-header">
           <div>
             <div class="section-kicker">Institutional analytics package</div>
-            <h1>XAU/USD Market Dashboard</h1>
+            <h1>XAU/USD Market <br class="mobile-title-break">Dashboard</h1>
             <p>Scoring global, plan BUY/SELL, niveaux de risque et contexte marche live.</p>
           </div>
           <div class="sync-pill">Ready for export</div>
@@ -10425,6 +10570,7 @@ def render_dashboard_clarity_v2(
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       scroll-behavior: smooth;
+      overflow-x: hidden;
     }}
     body {{
       background:
@@ -10591,6 +10737,50 @@ def render_dashboard_clarity_v2(
     .global-live-strip.bearish {{
       border-color: rgba(255, 180, 171, 0.3);
     }}
+    .state-board {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0 0 14px;
+    }}
+    .state-card {{
+      min-width: 0;
+      padding: 10px 11px;
+      border: 1px solid rgba(45, 52, 73, 0.86);
+      border-left: 4px solid var(--line);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.78);
+    }}
+    .state-card.bullish {{ border-left-color: var(--bull); }}
+    .state-card.bearish {{ border-left-color: var(--bear); }}
+    .state-card.caution {{ border-left-color: var(--amber); }}
+    .state-card.neutral {{ border-left-color: var(--blue); }}
+    .state-card small {{
+      display: block;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .state-card strong {{
+      display: block;
+      margin-top: 5px;
+      color: var(--text);
+      font-family: "Space Grotesk", monospace;
+      font-size: 16px;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+    }}
+    .state-card span {{
+      display: block;
+      margin-top: 4px;
+      color: var(--soft);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }}
     .live-cell {{
       min-width: 0;
       padding: 9px 10px;
@@ -10621,12 +10811,15 @@ def render_dashboard_clarity_v2(
       color: var(--soft);
       font-size: 12px;
       line-height: 1.35;
+      overflow-wrap: anywhere;
     }}
     .anchor-target {{
       scroll-margin-top: 72px;
     }}
     .workspace {{
       min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
       padding: 22px 24px 28px;
     }}
     .topbar {{
@@ -10640,6 +10833,54 @@ def render_dashboard_clarity_v2(
       border-bottom: 1px solid var(--line);
       background: rgba(2, 6, 23, 0.72);
       backdrop-filter: blur(18px);
+    }}
+    .topbar-left {{
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 18px;
+    }}
+    .topbar-brand {{
+      flex: 0 0 auto;
+      color: var(--amber);
+      font-family: "Space Grotesk", monospace;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.32);
+    }}
+    .top-nav {{
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }}
+    .top-nav::-webkit-scrollbar {{
+      display: none;
+    }}
+    .top-nav a {{
+      flex: 0 0 auto;
+      min-height: 34px;
+      padding: 10px 9px 8px;
+      border-bottom: 2px solid transparent;
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }}
+    .top-nav a:hover {{
+      color: var(--text);
+      text-decoration: none;
+    }}
+    .top-nav a.active {{
+      color: var(--amber);
+      border-bottom-color: var(--amber);
     }}
     .topbar-title {{
       color: var(--amber);
@@ -10663,11 +10904,20 @@ def render_dashboard_clarity_v2(
       gap: 16px;
       margin-bottom: 14px;
     }}
+    .terminal-header > div {{
+      min-width: 0;
+      max-width: 100%;
+    }}
     .terminal-header h1 {{
       color: var(--text);
       font-size: clamp(28px, 3.6vw, 44px);
       font-weight: 800;
       letter-spacing: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }}
+    .mobile-title-break {{
+      display: none;
     }}
     .terminal-header p {{
       margin-top: 5px;
@@ -10699,6 +10949,7 @@ def render_dashboard_clarity_v2(
     .geo-columns {{
       display: grid;
       gap: 10px;
+      min-width: 0;
     }}
     .hero-grid {{
       grid-template-columns: minmax(520px, 1.55fr) minmax(280px, 0.72fr) minmax(280px, 0.72fr);
@@ -10757,6 +11008,7 @@ def render_dashboard_clarity_v2(
     .trade-card,
     .summary-box {{
       padding: 14px;
+      min-width: 0;
     }}
     .digest-card {{
       padding: 12px;
@@ -11033,6 +11285,34 @@ def render_dashboard_clarity_v2(
       text-transform: uppercase;
       margin-bottom: 8px;
     }}
+    .tag-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 9px;
+    }}
+    .source-tag {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      max-width: 100%;
+      padding: 4px 7px;
+      border: 1px solid rgba(45, 52, 73, 0.9);
+      border-radius: 999px;
+      color: var(--soft);
+      background: rgba(6, 14, 32, 0.62);
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      overflow-wrap: anywhere;
+    }}
+    .source-tag.bullish {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.34); }}
+    .source-tag.bearish {{ color: var(--bear); border-color: rgba(255, 180, 171, 0.34); }}
+    .source-tag.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.34); }}
+    .source-tag.neutral {{ color: var(--blue); border-color: rgba(138, 180, 255, 0.34); }}
+    .source-tag.OK {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.34); }}
     .trade-summary,
     .story-text,
     .headline-brief p,
@@ -11408,6 +11688,8 @@ def render_dashboard_clarity_v2(
       .digest-grid,
       .headline-grid,
       .metrics-grid,
+      .global-live-strip,
+      .state-board,
       .scenario-grid,
       .geo-grid,
       .geo-columns {{
@@ -11430,10 +11712,56 @@ def render_dashboard_clarity_v2(
       .topbar {{
         margin: -14px -10px 14px;
         padding: 0 10px;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }}
+      .topbar-left {{
+        width: 100%;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+      }}
+      .top-nav {{
+        width: 100%;
+      }}
+      .topbar-meta {{
+        white-space: normal;
+        line-height: 1.35;
       }}
       .terminal-header {{
         align-items: flex-start;
         flex-direction: column;
+        width: 100%;
+        max-width: 100%;
+      }}
+      .terminal-header > div {{
+        width: 100%;
+      }}
+      .terminal-header h1 {{
+        font-size: 28px;
+        line-height: 1.05;
+        max-width: 22rem;
+        white-space: normal;
+      }}
+      .terminal-header p {{
+        max-width: 22rem;
+        overflow-wrap: anywhere;
+      }}
+      .mobile-title-break {{
+        display: block;
+      }}
+      .view-tabs {{
+        overflow-x: auto;
+      }}
+      .global-live-strip {{
+        width: 100%;
+      }}
+      .live-cell strong,
+      .state-card strong {{
+        overflow-wrap: anywhere;
       }}
       .hero-grid,
       .trade-levels,
@@ -11469,7 +11797,18 @@ def render_dashboard_clarity_v2(
       </aside>
       <div class="workspace">
         <header class="topbar">
-          <div class="topbar-title">XAUUSD Intelligence Terminal</div>
+          <div class="topbar-left">
+            <div class="topbar-brand">AUREUM FLUX</div>
+            <nav class="top-nav" aria-label="Navigation principale">
+              <a class="active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
+              <a href="#market" data-tab-target="market" aria-selected="false">Market</a>
+              <a href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
+              <a href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
+              <a href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
+              <a href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics</a>
+              <a href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
+            </nav>
+          </div>
           <div class="topbar-meta">System online | {html.escape(generated_at)}</div>
         </header>
         <section class="terminal-header">
@@ -11517,6 +11856,7 @@ def render_dashboard_clarity_v2(
             <span>{html.escape(regime_summary[:92])}</span>
           </div>
         </section>
+        {render_terminal_state_board(global_recommendation, trade_ledger, data_quality, orchestrator_decision, market_regime)}
 
         <section class="tab-view active" id="dashboard" data-tab-view="dashboard">
           <section class="hero-grid anchor-target">

@@ -19,10 +19,11 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 HEADERS = {
     "User-Agent": (
@@ -82,6 +83,12 @@ ISHARES_IAU_DATA_URL = (
     "https://www.blackrock.com/us/financial-professionals/products/239561/"
     "ishares-gold-trust-fund/1527781476618.ajax?fileType=xls&fileName=iShares-Gold-Trust_fund&dataType=fund"
 )
+FED_FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+FED_SPEECHES_RSS_URL = "https://www.federalreserve.gov/feeds/speeches.xml"
+FED_MONETARY_POLICY_RSS_URL = "https://www.federalreserve.gov/feeds/press_monetary.xml"
+BEA_RELEASE_SCHEDULE_URL = "https://www.bea.gov/news/schedule"
+CME_FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html"
+CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-api/fedwatch-api.html"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -539,6 +546,30 @@ class ETFFlowsAnalysis:
 
 
 @dataclass
+class MacroCatalyst:
+    title: str
+    event_type: str
+    scheduled_at: str
+    source_name: str
+    source_url: str
+    impact_level: str
+    gold_impact: str
+    why_it_matters: str
+    status: str
+    minutes_to_event: int | None = None
+
+
+@dataclass
+class MacroCatalystCalendar:
+    generated_at: str
+    source_note: str
+    fedwatch_status: str
+    fedwatch_note: str
+    fedwatch_source_url: str
+    catalysts: list[MacroCatalyst] = field(default_factory=list)
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -585,6 +616,7 @@ class BriefingBundle:
     official_macro_rates: OfficialMacroRates | None = None
     cftc_positioning: CFTCPositioning | None = None
     etf_flows_analysis: ETFFlowsAnalysis | None = None
+    macro_catalysts: MacroCatalystCalendar | None = None
     cross_asset_analysis: CrossAssetAnalysis | None = None
     event_mode: EventModeAnalysis | None = None
     weekend_gold: WeekendGoldSnapshot | None = None
@@ -1497,6 +1529,400 @@ def fetch_etf_flows_analysis() -> ETFFlowsAnalysis | None:
     if iau_record is not None:
         analysis.holdings = merge_etf_holding_records([*analysis.holdings, iau_record])
     return analysis
+
+
+MONTH_NAME_TO_NUMBER = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+
+def eastern_release_datetime_to_utc(year: int, month: int, day: int, hour: int = 8, minute: int = 30) -> str:
+    eastern = ZoneInfo("America/New_York")
+    return datetime(year, month, day, hour, minute, tzinfo=eastern).astimezone(timezone.utc).isoformat()
+
+
+def fomc_statement_datetime_to_utc(year: int, month: int, day: int, hour: int = 14, minute: int = 0) -> str:
+    eastern = ZoneInfo("America/New_York")
+    return datetime(year, month, day, hour, minute, tzinfo=eastern).astimezone(timezone.utc).isoformat()
+
+
+def parse_iso_datetime(iso_text: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(iso_text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def macro_event_minutes_to_event(scheduled_at: str, now: datetime | None = None) -> int | None:
+    scheduled = parse_iso_datetime(scheduled_at)
+    if scheduled is None:
+        return None
+    reference = now or datetime.now(timezone.utc)
+    return round((scheduled - reference).total_seconds() / 60)
+
+
+def macro_catalyst_status(minutes_to_event: int | None) -> str:
+    if minutes_to_event is None:
+        return "date inconnue"
+    if minutes_to_event < -120:
+        return "publie"
+    if minutes_to_event < 0:
+        return "en cours"
+    if minutes_to_event <= 24 * 60:
+        return "dans 24h"
+    if minutes_to_event <= 7 * 24 * 60:
+        return "cette semaine"
+    return "a venir"
+
+
+def format_macro_countdown(minutes: int | None) -> str:
+    if minutes is None:
+        return "date n/a"
+    if minutes < 0:
+        elapsed = abs(minutes)
+        if elapsed < 60:
+            return f"publie il y a {elapsed} min"
+        hours = elapsed // 60
+        if hours < 48:
+            return f"publie il y a {hours}h"
+        return f"publie il y a {hours // 24}j"
+    if minutes < 60:
+        return f"dans {minutes} min"
+    hours = minutes // 60
+    if hours < 48:
+        return f"dans {hours}h"
+    days = hours // 24
+    return f"dans {days}j {hours % 24}h"
+
+
+def classify_macro_gold_impact(event_type: str, title: str) -> tuple[str, str, str]:
+    text = f"{event_type} {title}".lower()
+    if text_contains_any(text, ("fomc", "fed", "powell", "speech", "minutes")):
+        return (
+            "HIGH",
+            "Impact gold depend de la trajectoire des taux reels et du dollar apres le message Fed.",
+            "Un message hawkish peut monter USD/taux et peser sur l'or; un message dovish peut detendre les taux reels et soutenir l'or.",
+        )
+    if text_contains_any(text, ("personal income", "outlays", "pce", "inflation")):
+        return (
+            "HIGH",
+            "PCE/inflation est cle pour les anticipations de baisse de taux Fed et les taux reels.",
+            "Inflation plus forte que prevu peut soutenir USD/taux et freiner gold; inflation plus faible peut soutenir gold via taux reels plus bas.",
+        )
+    if text_contains_any(text, ("gross domestic product", "gdp", "retail sales", "trade")):
+        return (
+            "MEDIUM",
+            "La croissance US change le pricing dollar/taux et donc le cout d'opportunite de l'or.",
+            "Donnee forte favorise souvent USD/taux; donnee faible favorise parfois refuge et baisse de taux, selon reaction du dollar.",
+        )
+    return (
+        "MEDIUM",
+        "Catalyseur macro a surveiller pour son impact sur USD, taux et volatilite.",
+        "Le gold reagit surtout si la surprise modifie les taux reels, le dollar ou la demande refuge.",
+    )
+
+
+def build_macro_catalyst(
+    title: str,
+    event_type: str,
+    scheduled_at: str,
+    source_name: str,
+    source_url: str,
+    now: datetime | None = None,
+) -> MacroCatalyst:
+    minutes = macro_event_minutes_to_event(scheduled_at, now=now)
+    impact_level, gold_impact, why = classify_macro_gold_impact(event_type, title)
+    return MacroCatalyst(
+        title=clean_display_text(title),
+        event_type=clean_display_text(event_type),
+        scheduled_at=scheduled_at,
+        source_name=source_name,
+        source_url=source_url,
+        impact_level=impact_level,
+        gold_impact=gold_impact,
+        why_it_matters=why,
+        status=macro_catalyst_status(minutes),
+        minutes_to_event=minutes,
+    )
+
+
+def parse_fomc_calendar_events(html_text: str, now: datetime | None = None) -> list[MacroCatalyst]:
+    events: list[MacroCatalyst] = []
+    sections = [
+        (int(match.group(1)), match.group(2))
+        for match in re.finditer(
+            r'<h4><a[^>]*>\s*(20\d{2})\s+FOMC Meetings\s*</a></h4></div>(.*?)(?=<div class="panel panel-default"><div class="panel-heading"><h4><a|\Z)',
+            html_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    ]
+    if not sections:
+        clean_text = html.unescape(re.sub(r"<[^>]+>", " ", html_text))
+        clean_text = re.sub(r"\s+", " ", clean_text)
+        fallback_year_match = re.search(r"\b(20\d{2})\s+FOMC Meetings\b", clean_text)
+        fallback_year = int(fallback_year_match.group(1)) if fallback_year_match else datetime.now(timezone.utc).year
+        sections = [(fallback_year, clean_text)]
+
+    for year, section_html in sections:
+        parsed_rows: list[tuple[str, str, str | None, str | None]] = []
+        for row in re.finditer(
+            r'fomc-meeting__month[^>]*>\s*<strong>\s*([^<]+)\s*</strong>.*?'
+            r'fomc-meeting__date[^>]*>\s*([^<]+)\s*</div>',
+            section_html,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            month_name = html.unescape(row.group(1)).strip()
+            date_text = html.unescape(row.group(2)).strip()
+            date_match = re.match(r"(\d{1,2})(?:-(\d{1,2}))?(\*)?", date_text)
+            if date_match:
+                parsed_rows.append((month_name, date_match.group(1), date_match.group(2), date_match.group(3)))
+
+        if not parsed_rows:
+            clean_section = html.unescape(re.sub(r"<[^>]+>", " ", section_html))
+            clean_section = re.sub(r"\s+", " ", clean_section)
+            parsed_rows.extend(
+                match.groups()
+                for match in re.finditer(
+                    r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+                    r"(\d{1,2})(?:-(\d{1,2}))?(\*)?",
+                    clean_section,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+        for month_name, start_day, end_day, projection in parsed_rows:
+            month = MONTH_NAME_TO_NUMBER.get(month_name.lower())
+            if month is None:
+                continue
+            decision_day = int(end_day or start_day)
+            try:
+                statement_at = fomc_statement_datetime_to_utc(year, month, decision_day)
+            except ValueError:
+                continue
+            events.append(
+                build_macro_catalyst(
+                    title=f"FOMC decision {month_name.title()} {decision_day}, {year}",
+                    event_type="FOMC decision",
+                    scheduled_at=statement_at,
+                    source_name="Federal Reserve FOMC calendar",
+                    source_url=FED_FOMC_CALENDAR_URL,
+                    now=now,
+                )
+            )
+            if projection:
+                events.append(
+                    build_macro_catalyst(
+                        title=f"FOMC press conference and projections {month_name.title()} {decision_day}, {year}",
+                        event_type="FOMC projections",
+                        scheduled_at=fomc_statement_datetime_to_utc(year, month, decision_day, hour=14, minute=30),
+                        source_name="Federal Reserve FOMC calendar",
+                        source_url=FED_FOMC_CALENDAR_URL,
+                        now=now,
+                    )
+                )
+            minutes_at = parse_iso_datetime(statement_at)
+            if minutes_at is not None:
+                events.append(
+                    build_macro_catalyst(
+                        title=f"FOMC minutes for {month_name.title()} meeting",
+                        event_type="FOMC minutes",
+                        scheduled_at=(minutes_at + timedelta(days=21)).isoformat(),
+                        source_name="Federal Reserve FOMC calendar",
+                        source_url=FED_FOMC_CALENDAR_URL,
+                        now=now,
+                    )
+                )
+    return events
+
+
+def fallback_fomc_calendar_events(now: datetime | None = None) -> list[MacroCatalyst]:
+    schedule = [
+        (2026, 6, 17, True),
+        (2026, 7, 29, False),
+        (2026, 9, 16, True),
+        (2026, 10, 28, False),
+        (2026, 12, 9, True),
+    ]
+    events = []
+    for year, month, day, projection in schedule:
+        events.append(
+            build_macro_catalyst(
+                title=f"FOMC decision {year}-{month:02d}-{day:02d}",
+                event_type="FOMC decision",
+                scheduled_at=fomc_statement_datetime_to_utc(year, month, day),
+                source_name="Federal Reserve FOMC calendar",
+                source_url=FED_FOMC_CALENDAR_URL,
+                now=now,
+            )
+        )
+        if projection:
+            events.append(
+                build_macro_catalyst(
+                    title=f"FOMC projections {year}-{month:02d}-{day:02d}",
+                    event_type="FOMC projections",
+                    scheduled_at=fomc_statement_datetime_to_utc(year, month, day, hour=14, minute=30),
+                    source_name="Federal Reserve FOMC calendar",
+                    source_url=FED_FOMC_CALENDAR_URL,
+                    now=now,
+                )
+            )
+    return events
+
+
+def parse_bea_release_schedule(html_text: str, now: datetime | None = None) -> list[MacroCatalyst]:
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, flags=re.IGNORECASE | re.DOTALL)
+    events: list[MacroCatalyst] = []
+    for row in rows:
+        cell_text = html.unescape(re.sub(r"<[^>]+>", " ", row))
+        cell_text = re.sub(r"\s+", " ", cell_text).strip()
+        if not cell_text:
+            continue
+        if not text_contains_any(cell_text, ("gross domestic product", "personal income", "outlays", "pce", "retail sales", "international trade")):
+            continue
+        date_match = re.search(
+            r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+            r"(\d{1,2}),\s+(20\d{2})\s+(\d{1,2}):(\d{2})\s*(AM|PM)\b",
+            cell_text,
+            flags=re.IGNORECASE,
+        )
+        year_from_title = re.search(r"\b(20\d{2})\b", cell_text)
+        if not date_match:
+            date_match = re.search(
+                r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+                r"(\d{1,2})\s+(\d{1,2}):(\d{2})\s*(AM|PM)\b",
+                cell_text,
+                flags=re.IGNORECASE,
+            )
+            if date_match:
+                month_name, day, hour, minute, meridiem = date_match.groups()
+                year = year_from_title.group(1) if year_from_title else str((now or datetime.now(timezone.utc)).year)
+            else:
+                continue
+        else:
+            month_name, day, year, hour, minute, meridiem = date_match.groups()
+        month = MONTH_NAME_TO_NUMBER.get(month_name.lower())
+        if month is None:
+            continue
+        release_hour = int(hour)
+        if meridiem.upper() == "PM" and release_hour != 12:
+            release_hour += 12
+        if meridiem.upper() == "AM" and release_hour == 12:
+            release_hour = 0
+        title = re.sub(re.escape(date_match.group(0)), "", cell_text).strip(" -|")
+        title = re.sub(r"^(N\s*ews|R\s*elease|A\s*dvisory)\s+", "", title, flags=re.IGNORECASE).strip()
+        title = title or "BEA macro release"
+        try:
+            scheduled_at = eastern_release_datetime_to_utc(int(year), month, int(day), release_hour, int(minute))
+        except ValueError:
+            continue
+        events.append(
+            build_macro_catalyst(
+                title=title,
+                event_type="BEA macro release",
+                scheduled_at=scheduled_at,
+                source_name="BEA news release schedule",
+                source_url=BEA_RELEASE_SCHEDULE_URL,
+                now=now,
+            )
+        )
+    return events
+
+
+def parse_fed_rss_events(xml_text: str, feed_name: str, source_url: str, now: datetime | None = None) -> list[MacroCatalyst]:
+    try:
+        root = ET.fromstring(xml_text.lstrip("\ufeff"))
+    except ET.ParseError:
+        return []
+    events: list[MacroCatalyst] = []
+    for item in root.findall(".//item")[:12]:
+        title = clean_display_text(item.findtext("title", default="Federal Reserve update"))
+        published_raw = item.findtext("pubDate", default="")
+        try:
+            published_dt = parsedate_to_datetime(published_raw).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            published_dt = datetime.now(timezone.utc)
+        link = item.findtext("link", default=source_url)
+        event_type = "Fed speech" if "speech" in feed_name.lower() else "Fed monetary policy"
+        events.append(
+            build_macro_catalyst(
+                title=title,
+                event_type=event_type,
+                scheduled_at=published_dt.isoformat(),
+                source_name=feed_name,
+                source_url=link or source_url,
+                now=now,
+            )
+        )
+    return events
+
+
+def dedupe_macro_catalysts(catalysts: list[MacroCatalyst]) -> list[MacroCatalyst]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[MacroCatalyst] = []
+    for catalyst in catalysts:
+        key = (catalyst.title.lower(), catalyst.scheduled_at[:16])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(catalyst)
+    return deduped
+
+
+def build_macro_catalyst_calendar(now: datetime | None = None) -> MacroCatalystCalendar:
+    reference = now or datetime.now(timezone.utc)
+    catalysts: list[MacroCatalyst] = []
+    source_notes: list[str] = []
+
+    try:
+        fomc_html = http_get_text(FED_FOMC_CALENDAR_URL)
+        catalysts.extend(parse_fomc_calendar_events(fomc_html, now=reference))
+        source_notes.append("Fed FOMC calendar official.")
+    except Exception:
+        catalysts.extend(fallback_fomc_calendar_events(now=reference))
+        source_notes.append("Fed FOMC calendar fallback local 2026 active.")
+
+    try:
+        bea_html = http_get_text(BEA_RELEASE_SCHEDULE_URL)
+        bea_events = parse_bea_release_schedule(bea_html, now=reference)
+        catalysts.extend(bea_events)
+        source_notes.append(f"BEA release schedule official ({len(bea_events)} event(s)).")
+    except Exception:
+        source_notes.append("BEA release schedule indisponible.")
+
+    try:
+        catalysts.extend(parse_fed_rss_events(http_get_text(FED_SPEECHES_RSS_URL), "Federal Reserve speeches RSS", FED_SPEECHES_RSS_URL, now=reference))
+        catalysts.extend(parse_fed_rss_events(http_get_text(FED_MONETARY_POLICY_RSS_URL), "Federal Reserve monetary policy RSS", FED_MONETARY_POLICY_RSS_URL, now=reference))
+        source_notes.append("Fed RSS speeches/monetary policy official.")
+    except Exception:
+        source_notes.append("Fed RSS indisponible.")
+
+    catalysts = dedupe_macro_catalysts(catalysts)
+    catalysts.sort(key=lambda item: (item.minutes_to_event is None, abs(item.minutes_to_event or 10**9)))
+    upcoming = [item for item in catalysts if item.minutes_to_event is None or item.minutes_to_event >= -24 * 60]
+    selected = upcoming[:10] if upcoming else catalysts[:10]
+
+    return MacroCatalystCalendar(
+        generated_at=reference.isoformat(),
+        source_note=" ".join(source_notes),
+        fedwatch_status="linked_only",
+        fedwatch_note=(
+            "CME FedWatch est garde comme source officielle externe. "
+            "Aucune probabilite de taux n'est inventee tant qu'une API officielle accessible n'est pas disponible."
+        ),
+        fedwatch_source_url=CME_FEDWATCH_TOOL_URL,
+        catalysts=selected,
+    )
 
 
 def align_proxy_points_to_spot(points: list[PricePoint], spot_price: float) -> list[PricePoint]:
@@ -2999,6 +3425,7 @@ def build_passive_agent_results(
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -3060,6 +3487,18 @@ def build_passive_agent_results(
         macro_evidence.append(AgentEvidence("Breakeven 10Y", f"{official_macro_rates.t10yie.price:.2f}% ({official_macro_rates.t10yie.change_abs * 100:+.1f} bps)", "FRED T10YIE"))
     if real_yield is not None and len(macro_evidence) < 4:
         macro_evidence.append(AgentEvidence("10Y reel", f"{real_yield.price:.2f}% ({real_yield.change_abs * 100:+.1f} bps)", "FRED DFII10"))
+    next_macro = next(
+        (event for event in (macro_catalysts.catalysts if macro_catalysts else []) if event.minutes_to_event is None or event.minutes_to_event >= 0),
+        None,
+    )
+    if next_macro is not None:
+        macro_evidence.append(
+            AgentEvidence(
+                "Prochain catalyseur",
+                f"{next_macro.title} ({format_macro_countdown(next_macro.minutes_to_event)})",
+                next_macro.source_name,
+            )
+        )
     agents.append(
         AgentResult(
             name="MacroAgent",
@@ -3275,6 +3714,18 @@ def build_passive_agent_results(
         risk_reasons.append("Mode event actif")
     if market_regime and market_regime.name != "Normal Macro":
         risk_reasons.append(market_regime.name)
+    next_high_macro = next(
+        (
+            event
+            for event in (macro_catalysts.catalysts if macro_catalysts else [])
+            if event.impact_level == "HIGH"
+            and event.minutes_to_event is not None
+            and 0 <= event.minutes_to_event <= 48 * 60
+        ),
+        None,
+    )
+    if next_high_macro is not None:
+        risk_reasons.append(f"Macro high impact proche: {next_high_macro.event_type}")
     agents.append(
         AgentResult(
             name="RiskManagerAgent",
@@ -4400,6 +4851,7 @@ def build_payload(
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -4514,6 +4966,8 @@ def build_payload(
         payload["cftc_positioning"] = asdict(cftc_positioning)
     if etf_flows_analysis:
         payload["etf_flows_analysis"] = asdict(etf_flows_analysis)
+    if macro_catalysts:
+        payload["macro_catalysts"] = asdict(macro_catalysts)
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -4668,6 +5122,38 @@ def build_etf_flows_analysis_from_payload(data: dict[str, Any] | None) -> ETFFlo
     )
 
 
+def build_macro_catalyst_from_payload(data: dict[str, Any]) -> MacroCatalyst:
+    return MacroCatalyst(
+        title=str(data.get("title", "")),
+        event_type=str(data.get("event_type", "")),
+        scheduled_at=str(data.get("scheduled_at", "")),
+        source_name=str(data.get("source_name", "")),
+        source_url=str(data.get("source_url", "")),
+        impact_level=str(data.get("impact_level", "MEDIUM")),
+        gold_impact=str(data.get("gold_impact", "Impact gold a confirmer.")),
+        why_it_matters=str(data.get("why_it_matters", "Pourquoi macro indisponible.")),
+        status=str(data.get("status", "a venir")),
+        minutes_to_event=int(data["minutes_to_event"]) if data.get("minutes_to_event") is not None else None,
+    )
+
+
+def build_macro_catalyst_calendar_from_payload(data: dict[str, Any] | None) -> MacroCatalystCalendar | None:
+    if not isinstance(data, dict):
+        return None
+    return MacroCatalystCalendar(
+        generated_at=str(data.get("generated_at", iso_now())),
+        source_note=str(data.get("source_note", "")),
+        fedwatch_status=str(data.get("fedwatch_status", "linked_only")),
+        fedwatch_note=str(data.get("fedwatch_note", "")),
+        fedwatch_source_url=str(data.get("fedwatch_source_url", CME_FEDWATCH_TOOL_URL)),
+        catalysts=[
+            build_macro_catalyst_from_payload(item)
+            for item in data.get("catalysts", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -4713,6 +5199,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     official_macro_data = market_snapshot.get("official_macro_rates", {})
     cftc_positioning_payload = payload.get("cftc_positioning")
     etf_flows_payload = payload.get("etf_flows_analysis")
+    macro_catalysts_payload = payload.get("macro_catalysts")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -4851,6 +5338,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     )
     cftc_positioning = build_cftc_positioning_from_payload(cftc_positioning_payload)
     etf_flows_analysis = build_etf_flows_analysis_from_payload(etf_flows_payload)
+    macro_catalysts = build_macro_catalyst_calendar_from_payload(macro_catalysts_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -4960,6 +5448,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         event_facts=event_facts,
@@ -5003,6 +5492,7 @@ def render_report(
     official_macro_rates: OfficialMacroRates | None = None,
     cftc_positioning: CFTCPositioning | None = None,
     etf_flows_analysis: ETFFlowsAnalysis | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
     cross_asset_analysis: CrossAssetAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
     weekend_gold: WeekendGoldSnapshot | None = None,
@@ -5118,6 +5608,22 @@ def render_report(
                 f"jour {format_signed_tonnes(record.daily_flow_tonnes)}, "
                 f"hebdo {format_signed_tonnes(record.weekly_flow_tonnes)}, "
                 f"mensuel {format_signed_tonnes(record.monthly_flow_tonnes)}; source {record.source_name}"
+            )
+
+    if macro_catalysts:
+        lines.extend(
+            [
+                "",
+                "## Macro Catalysts",
+                f"- Sources: {macro_catalysts.source_note}",
+                f"- FedWatch: {macro_catalysts.fedwatch_status} ({macro_catalysts.fedwatch_source_url})",
+                f"- Note FedWatch: {macro_catalysts.fedwatch_note}",
+            ]
+        )
+        for catalyst in macro_catalysts.catalysts[:8]:
+            lines.append(
+                f"- {catalyst.event_type}: {catalyst.title} | {format_timestamp_for_humans(catalyst.scheduled_at)} "
+                f"({format_macro_countdown(catalyst.minutes_to_event)}) | {catalyst.impact_level} | {catalyst.gold_impact}"
             )
 
     if global_recommendation:
@@ -5743,6 +6249,63 @@ def render_etf_flows_panel(analysis: ETFFlowsAnalysis | None) -> str:
       </table>
     </div>
     <div class="metric-footnote">{html.escape(analysis.source_note)} {source_link}</div>
+    """.strip()
+
+
+def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
+    if calendar is None:
+        return (
+            '<div class="empty-state">'
+            "Calendrier macro officiel indisponible. Le MacroAgent conserve FRED/DXY/10Y, mais aucun countdown evenementiel n'est actif."
+            "</div>"
+        )
+
+    next_event = next(
+        (event for event in calendar.catalysts if event.minutes_to_event is None or event.minutes_to_event >= 0),
+        calendar.catalysts[0] if calendar.catalysts else None,
+    )
+    top_summary = (
+        f"{next_event.event_type}: {next_event.title} · {format_macro_countdown(next_event.minutes_to_event)}"
+        if next_event is not None
+        else "Aucun evenement macro source."
+    )
+    rows = []
+    for event in calendar.catalysts[:8]:
+        status_class = "bearish" if event.impact_level == "HIGH" else "neutral"
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(event.event_type)}</strong><br><span class="soft">{html.escape(event.source_name)}</span></td>
+              <td>{html.escape(event.title)}</td>
+              <td>{html.escape(format_timestamp_for_humans(event.scheduled_at))}<br><span class="soft">{html.escape(format_macro_countdown(event.minutes_to_event))}</span></td>
+              <td class="{status_class}">{html.escape(event.impact_level)}</td>
+              <td>{html.escape(event.gold_impact)}</td>
+            </tr>
+            """.strip()
+        )
+    fedwatch_link = (
+        f'<a href="{html.escape(calendar.fedwatch_source_url)}" target="_blank" rel="noopener noreferrer">CME FedWatch officiel</a>'
+        if calendar.fedwatch_source_url
+        else "CME FedWatch officiel"
+    )
+    return f"""
+    <div class="trade-verdict neutral">Macro Catalysts · {len(calendar.catalysts)} evenement(s)</div>
+    <p class="trade-summary">{html.escape(top_summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Prochain event</strong><span>{html.escape(next_event.event_type if next_event else "n/a")}</span></div>
+      <div class="geo-stat"><strong>Countdown</strong><span>{html.escape(format_macro_countdown(next_event.minutes_to_event) if next_event else "n/a")}</span></div>
+      <div class="geo-stat"><strong>FedWatch</strong><span>{html.escape(calendar.fedwatch_status)}</span></div>
+      <div class="geo-stat"><strong>Refresh</strong><span>{html.escape(format_timestamp_for_humans(calendar.generated_at))}</span></div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Event</th><th>Titre</th><th>Date / countdown</th><th>Impact</th><th>Pourquoi gold</th></tr></thead>
+        <tbody>{''.join(rows) or '<tr><td colspan="5">Aucun catalyseur macro disponible.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="metric-footnote">
+      {html.escape(calendar.source_note)} {fedwatch_link}. {html.escape(calendar.fedwatch_note)}
+    </div>
     """.strip()
 
 
@@ -7091,6 +7654,7 @@ def render_dashboard_clarity(
     official_macro_rates = bundle.official_macro_rates
     cftc_positioning = bundle.cftc_positioning
     etf_flows_analysis = bundle.etf_flows_analysis
+    macro_catalysts = bundle.macro_catalysts
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -8275,6 +8839,7 @@ def render_dashboard_clarity_v2(
     official_macro_rates = bundle.official_macro_rates
     cftc_positioning = bundle.cftc_positioning
     etf_flows_analysis = bundle.etf_flows_analysis
+    macro_catalysts = bundle.macro_catalysts
     cross_asset_analysis = bundle.cross_asset_analysis
     event_mode = bundle.event_mode
     weekend_gold = bundle.weekend_gold
@@ -8332,6 +8897,7 @@ def render_dashboard_clarity_v2(
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -9824,6 +10390,12 @@ def render_dashboard_clarity_v2(
               {render_official_macro_panel(official_macro_rates, us10y)}
             </article>
             <article class="panel span-12">
+              <div class="section-kicker">Macro Catalysts</div>
+              <h2>Calendrier economique et Fed</h2>
+              <p class="footer-note">FOMC, Fed speeches, BEA high impact et lien CME FedWatch. Le bloc explique pourquoi chaque evenement peut changer la lecture gold.</p>
+              {render_macro_catalysts_panel(macro_catalysts)}
+            </article>
+            <article class="panel span-12">
               <div class="section-kicker">Agents passifs experimentaux</div>
               <h2>Macro agents</h2>
               {render_agent_department_panel(agent_results, "Macro")}
@@ -10133,6 +10705,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=live_bundle.cftc_positioning,
         etf_flows_analysis=live_bundle.etf_flows_analysis,
+        macro_catalysts=live_bundle.macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10155,6 +10728,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=live_bundle.cftc_positioning,
         etf_flows_analysis=live_bundle.etf_flows_analysis,
+        macro_catalysts=live_bundle.macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10182,6 +10756,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.official_macro_rates = official_macro_rates
     live_bundle.cftc_positioning = live_bundle.cftc_positioning
     live_bundle.etf_flows_analysis = live_bundle.etf_flows_analysis
+    live_bundle.macro_catalysts = live_bundle.macro_catalysts
     live_bundle.cross_asset_analysis = cross_asset_analysis
     live_bundle.event_mode = event_mode
     live_bundle.weekend_gold = weekend_gold
@@ -10202,6 +10777,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     news = merge_news_items(news, political_news, max(top_news, 24))
     cftc_positioning = fetch_cftc_gold_positioning()
     etf_flows_analysis = fetch_etf_flows_analysis()
+    macro_catalysts = build_macro_catalyst_calendar()
     technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
     real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
@@ -10272,6 +10848,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10294,6 +10871,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10326,6 +10904,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         official_macro_rates=official_macro_rates,
         cftc_positioning=cftc_positioning,
         etf_flows_analysis=etf_flows_analysis,
+        macro_catalysts=macro_catalysts,
         cross_asset_analysis=cross_asset_analysis,
         event_mode=event_mode,
         weekend_gold=weekend_gold,
@@ -10364,6 +10943,7 @@ def render_artifacts(
         bundle.official_macro_rates,
         bundle.cftc_positioning,
         bundle.etf_flows_analysis,
+        bundle.macro_catalysts,
         bundle.cross_asset_analysis,
         bundle.event_mode,
         bundle.weekend_gold,
@@ -10442,6 +11022,8 @@ class DashboardLiveCache:
                 bundle.real_yield,
                 bundle.official_macro_rates,
                 bundle.cftc_positioning,
+                bundle.etf_flows_analysis,
+                bundle.macro_catalysts,
                 bundle.cross_asset_analysis,
                 bundle.event_mode,
                 bundle.weekend_gold,

@@ -9,6 +9,8 @@ from xauusd_agent import (
     EventModeAnalysis,
     EventFact,
     GeopoliticalAnalysis,
+    MacroCatalyst,
+    MacroCatalystCalendar,
     MarketRegimeAnalysis,
     NewsItem,
     OfficialMacroRates,
@@ -26,6 +28,9 @@ from xauusd_agent import (
     build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
+    parse_bea_release_schedule,
+    parse_fed_rss_events,
+    parse_fomc_calendar_events,
     classify_bias,
     build_passive_agent_results,
     parse_ig_weekend_gold_snapshot,
@@ -411,6 +416,39 @@ class AnalysisShapeTests(unittest.TestCase):
                 ],
                 source_note="WGC official test.",
             ),
+            macro_catalysts=MacroCatalystCalendar(
+                generated_at="2026-04-24T00:00:00+00:00",
+                source_note="Fed FOMC calendar official. BEA release schedule official.",
+                fedwatch_status="linked_only",
+                fedwatch_note="CME FedWatch officiel lie sans probabilite inventee.",
+                fedwatch_source_url="https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html",
+                catalysts=[
+                    MacroCatalyst(
+                        title="FOMC decision June 17, 2026",
+                        event_type="FOMC decision",
+                        scheduled_at="2026-06-17T18:00:00+00:00",
+                        source_name="Federal Reserve FOMC calendar",
+                        source_url="https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+                        impact_level="HIGH",
+                        gold_impact="Impact gold depend de la trajectoire des taux reels et du dollar.",
+                        why_it_matters="Un message hawkish peut monter USD/taux; dovish peut soutenir gold.",
+                        status="a venir",
+                        minutes_to_event=78540,
+                    ),
+                    MacroCatalyst(
+                        title="Personal Income and Outlays, April 2026",
+                        event_type="BEA macro release",
+                        scheduled_at="2026-05-28T12:30:00+00:00",
+                        source_name="BEA news release schedule",
+                        source_url="https://www.bea.gov/news/schedule",
+                        impact_level="HIGH",
+                        gold_impact="PCE/inflation est cle pour les anticipations de baisse de taux Fed.",
+                        why_it_matters="Inflation plus forte soutient USD/taux; plus faible soutient gold.",
+                        status="a venir",
+                        minutes_to_event=49350,
+                    ),
+                ],
+            ),
             event_facts=[
                 EventFact(
                     title="Iran tensions rise near Strait of Hormuz as oil shipping risk grows",
@@ -491,6 +529,11 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("World Gold Council ETF holdings and flows", dashboard)
         self.assertIn("SPDR Gold Shares", dashboard)
         self.assertIn("iShares Gold Trust", dashboard)
+        self.assertIn("Macro Catalysts", dashboard)
+        self.assertIn("Calendrier economique et Fed", dashboard)
+        self.assertIn("Federal Reserve FOMC calendar", dashboard)
+        self.assertIn("CME FedWatch officiel", dashboard)
+        self.assertIn("Personal Income and Outlays", dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -512,6 +555,38 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("global-live-strip", dashboard)
         self.assertIn("aureumFlux.activeTab", dashboard)
         self.assertIn("applyStoredTab", dashboard)
+
+    def test_macro_catalyst_parsers_extract_official_events(self) -> None:
+        fomc_html = """
+        <h4>2026 FOMC Meetings</h4>
+        <div>June 16-17* July 28-29 September 15-16*</div>
+        """
+        fomc_events = parse_fomc_calendar_events(fomc_html)
+        self.assertTrue(any(event.event_type == "FOMC decision" for event in fomc_events))
+        self.assertTrue(any(event.event_type == "FOMC projections" for event in fomc_events))
+        self.assertTrue(any("June" in event.title for event in fomc_events))
+
+        bea_html = """
+        <table><tr><td>May 28, 2026 8:30 AM</td><td>Personal Income and Outlays, April 2026</td></tr>
+        <tr><td>May 28, 2026 8:30 AM</td><td>Gross Domestic Product, 1st Quarter 2026 (Second Estimate)</td></tr></table>
+        """
+        bea_events = parse_bea_release_schedule(bea_html)
+        self.assertEqual(len(bea_events), 2)
+        self.assertTrue(any("Personal Income" in event.title for event in bea_events))
+        self.assertTrue(all(event.source_name == "BEA news release schedule" for event in bea_events))
+
+        rss_xml = """
+        <rss><channel><item><title>Speech by Governor Waller</title>
+        <link>https://www.federalreserve.gov/newsevents/speech/test.htm</link>
+        <pubDate>Tue, 21 Apr 2026 18:30:00 GMT</pubDate></item></channel></rss>
+        """
+        fed_events = parse_fed_rss_events(
+            rss_xml,
+            "Federal Reserve speeches RSS",
+            "https://www.federalreserve.gov/feeds/speeches.xml",
+        )
+        self.assertEqual(fed_events[0].event_type, "Fed speech")
+        self.assertEqual(fed_events[0].impact_level, "HIGH")
 
     def test_passive_agents_do_not_replace_official_scoring(self) -> None:
         points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]

@@ -43,10 +43,12 @@ from xauusd_agent import (
     parse_fomc_calendar_events,
     classify_bias,
     build_passive_agent_results,
+    build_orchestrator_decision,
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
     render_dashboard,
     score_headline,
+    update_orchestrator_agent,
 )
 
 
@@ -883,6 +885,97 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertTrue(all(agent.experimental for agent in agents))
         self.assertTrue(any(agent.name == "ElliottWaveAgent" for agent in agents))
         self.assertEqual(official.verdict, "BUY")
+
+    def test_orchestrator_v2_validates_aligned_buy(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=66,
+            summary="Ancien moteur haussier.",
+            reasons=["legacy"],
+            stop_loss=2385.0,
+            take_profit_1=2420.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 72, 70, "Technique constructive."),
+            AgentResult("ElliottWaveAgent", "Technical", "BUY", 64, 58, "Sequence haussiere."),
+            AgentResult("MacroAgent", "Macro", "BUY", 74, 76, "Macro favorable."),
+            AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
+            AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
+            AgentResult("OrchestratorAgent", "Decision", "BUY", 66, 74, "Ancien orchestrateur passif."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=90,
+            status="HIGH",
+            summary="Sources critiques ok.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+        )
+        self.assertEqual(recommendation.verdict, "BUY")
+        self.assertEqual(decision.status, "VALIDATED")
+        self.assertGreaterEqual(decision.score, 60)
+        updated_agents = update_orchestrator_agent(agents, decision)
+        active_orchestrator = next(agent for agent in updated_agents if agent.name == "OrchestratorAgent")
+        self.assertEqual(active_orchestrator.status, "ACTIVE")
+        self.assertFalse(active_orchestrator.experimental)
+
+    def test_orchestrator_v2_forces_wait_on_strong_contradiction(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=64,
+            summary="Ancien moteur haussier.",
+            reasons=["legacy"],
+            stop_loss=2385.0,
+            take_profit_1=2420.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 82, 72, "Technique haussiere."),
+            AgentResult("ElliottWaveAgent", "Technical", "SELL", 30, 60, "Structure baissiere."),
+            AgentResult("MacroAgent", "Macro", "SELL", 80, 76, "Macro defavorable."),
+            AgentResult("CorrelationAgent", "Market", "BUY", 70, 70, "Cross-assets favorables."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "SELL", 35, 75, "Flux defavorables."),
+            AgentResult("OrchestratorAgent", "Decision", "BUY", 64, 74, "Ancien orchestrateur passif."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=88,
+            status="HIGH",
+            summary="Sources critiques ok.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+        )
+        self.assertEqual(recommendation.verdict, "WAIT")
+        self.assertEqual(decision.status, "WAIT")
+        self.assertTrue(any("Contradiction" in reason for reason in decision.quality_gate_reasons))
 
     def test_official_macro_rates_compare_yahoo_tnx_to_fred(self) -> None:
         dgs10 = self.snapshot("DGS10", 4.50, 4.45)

@@ -693,6 +693,35 @@ class AgentResult:
 
 
 @dataclass
+class OrchestratorComponent:
+    key: str
+    label: str
+    score: int
+    bias: str
+    weight: float
+    contribution: float
+    confidence: int
+    source: str
+    reason: str
+
+
+@dataclass
+class OrchestratorDecision:
+    verdict: str
+    score: int
+    status: str
+    engine: str
+    bullish_score: float
+    legacy_verdict: str
+    legacy_score: int
+    top_reasons: list[str]
+    counter_reasons: list[str]
+    contradictions: list[str]
+    quality_gate_reasons: list[str]
+    components: list[OrchestratorComponent] = field(default_factory=list)
+
+
+@dataclass
 class BriefingBundle:
     gold: SymbolSnapshot
     dxy: SymbolSnapshot
@@ -721,6 +750,7 @@ class BriefingBundle:
     political_statements: list[PoliticalStatement] = field(default_factory=list)
     agent_results: list[AgentResult] = field(default_factory=list)
     trade_ledger: TradeLedgerSummary | None = None
+    orchestrator_decision: OrchestratorDecision | None = None
 
 
 @dataclass
@@ -1092,6 +1122,8 @@ def build_trade_quality_gate(
     market_regime: MarketRegimeAnalysis | None,
 ) -> tuple[bool, list[str], list[str], list[str]]:
     reasons: list[str] = []
+    if global_recommendation.verdict not in {"BUY", "SELL"}:
+        reasons.append(f"Verdict {global_recommendation.verdict}: aucun trade verrouille sans direction BUY/SELL.")
     validating = [
         agent.name
         for agent in agent_results
@@ -4444,6 +4476,322 @@ def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
     return contradictions
 
 
+def agent_by_name(agent_results: list[AgentResult], name: str) -> AgentResult | None:
+    return next((agent for agent in agent_results if agent.name == name), None)
+
+
+def agent_bullish_score(agent: AgentResult | None, direct_score: bool = False) -> int:
+    if agent is None:
+        return 50
+    if direct_score:
+        return clamp_score(agent.score)
+    if agent.bias == "BUY":
+        return clamp_score(agent.score)
+    if agent.bias == "SELL":
+        return clamp_score(100 - agent.score)
+    return 50
+
+
+def component_bias(score: int) -> str:
+    return score_to_bias(score, buy_threshold=56, sell_threshold=44)
+
+
+def build_agent_component(
+    key: str,
+    label: str,
+    agent: AgentResult | None,
+    weight: float,
+    direct_score: bool = False,
+) -> OrchestratorComponent:
+    score = agent_bullish_score(agent, direct_score=direct_score)
+    source = agent.name if agent else "indisponible"
+    reason = agent.summary if agent else f"{label} indisponible; score neutre applique."
+    confidence = agent.confidence if agent else 35
+    return OrchestratorComponent(
+        key=key,
+        label=label,
+        score=score,
+        bias=component_bias(score),
+        weight=weight,
+        contribution=round(score * weight, 2),
+        confidence=confidence,
+        source=source,
+        reason=reason,
+    )
+
+
+def regime_directional_score(market_regime: MarketRegimeAnalysis | None) -> tuple[int, str, str]:
+    if market_regime is None:
+        return 50, "NEUTRAL", "Regime indisponible; score neutre."
+    if market_regime.name == "Safe-Haven Gold":
+        score = clamp_score(50 + market_regime.score * 0.35)
+    elif market_regime.name in {"Hormuz / Oil Shock", "Dollar Liquidity Squeeze"}:
+        score = clamp_score(50 - market_regime.score * 0.35)
+    elif market_regime.name == "De-escalation / Oil Relief":
+        score = clamp_score(50 - market_regime.score * 0.18)
+    else:
+        score = 50
+    return score, component_bias(score), market_regime.summary
+
+
+def build_regime_component(
+    market_regime: MarketRegimeAnalysis | None,
+    event_mode: EventModeAnalysis | None,
+    weight: float,
+) -> OrchestratorComponent:
+    score, bias, reason = regime_directional_score(market_regime)
+    if event_mode is not None and event_mode.active:
+        reason = f"{reason} Mode event actif: le regime impose une prudence execution."
+    return OrchestratorComponent(
+        key="regime",
+        label="Regime",
+        score=score,
+        bias=bias,
+        weight=weight,
+        contribution=round(score * weight, 2),
+        confidence=70 if market_regime else 40,
+        source=market_regime.name if market_regime else "RegimeContext",
+        reason=reason,
+    )
+
+
+def build_data_quality_component(
+    data_quality: DataQualitySnapshot | None,
+    weight: float,
+) -> OrchestratorComponent:
+    quality_score = data_quality.score if data_quality else 50
+    return OrchestratorComponent(
+        key="data_quality",
+        label="Data quality",
+        score=quality_score,
+        bias="OK" if quality_score >= 75 else "CAUTION" if quality_score < 70 else "NEUTRAL",
+        weight=weight,
+        contribution=round(50 * weight, 2),
+        confidence=quality_score,
+        source="SourceRegistry",
+        reason=data_quality.summary if data_quality else "Data quality indisponible; score neutre.",
+    )
+
+
+def summarize_trade_history_calibration(ledger_path: Path = TRADE_LEDGER_PATH) -> tuple[list[str], list[str]]:
+    plans = load_trade_ledger(ledger_path)
+    closed = [plan for plan in plans if plan.outcome in {"win", "loss", "partial", "expired", "invalidated"}]
+    if not closed:
+        return [], ["Historique Trade Ledger encore insuffisant pour calibrer les poids."]
+    wins = sum(1 for plan in closed if plan.outcome == "win")
+    losses = sum(1 for plan in closed if plan.outcome == "loss")
+    partials = sum(1 for plan in closed if plan.outcome == "partial")
+    if wins >= losses:
+        return [f"Calibration ledger: {wins} win(s), {losses} loss(es), {partials} partial(s)."], []
+    return [], [f"Calibration ledger prudente: {losses} perte(s) contre {wins} win(s)."]
+
+
+def build_orchestrator_quality_gate(
+    verdict: str,
+    score: int,
+    components: list[OrchestratorComponent],
+    contradictions: list[str],
+    data_quality: DataQualitySnapshot | None,
+    event_mode: EventModeAnalysis | None,
+    market_regime: MarketRegimeAnalysis | None,
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    directional_components = [component for component in components if component.key != "data_quality"]
+    strong_buy = [component.label for component in directional_components if component.score >= 62]
+    strong_sell = [component.label for component in directional_components if component.score <= 38]
+    if strong_buy and strong_sell:
+        reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
+    if len(contradictions) >= 2:
+        reasons.append("Contradictions agents multiples: WAIT force avant trade.")
+    if data_quality is None:
+        reasons.append("Data quality indisponible: WAIT.")
+    elif data_quality.score < 70:
+        reasons.append(f"Data quality insuffisante: {data_quality.score}/100 < 70.")
+    if event_mode is not None and event_mode.active:
+        reasons.append(f"Mode event actif ({event_mode.score}/100): WAIT execution.")
+    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
+        reasons.append("Regime Hormuz/Oil Shock: WAIT sans validation manuelle.")
+    if verdict in {"BUY", "SELL"} and score < 60:
+        reasons.append(f"Score orchestrateur insuffisant: {score}/100 < 60.")
+    if verdict == "WAIT":
+        reasons.append("Zone centrale: aucune direction n'a assez d'avantage.")
+    if reasons:
+        return "WAIT", reasons[:6]
+    return "VALIDATED", ["Quality Gate v2 valide: score, sources et contradictions autorisent la decision."]
+
+
+def build_orchestrator_decision(
+    gold: SymbolSnapshot,
+    legacy_recommendation: TradeRecommendation,
+    agent_results: list[AgentResult],
+    data_quality: DataQualitySnapshot | None = None,
+    market_regime: MarketRegimeAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
+) -> tuple[TradeRecommendation, OrchestratorDecision]:
+    weights = {
+        "technical": 0.18,
+        "elliott": 0.10,
+        "macro": 0.18,
+        "geopolitical_oil": 0.14,
+        "cross_assets": 0.12,
+        "flows": 0.10,
+        "regime": 0.10,
+        "data_quality": 0.08,
+    }
+    technical = agent_by_name(agent_results, "TechnicalAgent")
+    elliott = agent_by_name(agent_results, "ElliottWaveAgent")
+    macro = agent_by_name(agent_results, "MacroAgent")
+    geopolitical = agent_by_name(agent_results, "GeopoliticalOilShockAgent")
+    cross_assets = agent_by_name(agent_results, "CorrelationAgent")
+    flows = agent_by_name(agent_results, "FlowPositioningAgent")
+
+    components = [
+        build_agent_component("technical", "Technique", technical, weights["technical"]),
+        build_agent_component("elliott", "Elliott", elliott, weights["elliott"], direct_score=True),
+        build_agent_component("macro", "Macro", macro, weights["macro"]),
+        build_agent_component("geopolitical_oil", "Geopolitique/Oil", geopolitical, weights["geopolitical_oil"]),
+        build_agent_component("cross_assets", "Cross-assets", cross_assets, weights["cross_assets"], direct_score=True),
+        build_agent_component("flows", "Flows", flows, weights["flows"], direct_score=True),
+        build_regime_component(market_regime, event_mode, weights["regime"]),
+        build_data_quality_component(data_quality, weights["data_quality"]),
+    ]
+    total_weight = sum(component.weight for component in components)
+    bullish_score = round(sum(component.contribution for component in components) / total_weight, 2)
+    if bullish_score >= 55:
+        verdict = "BUY"
+        conviction = bullish_score
+    elif bullish_score <= 45:
+        verdict = "SELL"
+        conviction = 100 - bullish_score
+    else:
+        verdict = "WAIT"
+        conviction = 50 + abs(bullish_score - 50)
+    score = clamp_score(50 + (abs(bullish_score - 50) * 1.55))
+
+    contradictions = build_agent_contradictions(agent_results)
+    gate_status, gate_reasons = build_orchestrator_quality_gate(
+        verdict,
+        score,
+        components,
+        contradictions,
+        data_quality,
+        event_mode,
+        market_regime,
+    )
+    if gate_status == "WAIT":
+        verdict = "WAIT"
+        score = min(score, 59)
+
+    direction_is_buy = verdict != "SELL"
+    supportive = [
+        component
+        for component in components
+        if component.key != "data_quality"
+        if (component.score >= 55 if direction_is_buy else component.score <= 45)
+    ]
+    counter = [
+        component
+        for component in components
+        if component.key != "data_quality"
+        if (component.score <= 45 if direction_is_buy else component.score >= 55)
+    ]
+    supportive.sort(key=lambda component: abs(component.score - 50), reverse=True)
+    counter.sort(key=lambda component: abs(component.score - 50), reverse=True)
+    history_reasons, history_counters = summarize_trade_history_calibration()
+    top_reasons = [
+        f"{component.label}: {component.bias} {component.score}/100 - {component.reason}"
+        for component in supportive[:3]
+    ] + history_reasons
+    counter_reasons = [
+        f"{component.label}: {component.bias} {component.score}/100 - {component.reason}"
+        for component in counter[:3]
+    ] + history_counters
+
+    recommendation_verdict = verdict if verdict in {"BUY", "SELL"} else legacy_recommendation.verdict
+    if recommendation_verdict == "BUY":
+        stop_loss, tp1, tp2 = build_trade_levels(
+            gold.price,
+            atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
+            verdict="BUY",
+            stop_multiplier=1.0,
+            tp1_multiplier=1.15,
+            tp2_multiplier=2.1,
+        )
+    elif recommendation_verdict == "SELL":
+        stop_loss, tp1, tp2 = build_trade_levels(
+            gold.price,
+            atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
+            verdict="SELL",
+            stop_multiplier=1.0,
+            tp1_multiplier=1.15,
+            tp2_multiplier=2.1,
+        )
+    else:
+        stop_loss, tp1, tp2 = legacy_recommendation.stop_loss, legacy_recommendation.take_profit_1, legacy_recommendation.take_profit_2
+
+    summary = (
+        f"Orchestrateur v2 {verdict}: score pondere {bullish_score:.1f}/100, "
+        f"ancien moteur {legacy_recommendation.verdict} {legacy_recommendation.score}/100. "
+        + ("Quality Gate valide." if gate_status == "VALIDATED" else "WAIT force par Quality Gate.")
+    )
+    recommendation = TradeRecommendation(
+        mode="Global v2",
+        verdict=verdict,
+        score=score,
+        summary=summary,
+        reasons=(top_reasons[:3] + [f"Contre-signal: {item}" for item in counter_reasons[:3]] + gate_reasons)[:8],
+        stop_loss=stop_loss,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        source_note="Orchestrateur v2: agents ponderes, SourceRegistry, regime, contradictions et Trade Ledger.",
+    )
+    decision = OrchestratorDecision(
+        verdict=verdict,
+        score=score,
+        status=gate_status,
+        engine="orchestrator_v2_active",
+        bullish_score=bullish_score,
+        legacy_verdict=legacy_recommendation.verdict,
+        legacy_score=legacy_recommendation.score,
+        top_reasons=top_reasons[:4],
+        counter_reasons=counter_reasons[:4],
+        contradictions=contradictions[:5],
+        quality_gate_reasons=gate_reasons,
+        components=components,
+    )
+    return recommendation, decision
+
+
+def update_orchestrator_agent(agent_results: list[AgentResult], decision: OrchestratorDecision) -> list[AgentResult]:
+    updated: list[AgentResult] = []
+    for agent in agent_results:
+        if agent.name != "OrchestratorAgent":
+            updated.append(agent)
+            continue
+        updated.append(
+            AgentResult(
+                name=agent.name,
+                department=agent.department,
+                bias=normalize_agent_bias(decision.verdict),
+                score=decision.score,
+                confidence=78 if decision.status == "VALIDATED" else 64,
+                summary=(
+                    f"Orchestrateur v2 actif: verdict {decision.verdict} {decision.score}/100; "
+                    f"ancien moteur {decision.legacy_verdict} {decision.legacy_score}/100."
+                ),
+                evidence=[
+                    AgentEvidence("Moteur", decision.engine, "Phase 14"),
+                    AgentEvidence("Score pondere", f"{decision.bullish_score:.1f}/100", "Agents ponderes"),
+                    AgentEvidence("Quality Gate", decision.status, "Orchestrator v2"),
+                ],
+                risks=[AgentRisk("Gate", reason, "high" if decision.status == "WAIT" else "low") for reason in decision.quality_gate_reasons[:3]],
+                status="ACTIVE",
+                experimental=False,
+            )
+        )
+    return updated
+
+
 def parse_agent_results(entries: list[dict[str, Any]]) -> list[AgentResult]:
     results: list[AgentResult] = []
     for entry in entries:
@@ -5527,6 +5875,7 @@ def build_payload(
     political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
     trade_ledger: TradeLedgerSummary | None = None,
+    orchestrator_decision: OrchestratorDecision | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -5652,6 +6001,8 @@ def build_payload(
         payload["agent_results"] = [asdict(agent) for agent in agent_results]
     if trade_ledger:
         payload["trade_ledger"] = asdict(trade_ledger)
+    if orchestrator_decision:
+        payload["orchestrator_decision"] = asdict(orchestrator_decision)
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
             "symbol": "Weekend Gold",
@@ -5888,6 +6239,43 @@ def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerS
     )
 
 
+def build_orchestrator_component_from_payload(data: dict[str, Any]) -> OrchestratorComponent:
+    return OrchestratorComponent(
+        key=str(data.get("key", "")),
+        label=str(data.get("label", "")),
+        score=int(data.get("score", 50) or 50),
+        bias=str(data.get("bias", "NEUTRAL")),
+        weight=float(data.get("weight", 0.0) or 0.0),
+        contribution=float(data.get("contribution", 0.0) or 0.0),
+        confidence=int(data.get("confidence", 50) or 50),
+        source=str(data.get("source", "")),
+        reason=str(data.get("reason", "")),
+    )
+
+
+def build_orchestrator_decision_from_payload(data: dict[str, Any] | None) -> OrchestratorDecision | None:
+    if not isinstance(data, dict):
+        return None
+    return OrchestratorDecision(
+        verdict=str(data.get("verdict", "WAIT")),
+        score=int(data.get("score", 50) or 50),
+        status=str(data.get("status", "WAIT")),
+        engine=str(data.get("engine", "orchestrator_v2")),
+        bullish_score=float(data.get("bullish_score", 50.0) or 50.0),
+        legacy_verdict=str(data.get("legacy_verdict", "n/a")),
+        legacy_score=int(data.get("legacy_score", 50) or 50),
+        top_reasons=[str(item) for item in data.get("top_reasons", [])],
+        counter_reasons=[str(item) for item in data.get("counter_reasons", [])],
+        contradictions=[str(item) for item in data.get("contradictions", [])],
+        quality_gate_reasons=[str(item) for item in data.get("quality_gate_reasons", [])],
+        components=[
+            build_orchestrator_component_from_payload(item)
+            for item in data.get("components", [])
+            if isinstance(item, dict)
+        ],
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -5936,6 +6324,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     macro_catalysts_payload = payload.get("macro_catalysts")
     data_quality_payload = payload.get("data_quality")
     trade_ledger_payload = payload.get("trade_ledger")
+    orchestrator_payload = payload.get("orchestrator_decision")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -6077,6 +6466,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     macro_catalysts = build_macro_catalyst_calendar_from_payload(macro_catalysts_payload)
     data_quality = build_data_quality_from_payload(data_quality_payload)
     trade_ledger = build_trade_ledger_from_payload(trade_ledger_payload)
+    orchestrator_decision = build_orchestrator_decision_from_payload(orchestrator_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -6194,6 +6584,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         political_statements=political_statements,
         agent_results=agent_results,
         trade_ledger=trade_ledger,
+        orchestrator_decision=orchestrator_decision,
     )
 
 
@@ -6242,6 +6633,7 @@ def render_report(
     political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
     trade_ledger: TradeLedgerSummary | None = None,
+    orchestrator_decision: OrchestratorDecision | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -6385,6 +6777,26 @@ def render_report(
             lines.append(
                 f"- {snapshot.name}: {snapshot.status}, Tier {snapshot.tier}, categorie {snapshot.category}, "
                 f"age {snapshot.age_minutes if snapshot.age_minutes is not None else 'n/a'} min, agents {', '.join(snapshot.allowed_agents[:3])}"
+            )
+
+    if orchestrator_decision:
+        lines.extend(
+            [
+                "",
+                "## Orchestrateur v2",
+                f"- Statut: {orchestrator_decision.status}",
+                f"- Verdict: {orchestrator_decision.verdict} {orchestrator_decision.score}/100",
+                f"- Bullish score pondere: {orchestrator_decision.bullish_score:.1f}/100",
+                f"- Ancien moteur: {orchestrator_decision.legacy_verdict} {orchestrator_decision.legacy_score}/100",
+                "- Top raisons: " + ("; ".join(orchestrator_decision.top_reasons) if orchestrator_decision.top_reasons else "n/a"),
+                "- Contre-signaux: " + ("; ".join(orchestrator_decision.counter_reasons) if orchestrator_decision.counter_reasons else "n/a"),
+                "- Quality Gate: " + ("; ".join(orchestrator_decision.quality_gate_reasons) if orchestrator_decision.quality_gate_reasons else "n/a"),
+            ]
+        )
+        for component in orchestrator_decision.components:
+            lines.append(
+                f"- {component.label}: {component.bias} {component.score}/100, poids {component.weight:.2f}, "
+                f"contribution {component.contribution:.2f}, source {component.source}"
             )
 
     if trade_ledger:
@@ -6553,9 +6965,8 @@ def render_report(
         lines.extend(
             [
                 "",
-                "## Fondation multi-agents passive",
-                "- Statut: experimental, lecture informative uniquement.",
-                "- Verdict officiel conserve par le scoring global prioritaire.",
+                "## Fondation multi-agents",
+                "- Statut: orchestrateur actif depuis Phase 14; agents sources ponderes et ancien moteur conserve en comparaison.",
             ]
         )
         for agent in agent_results:
@@ -6816,7 +7227,12 @@ def render_reasons_list(reasons: list[str]) -> str:
 
 
 def recommendation_css_class(verdict: str) -> str:
-    return "bullish" if verdict.upper() == "BUY" else "bearish"
+    upper = verdict.upper()
+    if upper == "BUY":
+        return "bullish"
+    if upper == "SELL":
+        return "bearish"
+    return "neutral"
 
 
 def render_trade_levels(recommendation: TradeRecommendation) -> str:
@@ -7198,6 +7614,55 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
       <table class="technical-table">
         <thead><tr><th>Cree</th><th>Direction</th><th>Entry</th><th>Status</th><th>Outcome</th><th>Regime</th></tr></thead>
         <tbody>{''.join(recent_rows) or '<tr><td colspan="6">Historique vide.</td></tr>'}</tbody>
+      </table>
+    </div>
+    """.strip()
+
+
+def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) -> str:
+    if decision is None:
+        return '<div class="empty-state">Orchestrateur v2 indisponible sur ce snapshot.</div>'
+    rows = "".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(component.label)}</strong><br><span class="soft">{html.escape(component.source)}</span></td>
+          <td class="{recommendation_css_class(component.bias)}">{html.escape(component.bias)}</td>
+          <td>{component.score}/100</td>
+          <td>{component.weight:.2f}</td>
+          <td>{component.contribution:.2f}</td>
+          <td>{html.escape(component.reason[:150])}</td>
+        </tr>
+        """.strip()
+        for component in decision.components
+    )
+    top_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision.top_reasons[:3]) or "<li>Aucune raison dominante.</li>"
+    counter_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision.counter_reasons[:3]) or "<li>Aucun contre-signal majeur.</li>"
+    gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision.quality_gate_reasons[:5]) or "<li>Quality Gate non evalue.</li>"
+    badge_class = recommendation_css_class(decision.verdict)
+    return f"""
+    <div class="trade-verdict {badge_class}">Orchestrateur v2 · {html.escape(decision.verdict)} · {decision.score}/100 · {html.escape(decision.status)}</div>
+    <p class="trade-summary">
+      Score pondere bullish {decision.bullish_score:.1f}/100. Ancien moteur:
+      {html.escape(decision.legacy_verdict)} {decision.legacy_score}/100.
+    </p>
+    <div class="geo-grid">
+      <div>
+        <div class="section-kicker">Top 3 preuves</div>
+        <ul class="reason-list">{top_reasons}</ul>
+      </div>
+      <div>
+        <div class="section-kicker">Top 3 contre-signaux</div>
+        <ul class="reason-list">{counter_reasons}</ul>
+      </div>
+      <div>
+        <div class="section-kicker">Quality Gate final</div>
+        <ul class="reason-list">{gate_reasons}</ul>
+      </div>
+    </div>
+    <div class="table-wrap" style="margin-top:12px;">
+      <table class="technical-table">
+        <thead><tr><th>Composant</th><th>Biais</th><th>Score</th><th>Poids</th><th>Contribution</th><th>Raison</th></tr></thead>
+        <tbody>{rows}</tbody>
       </table>
     </div>
     """.strip()
@@ -8557,6 +9022,7 @@ def render_dashboard_clarity(
     event_facts = bundle.event_facts
     political_statements = bundle.political_statements
     trade_ledger = bundle.trade_ledger
+    orchestrator_decision = bundle.orchestrator_decision
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -9744,6 +10210,7 @@ def render_dashboard_clarity_v2(
     event_facts = bundle.event_facts
     political_statements = bundle.political_statements
     trade_ledger = bundle.trade_ledger
+    orchestrator_decision = bundle.orchestrator_decision
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -11108,6 +11575,11 @@ def render_dashboard_clarity_v2(
             {render_trade_card(fundamental)}
             {render_trade_card(technical)}
             <article class="panel span-12">
+              <div class="section-kicker">Orchestrateur v2</div>
+              <h2>Score global multi-agents</h2>
+              {render_orchestrator_decision_panel(orchestrator_decision)}
+            </article>
+            <article class="panel span-12">
               <div class="section-kicker">Trade Tracker</div>
               <h2>Signal locking et suivi des recommandations</h2>
               {render_trade_tracker_panel(trade_ledger)}
@@ -11213,6 +11685,11 @@ def render_dashboard_clarity_v2(
             </article>
           </section>
           <section class="content-grid anchor-target">
+            <article class="panel span-12">
+              <div class="section-kicker">Orchestrateur v2</div>
+              <h2>Ponderation, preuves et contre-signaux</h2>
+              {render_orchestrator_decision_panel(orchestrator_decision)}
+            </article>
             <article class="panel span-12">
               <div class="section-kicker">Regime decisionnel</div>
               <h2>WTI/Brent + Hormuz/Oil Shock</h2>
@@ -11650,6 +12127,16 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    legacy_global_recommendation = global_recommendation
+    global_recommendation, orchestrator_decision = build_orchestrator_decision(
+        gold,
+        legacy_global_recommendation,
+        agent_results,
+        data_quality=data_quality,
+        market_regime=market_regime,
+        event_mode=event_mode,
+    )
+    agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -11684,6 +12171,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         political_statements=political_statements,
         agent_results=agent_results,
         trade_ledger=trade_ledger,
+        orchestrator_decision=orchestrator_decision,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -11714,6 +12202,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.political_statements = political_statements
     live_bundle.agent_results = agent_results
     live_bundle.trade_ledger = trade_ledger
+    live_bundle.orchestrator_decision = orchestrator_decision
     return live_bundle
 
 
@@ -11822,6 +12311,16 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    legacy_global_recommendation = global_recommendation
+    global_recommendation, orchestrator_decision = build_orchestrator_decision(
+        gold,
+        legacy_global_recommendation,
+        agent_results,
+        data_quality=data_quality,
+        market_regime=market_regime,
+        event_mode=event_mode,
+    )
+    agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -11856,6 +12355,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         political_statements=political_statements,
         agent_results=agent_results,
         trade_ledger=trade_ledger,
+        orchestrator_decision=orchestrator_decision,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -11891,6 +12391,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         political_statements=political_statements,
         agent_results=agent_results,
         trade_ledger=trade_ledger,
+        orchestrator_decision=orchestrator_decision,
     )
 
 
@@ -11932,6 +12433,7 @@ def render_artifacts(
         bundle.political_statements,
         bundle.agent_results,
         bundle.trade_ledger,
+        bundle.orchestrator_decision,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (
@@ -12014,6 +12516,7 @@ class DashboardLiveCache:
                 bundle.political_statements,
                 bundle.agent_results,
                 bundle.trade_ledger,
+                bundle.orchestrator_decision,
             )
             write_text_file(self.save_path, report)
 

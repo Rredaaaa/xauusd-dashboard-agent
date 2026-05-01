@@ -28,7 +28,9 @@ from xauusd_agent import (
     TradePlan,
     TradeRecommendation,
     WeekendGoldSnapshot,
+    append_audit_log_snapshot,
     build_market_regime_analysis,
+    build_monitoring_inspector_payload,
     build_cross_asset_analysis,
     build_event_mode_analysis,
     build_official_macro_rates,
@@ -632,6 +634,11 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("top-nav", dashboard)
         self.assertIn("Source ·", dashboard)
         self.assertIn("Quality gate", dashboard)
+        self.assertIn("Monitoring / Audit / Inspector", dashboard)
+        self.assertIn("Flux, sources, agents et trades", dashboard)
+        self.assertIn("Audit log", dashboard)
+        self.assertIn('data-tab-target="inspector"', dashboard)
+        self.assertIn('data-tab-view="inspector"', dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -646,6 +653,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn('data-tab-target="decision"', dashboard)
         self.assertIn('data-tab-target="macro"', dashboard)
         self.assertIn('data-tab-target="geopolitics"', dashboard)
+        self.assertIn('data-tab-target="inspector"', dashboard)
         self.assertIn('data-tab-target="reports"', dashboard)
         self.assertGreaterEqual(dashboard.count('data-tab-target="dashboard"'), 2)
         self.assertIn('data-tab-view="dashboard"', dashboard)
@@ -653,6 +661,132 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("global-live-strip", dashboard)
         self.assertIn("aureumFlux.activeTab", dashboard)
         self.assertIn("applyStoredTab", dashboard)
+
+    def test_monitoring_inspector_payload_and_audit_log(self) -> None:
+        gold = self.snapshot("XAU/USD", 102.0, 100.0)
+        dxy = self.snapshot("DX-Y.NYB", 98.0, 99.0)
+        us10y = self.snapshot("^TNX", 4.2, 4.3)
+        news_item = NewsItem(
+            title="Gold rises on softer dollar",
+            source="Reuters",
+            link="https://example.com",
+            published_at="2026-04-24T00:00:00+00:00",
+            category="gold",
+            score=2,
+            score_reasons=["bullish:weak dollar"],
+        )
+        analysis = AnalysisResult(
+            bias="bullish",
+            score=5,
+            confidence=72,
+            reasons=["Dollar faible"],
+            bullish_news=[news_item],
+            bearish_news=[],
+            neutral_news=[],
+        )
+        recommendation = TradeRecommendation(
+            mode="Global v2",
+            verdict="BUY",
+            score=68,
+            summary="Signal test auditable.",
+            reasons=["Agent confirme"],
+            stop_loss=99.0,
+            take_profit_1=104.0,
+            take_profit_2=106.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T00:00:00+00:00",
+            score=82,
+            status="USABLE",
+            summary="Data quality test.",
+            missing_sources=[],
+            stale_sources=["Google News RSS / fallback feeds"],
+            weak_sources=[],
+            contradictions=[],
+            snapshots=[
+                SourceSnapshot(
+                    source_id="investing_xauusd",
+                    name="Investing.com XAU/USD",
+                    category="price",
+                    tier=2,
+                    status="ok",
+                    last_update="2026-04-24T00:00:00+00:00",
+                    age_minutes=0,
+                    value_summary="spot 102.00",
+                    source_url="https://example.com",
+                    critical=True,
+                    allowed_agents=["PriceAgent"],
+                ),
+                SourceSnapshot(
+                    source_id="google_news_rss",
+                    name="Google News RSS / fallback feeds",
+                    category="news",
+                    tier=4,
+                    status="stale",
+                    last_update="2026-04-23T00:00:00+00:00",
+                    age_minutes=1440,
+                    value_summary="1 headline",
+                    source_url="https://news.google.com/rss",
+                    critical=True,
+                    allowed_agents=["SentimentNewsAgent"],
+                ),
+            ],
+        )
+        agents = [
+            AgentResult(
+                name="PriceAgent",
+                department="Market",
+                bias="BUY",
+                score=68,
+                confidence=75,
+                summary="Prix exploitable.",
+                status="ACTIVE",
+                experimental=False,
+            )
+        ]
+        ledger = TradeLedgerSummary(
+            ledger_path="reports/trade_ledger.jsonl",
+            generated_at="2026-04-24T00:00:00+00:00",
+            quality_gate_status="WAIT",
+            quality_gate_reasons=["Test gate."],
+            active_trades=[],
+            recent_trades=[],
+            total_trades=0,
+        )
+        inspector = build_monitoring_inspector_payload(
+            "2026-04-24T00:00:00+00:00",
+            quality,
+            agents,
+            ledger,
+            None,
+            recommendation,
+            None,
+        )
+        self.assertEqual(inspector["source_counts"]["active"], 1)
+        self.assertEqual(inspector["source_counts"]["stale"], 1)
+        self.assertEqual(inspector["agents"]["active"], 1)
+        self.assertEqual(inspector["trades"]["quality_gate_status"], "WAIT")
+
+        bundle = BriefingBundle(
+            gold=gold,
+            dxy=dxy,
+            us10y=us10y,
+            news=[news_item],
+            analysis=analysis,
+            payload={"generated_at": "2026-04-24T00:00:00+00:00"},
+            ai_analysis=None,
+            data_quality=quality,
+            agent_results=agents,
+            trade_ledger=ledger,
+            global_recommendation=recommendation,
+        )
+        with TemporaryDirectory() as tmpdir:
+            audit_path = Path(tmpdir) / "audit_log.jsonl"
+            entry = append_audit_log_snapshot(bundle, path=audit_path)
+            self.assertTrue(audit_path.exists())
+            self.assertEqual(entry["decision"]["verdict"], "BUY")
+            self.assertIn("Google News RSS / fallback feeds", audit_path.read_text(encoding="utf-8"))
 
     def test_macro_catalyst_parsers_extract_official_events(self) -> None:
         fomc_html = """

@@ -91,6 +91,7 @@ BEA_RELEASE_SCHEDULE_URL = "https://www.bea.gov/news/schedule"
 CME_FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html"
 CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-api/fedwatch-api.html"
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
+AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -1320,6 +1321,161 @@ def build_trade_ledger_summary(
         partials=partials,
         expired=expired,
     )
+
+
+def build_monitoring_inspector_payload(
+    generated_at: str,
+    data_quality: DataQualitySnapshot | None,
+    agent_results: list[AgentResult],
+    trade_ledger: TradeLedgerSummary | None,
+    orchestrator_decision: OrchestratorDecision | None,
+    global_recommendation: TradeRecommendation | None,
+    market_regime: MarketRegimeAnalysis | None,
+) -> dict[str, Any]:
+    snapshots = data_quality.snapshots if data_quality else []
+    source_issues = [snapshot for snapshot in snapshots if snapshot.status != "ok"]
+    active_agents = [agent for agent in agent_results if agent.status in {"ACTIVE", "PASSIVE"}]
+    agent_outputs = [
+        {
+            "name": agent.name,
+            "department": agent.department,
+            "status": agent.status,
+            "bias": agent.bias,
+            "score": agent.score,
+            "confidence": agent.confidence,
+            "summary": agent.summary,
+            "evidence_count": len(agent.evidence),
+            "risk_count": len(agent.risks),
+        }
+        for agent in agent_results[:16]
+    ]
+    trade_rows = []
+    if trade_ledger:
+        seen_trade_ids: set[str] = set()
+        for plan in [*trade_ledger.active_trades, *trade_ledger.recent_trades]:
+            if plan.trade_id in seen_trade_ids:
+                continue
+            seen_trade_ids.add(plan.trade_id)
+            trade_rows.append(
+                {
+                    "trade_id": plan.trade_id,
+                    "created_at": plan.created_at,
+                    "direction": plan.direction,
+                    "status": plan.status,
+                    "outcome": plan.outcome,
+                    "entry": plan.reference_price,
+                    "stop_loss": plan.stop_loss,
+                    "tp1": plan.tp1,
+                    "tp2": plan.tp2,
+                    "tp3": plan.tp3,
+                    "outcome_reason": plan.outcome_reason,
+                }
+            )
+
+    return {
+        "generated_at": generated_at,
+        "last_refresh": data_quality.generated_at if data_quality else generated_at,
+        "data_quality_score": data_quality.score if data_quality else 0,
+        "data_quality_status": data_quality.status if data_quality else "UNAVAILABLE",
+        "source_counts": {
+            "total": len(snapshots),
+            "active": sum(1 for snapshot in snapshots if snapshot.status == "ok"),
+            "missing": len(data_quality.missing_sources) if data_quality else 0,
+            "stale": len(data_quality.stale_sources) if data_quality else 0,
+            "weak": len(data_quality.weak_sources) if data_quality else 0,
+            "issues": len(source_issues),
+        },
+        "source_issues": [
+            {
+                "source_id": snapshot.source_id,
+                "name": snapshot.name,
+                "status": snapshot.status,
+                "category": snapshot.category,
+                "critical": snapshot.critical,
+                "last_update": snapshot.last_update,
+                "age_minutes": snapshot.age_minutes,
+                "value_summary": snapshot.value_summary,
+            }
+            for snapshot in source_issues
+        ],
+        "agents": {
+            "total": len(agent_results),
+            "active": len(active_agents),
+            "experimental": sum(1 for agent in agent_results if agent.experimental),
+            "outputs": agent_outputs,
+        },
+        "decision": {
+            "verdict": global_recommendation.verdict if global_recommendation else "UNAVAILABLE",
+            "score": global_recommendation.score if global_recommendation else 0,
+            "summary": global_recommendation.summary if global_recommendation else "",
+            "engine": orchestrator_decision.engine if orchestrator_decision else "legacy",
+            "gate_status": orchestrator_decision.status if orchestrator_decision else "UNAVAILABLE",
+            "quality_gate_reasons": orchestrator_decision.quality_gate_reasons if orchestrator_decision else [],
+        },
+        "regime": {
+            "name": market_regime.name if market_regime else "Normal Macro",
+            "status": market_regime.status if market_regime else "NORMAL",
+            "score": market_regime.score if market_regime else 0,
+        },
+        "trades": {
+            "ledger_path": trade_ledger.ledger_path if trade_ledger else str(TRADE_LEDGER_PATH),
+            "quality_gate_status": trade_ledger.quality_gate_status if trade_ledger else "UNAVAILABLE",
+            "quality_gate_reasons": trade_ledger.quality_gate_reasons if trade_ledger else [],
+            "active": len(trade_ledger.active_trades) if trade_ledger else 0,
+            "total": trade_ledger.total_trades if trade_ledger else 0,
+            "wins": trade_ledger.wins if trade_ledger else 0,
+            "losses": trade_ledger.losses if trade_ledger else 0,
+            "partials": trade_ledger.partials if trade_ledger else 0,
+            "expired": trade_ledger.expired if trade_ledger else 0,
+            "rows": trade_rows[:12],
+        },
+    }
+
+
+def build_audit_log_snapshot(bundle: BriefingBundle) -> dict[str, Any]:
+    generated_at = str(bundle.payload.get("generated_at", iso_now()))
+    inspector = build_monitoring_inspector_payload(
+        generated_at,
+        bundle.data_quality,
+        bundle.agent_results,
+        bundle.trade_ledger,
+        bundle.orchestrator_decision,
+        bundle.global_recommendation,
+        bundle.market_regime,
+    )
+    return {
+        "generated_at": generated_at,
+        "xauusd_price": round(bundle.gold.price, 2),
+        "xauusd_change_pct": round(bundle.gold.change_pct, 2),
+        "decision": inspector["decision"],
+        "regime": inspector["regime"],
+        "data_quality": {
+            "score": inspector["data_quality_score"],
+            "status": inspector["data_quality_status"],
+            "sources": inspector["source_counts"],
+            "issues": inspector["source_issues"][:8],
+        },
+        "agents": inspector["agents"]["outputs"],
+        "trades": inspector["trades"],
+    }
+
+
+def append_audit_log_snapshot(
+    bundle: BriefingBundle,
+    path: Path = AUDIT_LOG_PATH,
+) -> dict[str, Any]:
+    entry = build_audit_log_snapshot(bundle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    return entry
+
+
+def append_audit_log_safely(bundle: BriefingBundle, path: Path = AUDIT_LOG_PATH) -> None:
+    try:
+        append_audit_log_snapshot(bundle, path=path)
+    except Exception as exc:
+        bundle.payload.setdefault("monitoring_warnings", []).append(f"audit_log_write_failed: {exc}")
 
 
 def latest_iso(values: list[str | None]) -> str | None:
@@ -6003,6 +6159,15 @@ def build_payload(
         payload["trade_ledger"] = asdict(trade_ledger)
     if orchestrator_decision:
         payload["orchestrator_decision"] = asdict(orchestrator_decision)
+    payload["monitoring_inspector"] = build_monitoring_inspector_payload(
+        str(payload["generated_at"]),
+        data_quality,
+        agent_results or [],
+        trade_ledger,
+        orchestrator_decision,
+        global_recommendation,
+        market_regime,
+    )
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
             "symbol": "Weekend Gold",
@@ -6779,6 +6944,36 @@ def render_report(
                 f"age {snapshot.age_minutes if snapshot.age_minutes is not None else 'n/a'} min, agents {', '.join(snapshot.allowed_agents[:3])}"
             )
 
+    inspector_payload = build_monitoring_inspector_payload(
+        generated_at,
+        data_quality,
+        agent_results or [],
+        trade_ledger,
+        orchestrator_decision,
+        global_recommendation,
+        market_regime,
+    )
+    lines.extend(
+        [
+            "",
+            "## Monitoring / Audit Inspector",
+            f"- Dernier refresh: {inspector_payload['last_refresh']}",
+            f"- Data quality: {inspector_payload['data_quality_status']} {inspector_payload['data_quality_score']}/100",
+            f"- Sources actives: {inspector_payload['source_counts']['active']} / {inspector_payload['source_counts']['total']}",
+            f"- Sources en alerte: {inspector_payload['source_counts']['issues']} (missing {inspector_payload['source_counts']['missing']}, stale {inspector_payload['source_counts']['stale']}, weak {inspector_payload['source_counts']['weak']})",
+            f"- Agents actifs: {inspector_payload['agents']['active']} / {inspector_payload['agents']['total']}",
+            f"- Trades: actifs {inspector_payload['trades']['active']} / total {inspector_payload['trades']['total']}; gate {inspector_payload['trades']['quality_gate_status']}",
+            f"- Audit log append-only: {AUDIT_LOG_PATH}",
+        ]
+    )
+    for issue in inspector_payload["source_issues"][:5]:
+        lines.append(f"- Source issue: {issue['name']} status {issue['status']} ({issue['value_summary']})")
+    for output in inspector_payload["agents"]["outputs"][:8]:
+        lines.append(
+            f"- Agent {output['name']}: {output['bias']} {output['score']}/100, "
+            f"confiance {output['confidence']}/100, status {output['status']}"
+        )
+
     if orchestrator_decision:
         lines.extend(
             [
@@ -7548,6 +7743,131 @@ def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
       <table class="technical-table">
         <thead><tr><th>Source</th><th>Status</th><th>Fraicheur</th><th>Valeur utilisee</th><th>Agents autorises</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    """.strip()
+
+
+def render_monitoring_inspector_panel(
+    generated_at: str,
+    data_quality: DataQualitySnapshot | None,
+    agent_results: list[AgentResult],
+    trade_ledger: TradeLedgerSummary | None,
+    orchestrator_decision: OrchestratorDecision | None,
+    global_recommendation: TradeRecommendation | None,
+    market_regime: MarketRegimeAnalysis | None,
+) -> str:
+    inspector = build_monitoring_inspector_payload(
+        generated_at,
+        data_quality,
+        agent_results,
+        trade_ledger,
+        orchestrator_decision,
+        global_recommendation,
+        market_regime,
+    )
+    source_rows = []
+    for snapshot in (data_quality.snapshots if data_quality else []):
+        row_class = "bullish" if snapshot.status == "ok" else "bearish" if snapshot.status in {"missing", "stale"} else "neutral"
+        source_rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(snapshot.name)}</strong><br><span class="soft">{html.escape(snapshot.source_id)}</span></td>
+              <td class="{row_class}">{html.escape(snapshot.status.upper())}</td>
+              <td>{html.escape(snapshot.category)} · Tier {snapshot.tier}</td>
+              <td>{html.escape(format_timestamp_for_humans(snapshot.last_update) if snapshot.last_update else "n/a")}<br><span class="soft">{snapshot.age_minutes if snapshot.age_minutes is not None else "n/a"} min</span></td>
+              <td>{html.escape(snapshot.value_summary)}</td>
+              <td>{html.escape(", ".join(snapshot.allowed_agents[:4]))}</td>
+            </tr>
+            """.strip()
+        )
+
+    agent_rows = []
+    for agent in agent_results[:16]:
+        agent_rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(agent.name)}</strong><br><span class="soft">{html.escape(agent.department)}</span></td>
+              <td>{html.escape(agent.status)}</td>
+              <td class="{agent_css_class(agent.bias)}">{html.escape(agent.bias)} · {agent.score}/100</td>
+              <td>{agent.confidence}/100</td>
+              <td>{html.escape(agent.summary[:180])}</td>
+              <td>{len(agent.evidence)} preuve(s) · {len(agent.risks)} risque(s)</td>
+            </tr>
+            """.strip()
+        )
+
+    trade_rows = []
+    seen_trade_ids: set[str] = set()
+    if trade_ledger:
+        for plan in [*trade_ledger.active_trades, *trade_ledger.recent_trades]:
+            if plan.trade_id in seen_trade_ids:
+                continue
+            seen_trade_ids.add(plan.trade_id)
+            trade_rows.append(
+                f"""
+                <tr>
+                  <td><strong>{html.escape(plan.trade_id)}</strong><br><span class="soft">{html.escape(format_timestamp_for_humans(plan.created_at))}</span></td>
+                  <td>{html.escape(plan.direction)} @ {plan.reference_price:.2f}</td>
+                  <td>{plan.stop_loss:.2f} / {plan.tp1:.2f} / {plan.tp2:.2f} / {plan.tp3:.2f}</td>
+                  <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
+                  <td>{html.escape(plan.outcome)}</td>
+                  <td>{html.escape(plan.outcome_reason[:160])}</td>
+                </tr>
+                """.strip()
+            )
+
+    source_counts = inspector["source_counts"]
+    trades = inspector["trades"]
+    decision = inspector["decision"]
+    gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision["quality_gate_reasons"][:6]) or "<li>Aucun blocage decisionnel signale.</li>"
+    trade_gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in trades["quality_gate_reasons"][:6]) or "<li>Aucune raison Trade Gate disponible.</li>"
+    source_issues = "".join(
+        f"<li>{html.escape(issue['name'])}: {html.escape(issue['status'])} · {html.escape(issue['value_summary'])}</li>"
+        for issue in inspector["source_issues"][:8]
+    ) or "<li>Aucune source missing/stale/weak detectee.</li>"
+
+    return f"""
+    <div class="trade-verdict {state_tone_class(decision['gate_status'])}">Inspector · {html.escape(decision['verdict'])} {decision['score']}/100 · Data quality {inspector['data_quality_score']}/100</div>
+    <p class="trade-summary">Vue d'audit: elle explique quelles sources alimentent les agents, quel gate bloque ou valide la decision, et quels trades existent dans le ledger.</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Dernier refresh</strong><span>{html.escape(format_timestamp_for_humans(inspector['last_refresh']))}</span></div>
+      <div class="geo-stat"><strong>Sources actives</strong><span>{source_counts['active']} / {source_counts['total']}</span></div>
+      <div class="geo-stat"><strong>Sources en alerte</strong><span>{source_counts['issues']}</span><small>missing {source_counts['missing']} · stale {source_counts['stale']} · weak {source_counts['weak']}</small></div>
+      <div class="geo-stat"><strong>Agents actifs</strong><span>{inspector['agents']['active']} / {inspector['agents']['total']}</span></div>
+      <div class="geo-stat"><strong>Trades crees</strong><span>{trades['total']}</span><small>actifs {trades['active']} · wins {trades['wins']} · losses {trades['losses']}</small></div>
+      <div class="geo-stat"><strong>Audit log</strong><span>{html.escape(str(AUDIT_LOG_PATH))}</span><small>append-only JSONL</small></div>
+    </div>
+    <div class="geo-columns">
+      <div class="module-block">
+        <div class="section-kicker">Erreurs / sources stale</div>
+        <ul class="reason-list">{source_issues}</ul>
+      </div>
+      <div class="module-block">
+        <div class="section-kicker">Decision Gate</div>
+        <ul class="reason-list">{gate_reasons}</ul>
+      </div>
+      <div class="module-block">
+        <div class="section-kicker">Trade Gate</div>
+        <ul class="reason-list">{trade_gate_reasons}</ul>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Source</th><th>Status</th><th>Categorie</th><th>Dernier refresh</th><th>Valeur</th><th>Agents</th></tr></thead>
+        <tbody>{''.join(source_rows) or '<tr><td colspan="6">Aucune source auditable sur ce snapshot.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Agent</th><th>Status</th><th>Sortie</th><th>Confiance</th><th>Resume recent</th><th>Preuves / risques</th></tr></thead>
+        <tbody>{''.join(agent_rows) or '<tr><td colspan="6">Aucun agent auditable sur ce snapshot.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Trade</th><th>Entry</th><th>SL / TP1 / TP2 / TP3</th><th>Status</th><th>Outcome</th><th>Pourquoi</th></tr></thead>
+        <tbody>{''.join(trade_rows) or '<tr><td colspan="6">Aucun trade cree dans le ledger.</td></tr>'}</tbody>
       </table>
     </div>
     """.strip()
@@ -10131,6 +10451,7 @@ def render_dashboard_clarity(
           <a class="rail-link" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
           <a class="rail-link" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
           <a class="rail-link" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="rail-link" href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
           <a class="rail-link" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
         </nav>
       </aside>
@@ -10145,6 +10466,7 @@ def render_dashboard_clarity(
               <a href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
               <a href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
               <a href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics</a>
+              <a href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
               <a href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
             </nav>
           </div>
@@ -11792,6 +12114,7 @@ def render_dashboard_clarity_v2(
           <a class="rail-link" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
           <a class="rail-link" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
           <a class="rail-link" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="rail-link" href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
           <a class="rail-link" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
         </nav>
       </aside>
@@ -11806,6 +12129,7 @@ def render_dashboard_clarity_v2(
               <a href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
               <a href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
               <a href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics</a>
+              <a href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
               <a href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
             </nav>
           </div>
@@ -11826,6 +12150,7 @@ def render_dashboard_clarity_v2(
           <a class="view-tab" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
           <a class="view-tab" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
           <a class="view-tab" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
+          <a class="view-tab" href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
           <a class="view-tab" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
         </nav>
 
@@ -12195,6 +12520,16 @@ def render_dashboard_clarity_v2(
           </section>
         </section>
 
+        <section class="tab-view" id="inspector" data-tab-view="inspector">
+          <section class="content-grid anchor-target">
+            <article class="panel span-12">
+              <div class="section-kicker">Monitoring / Audit / Inspector</div>
+              <h2>Flux, sources, agents et trades</h2>
+              {render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}
+            </article>
+          </section>
+        </section>
+
         <section class="tab-view" id="reports" data-tab-view="reports">
           <section class="content-grid anchor-target">
             {render_ai_summary(ai_analysis)}
@@ -12238,6 +12573,12 @@ def render_dashboard_clarity_v2(
               <div class="section-kicker">Trade Ledger</div>
               <h2>Historique des TradePlan verrouilles</h2>
               {render_trade_tracker_panel(trade_ledger)}
+            </article>
+
+            <article class="panel span-12">
+              <div class="section-kicker">Monitoring Inspector</div>
+              <h2>Audit sources, agents et trades</h2>
+              {render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}
             </article>
 
             <article class="panel span-12">
@@ -12795,6 +13136,7 @@ def persist_artifacts(
     data_json_path: Path | None,
     dashboard_path: Path | None,
 ) -> None:
+    append_audit_log_safely(bundle)
     report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=dashboard_path is not None)
     if save_path:
         write_text_file(save_path, report)
@@ -12829,6 +13171,7 @@ class DashboardLiveCache:
         self.latest_refreshed_at = 0.0
 
     def _persist_latest(self, bundle: BriefingBundle, save_report: bool) -> None:
+        append_audit_log_safely(bundle)
         if save_report and self.save_path:
             report = render_report(
                 bundle.gold,
@@ -13083,6 +13426,7 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+        append_audit_log_safely(bundle)
         report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=args.dashboard is not None)
 
         if args.save:

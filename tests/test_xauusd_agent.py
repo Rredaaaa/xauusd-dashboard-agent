@@ -1,8 +1,11 @@
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from xauusd_agent import (
     AnalysisResult,
+    AgentResult,
     BriefingBundle,
     CFTCPositioning,
     DataQualitySnapshot,
@@ -21,6 +24,8 @@ from xauusd_agent import (
     SourceSnapshot,
     SymbolSnapshot,
     TechnicalReading,
+    TradeLedgerSummary,
+    TradePlan,
     TradeRecommendation,
     WeekendGoldSnapshot,
     build_market_regime_analysis,
@@ -29,6 +34,7 @@ from xauusd_agent import (
     build_official_macro_rates,
     build_event_facts,
     build_data_quality_snapshot,
+    build_trade_ledger_summary,
     build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
@@ -520,6 +526,55 @@ class AnalysisShapeTests(unittest.TestCase):
                 summary="Regime Hormuz/Oil Shock test.",
                 reasons=["WTI/Brent montent", "Gold ne confirme pas"],
             ),
+            trade_ledger=TradeLedgerSummary(
+                ledger_path="reports/trade_ledger.jsonl",
+                generated_at="2026-04-24T00:00:00+00:00",
+                quality_gate_status="WAIT",
+                quality_gate_reasons=["Score global insuffisant pour verrouiller un trade."],
+                active_trades=[
+                    TradePlan(
+                        trade_id="test-buy-001",
+                        created_at="2026-04-24T00:00:00+00:00",
+                        updated_at="2026-04-24T00:00:00+00:00",
+                        status="active",
+                        direction="BUY",
+                        entry_type="market_reference",
+                        reference_price=102.0,
+                        entry_zone_low=101.0,
+                        entry_zone_high=103.0,
+                        stop_loss=99.0,
+                        tp1=103.0,
+                        tp2=105.0,
+                        tp3=106.85,
+                        risk_reward_tp1=0.33,
+                        risk_reward_tp2=1.0,
+                        risk_reward_tp3=1.62,
+                        max_valid_until="2026-04-24T06:00:00+00:00",
+                        source_signal_id="abc123",
+                        global_score_at_creation=72,
+                        data_quality_score=88,
+                        confidence_score=70,
+                        market_regime="Normal Macro",
+                        agents_validating=["PriceAgent", "MacroAgent"],
+                        agents_contradicting=[],
+                        evidence_sources=["Investing.com XAU/USD", "FRED DGS10"],
+                        event_facts_snapshot=["FOMC minutes today"],
+                        technical_snapshot="1D:BUY/+4.0",
+                        macro_snapshot="Macro supportive.",
+                        geopolitical_snapshot="Geo mixed.",
+                        elliott_wave_snapshot="Sequence haussiere incomplete.",
+                        invalidation_rules=["Invalidation si SL touche."],
+                        outcome="open",
+                        outcome_reason="Trade Snapshot cree par test.",
+                    )
+                ],
+                recent_trades=[],
+                total_trades=1,
+                wins=0,
+                losses=0,
+                partials=0,
+                expired=0,
+            ),
         )
         dashboard = render_dashboard(bundle)
         self.assertIn("Dashboard XAUUSD", dashboard)
@@ -567,6 +622,9 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Qualite, fraicheur et fiabilite des sources", dashboard)
         self.assertIn("Source Registry", dashboard)
         self.assertIn("FRED DGS10", dashboard)
+        self.assertIn("Trade Tracker", dashboard)
+        self.assertIn("Signal locking et suivi des recommandations", dashboard)
+        self.assertIn("test-buy-001", dashboard)
         self.assertIn("Event Facts", dashboard)
         self.assertIn("Faits detectes, sources et chaine marche", dashboard)
         self.assertIn("Fait detecte", dashboard)
@@ -660,6 +718,118 @@ class AnalysisShapeTests(unittest.TestCase):
         facts = build_event_facts([item, duplicate], limit=6)
         self.assertEqual(len(facts), 1)
         self.assertEqual(facts[0].source, "Reuters")
+
+    def test_trade_ledger_locks_trade_and_preserves_levels(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        gold.fetched_at = "2026-04-24T00:00:00+00:00"
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=72,
+            summary="Signal test verrouillable.",
+            reasons=["Score global fort", "Agents alignes"],
+            stop_loss=2380.0,
+            take_profit_1=2425.0,
+            take_profit_2=2450.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T00:00:00+00:00",
+            score=88,
+            status="HIGH",
+            summary="Qualite test.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+            snapshots=[],
+        )
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 68, 65, "Technique valide."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+            )
+            self.assertEqual(summary.quality_gate_status, "VALIDATED")
+            self.assertEqual(len(summary.active_trades), 1)
+            plan = summary.active_trades[0]
+            self.assertEqual(plan.reference_price, 2400.0)
+            self.assertEqual(plan.stop_loss, 2380.0)
+            self.assertEqual(plan.tp1, 2425.0)
+
+            second = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, 15, tzinfo=timezone.utc),
+            )
+            self.assertIn("Cooldown actif", second.quality_gate_reasons[0])
+            self.assertEqual(second.active_trades[0].reference_price, 2400.0)
+            self.assertEqual(second.active_trades[0].stop_loss, 2380.0)
+
+    def test_trade_ledger_evaluates_sl_outcome(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=72,
+            summary="Signal test.",
+            reasons=["Test"],
+            stop_loss=2380.0,
+            take_profit_1=2425.0,
+            take_profit_2=2450.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+            )
+            gold.price = 2379.0
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 11, tzinfo=timezone.utc),
+                allow_create=False,
+            )
+            self.assertEqual(summary.recent_trades[0].status, "sl_hit")
+            self.assertEqual(summary.recent_trades[0].outcome, "loss")
 
     def test_passive_agents_do_not_replace_official_scoring(self) -> None:
         points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]

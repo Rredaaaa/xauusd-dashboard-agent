@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import copy
+import hashlib
 import html
 import http.server
 import io
@@ -89,6 +90,7 @@ FED_MONETARY_POLICY_RSS_URL = "https://www.federalreserve.gov/feeds/press_moneta
 BEA_RELEASE_SCHEDULE_URL = "https://www.bea.gov/news/schedule"
 CME_FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html"
 CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-api/fedwatch-api.html"
+TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -610,6 +612,59 @@ class DataQualitySnapshot:
 
 
 @dataclass
+class TradePlan:
+    trade_id: str
+    created_at: str
+    updated_at: str
+    status: str
+    direction: str
+    entry_type: str
+    reference_price: float
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    risk_reward_tp1: float
+    risk_reward_tp2: float
+    risk_reward_tp3: float
+    max_valid_until: str
+    source_signal_id: str
+    global_score_at_creation: int
+    data_quality_score: int
+    confidence_score: int
+    market_regime: str
+    agents_validating: list[str]
+    agents_contradicting: list[str]
+    evidence_sources: list[str]
+    event_facts_snapshot: list[str]
+    technical_snapshot: str
+    macro_snapshot: str
+    geopolitical_snapshot: str
+    elliott_wave_snapshot: str
+    invalidation_rules: list[str]
+    outcome: str
+    outcome_reason: str
+    closed_at: str | None = None
+
+
+@dataclass
+class TradeLedgerSummary:
+    ledger_path: str
+    generated_at: str
+    quality_gate_status: str
+    quality_gate_reasons: list[str]
+    active_trades: list[TradePlan] = field(default_factory=list)
+    recent_trades: list[TradePlan] = field(default_factory=list)
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    partials: int = 0
+    expired: int = 0
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -665,6 +720,7 @@ class BriefingBundle:
     event_facts: list[EventFact] = field(default_factory=list)
     political_statements: list[PoliticalStatement] = field(default_factory=list)
     agent_results: list[AgentResult] = field(default_factory=list)
+    trade_ledger: TradeLedgerSummary | None = None
 
 
 @dataclass
@@ -864,6 +920,374 @@ def data_quality_status(score: int) -> str:
     if score >= 55:
         return "DEGRADED"
     return "WEAK"
+
+
+def parse_trade_plan(data: dict[str, Any]) -> TradePlan:
+    return TradePlan(
+        trade_id=str(data.get("trade_id", "")),
+        created_at=str(data.get("created_at", iso_now())),
+        updated_at=str(data.get("updated_at", data.get("created_at", iso_now()))),
+        status=str(data.get("status", "pending")),
+        direction=str(data.get("direction", "BUY")),
+        entry_type=str(data.get("entry_type", "market_reference")),
+        reference_price=float(data.get("reference_price", 0.0) or 0.0),
+        entry_zone_low=float(data.get("entry_zone_low", 0.0) or 0.0),
+        entry_zone_high=float(data.get("entry_zone_high", 0.0) or 0.0),
+        stop_loss=float(data.get("stop_loss", 0.0) or 0.0),
+        tp1=float(data.get("tp1", 0.0) or 0.0),
+        tp2=float(data.get("tp2", 0.0) or 0.0),
+        tp3=float(data.get("tp3", 0.0) or 0.0),
+        risk_reward_tp1=float(data.get("risk_reward_tp1", 0.0) or 0.0),
+        risk_reward_tp2=float(data.get("risk_reward_tp2", 0.0) or 0.0),
+        risk_reward_tp3=float(data.get("risk_reward_tp3", 0.0) or 0.0),
+        max_valid_until=str(data.get("max_valid_until", iso_now())),
+        source_signal_id=str(data.get("source_signal_id", "")),
+        global_score_at_creation=int(data.get("global_score_at_creation", 0) or 0),
+        data_quality_score=int(data.get("data_quality_score", 0) or 0),
+        confidence_score=int(data.get("confidence_score", 0) or 0),
+        market_regime=str(data.get("market_regime", "Normal Macro")),
+        agents_validating=[str(item) for item in data.get("agents_validating", [])],
+        agents_contradicting=[str(item) for item in data.get("agents_contradicting", [])],
+        evidence_sources=[str(item) for item in data.get("evidence_sources", [])],
+        event_facts_snapshot=[str(item) for item in data.get("event_facts_snapshot", [])],
+        technical_snapshot=str(data.get("technical_snapshot", "")),
+        macro_snapshot=str(data.get("macro_snapshot", "")),
+        geopolitical_snapshot=str(data.get("geopolitical_snapshot", "")),
+        elliott_wave_snapshot=str(data.get("elliott_wave_snapshot", "")),
+        invalidation_rules=[str(item) for item in data.get("invalidation_rules", [])],
+        outcome=str(data.get("outcome", "open")),
+        outcome_reason=str(data.get("outcome_reason", "")),
+        closed_at=str(data.get("closed_at")) if data.get("closed_at") else None,
+    )
+
+
+def load_trade_ledger(path: Path = TRADE_LEDGER_PATH) -> list[TradePlan]:
+    if not path.exists():
+        return []
+    latest_by_id: dict[str, TradePlan] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            plan = parse_trade_plan(json.loads(raw_line))
+        except Exception:
+            continue
+        if plan.trade_id:
+            latest_by_id[plan.trade_id] = plan
+    return sorted(latest_by_id.values(), key=lambda item: item.created_at, reverse=True)
+
+
+def append_trade_plan_snapshot(plan: TradePlan, path: Path = TRADE_LEDGER_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(asdict(plan), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def trade_plan_closed(plan: TradePlan) -> bool:
+    return plan.status in {"tp2_hit", "tp3_hit", "sl_hit", "expired", "invalidated", "closed_manual"}
+
+
+def compute_risk_reward(direction: str, entry: float, stop_loss: float, target: float) -> float:
+    risk = abs(entry - stop_loss)
+    reward = abs(target - entry)
+    if risk <= 0:
+        return 0.0
+    return round(reward / risk, 2)
+
+
+def trade_signal_id(direction: str, market_regime: str, reference_price: float, score: int) -> str:
+    base = f"{direction}|{market_regime}|{round(reference_price / 5) * 5:.0f}|{score // 5 * 5}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+
+def evaluate_trade_plan(plan: TradePlan, current_price: float, now: datetime | None = None) -> TradePlan:
+    if trade_plan_closed(plan):
+        return plan
+    reference = now or datetime.now(timezone.utc)
+    updated = copy.deepcopy(plan)
+    updated.updated_at = reference.replace(microsecond=0).isoformat()
+    expiry = parse_iso_datetime(plan.max_valid_until)
+
+    if expiry is not None and reference > expiry:
+        updated.status = "expired"
+        updated.outcome = "expired"
+        updated.outcome_reason = "Expiration automatique: le plan n'a pas atteint TP/SL avant la limite de validite."
+        updated.closed_at = updated.updated_at
+        return updated
+
+    if plan.direction == "BUY":
+        if current_price <= plan.stop_loss:
+            updated.status = "sl_hit"
+            updated.outcome = "loss"
+            updated.outcome_reason = f"SL touche a {plan.stop_loss:.2f}; prix courant {current_price:.2f}."
+            updated.closed_at = updated.updated_at
+        elif current_price >= plan.tp3:
+            updated.status = "tp3_hit"
+            updated.outcome = "win"
+            updated.outcome_reason = f"TP3 touche a {plan.tp3:.2f}; extension complete."
+            updated.closed_at = updated.updated_at
+        elif current_price >= plan.tp2:
+            updated.status = "tp2_hit"
+            updated.outcome = "win"
+            updated.outcome_reason = f"TP2 touche a {plan.tp2:.2f}; trade gagnant."
+            updated.closed_at = updated.updated_at
+        elif current_price >= plan.tp1:
+            updated.status = "tp1_hit"
+            updated.outcome = "partial"
+            updated.outcome_reason = f"TP1 touche a {plan.tp1:.2f}; resultat partiel verrouille."
+        else:
+            updated.status = "active"
+    else:
+        if current_price >= plan.stop_loss:
+            updated.status = "sl_hit"
+            updated.outcome = "loss"
+            updated.outcome_reason = f"SL touche a {plan.stop_loss:.2f}; prix courant {current_price:.2f}."
+            updated.closed_at = updated.updated_at
+        elif current_price <= plan.tp3:
+            updated.status = "tp3_hit"
+            updated.outcome = "win"
+            updated.outcome_reason = f"TP3 touche a {plan.tp3:.2f}; extension complete."
+            updated.closed_at = updated.updated_at
+        elif current_price <= plan.tp2:
+            updated.status = "tp2_hit"
+            updated.outcome = "win"
+            updated.outcome_reason = f"TP2 touche a {plan.tp2:.2f}; trade gagnant."
+            updated.closed_at = updated.updated_at
+        elif current_price <= plan.tp1:
+            updated.status = "tp1_hit"
+            updated.outcome = "partial"
+            updated.outcome_reason = f"TP1 touche a {plan.tp1:.2f}; resultat partiel verrouille."
+        else:
+            updated.status = "active"
+    if (
+        updated.status == plan.status
+        and updated.outcome == plan.outcome
+        and updated.outcome_reason == plan.outcome_reason
+        and updated.closed_at == plan.closed_at
+    ):
+        return plan
+    return updated
+
+
+def update_trade_ledger_outcomes(
+    current_price: float,
+    path: Path = TRADE_LEDGER_PATH,
+    now: datetime | None = None,
+) -> list[TradePlan]:
+    plans = load_trade_ledger(path)
+    updated_plans: list[TradePlan] = []
+    for plan in plans:
+        updated = evaluate_trade_plan(plan, current_price, now=now)
+        if asdict(updated) != asdict(plan):
+            append_trade_plan_snapshot(updated, path)
+        updated_plans.append(updated)
+    return sorted(updated_plans, key=lambda item: item.created_at, reverse=True)
+
+
+def build_trade_quality_gate(
+    gold: SymbolSnapshot,
+    global_recommendation: TradeRecommendation,
+    data_quality: DataQualitySnapshot | None,
+    agent_results: list[AgentResult],
+    market_regime: MarketRegimeAnalysis | None,
+) -> tuple[bool, list[str], list[str], list[str]]:
+    reasons: list[str] = []
+    validating = [
+        agent.name
+        for agent in agent_results
+        if agent.bias == global_recommendation.verdict and agent.confidence >= 50
+    ]
+    contradicting = [
+        agent.name
+        for agent in agent_results
+        if agent.bias in {"BUY", "SELL"} and agent.bias != global_recommendation.verdict
+    ]
+
+    if global_recommendation.score < 60:
+        reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 60.")
+    if data_quality is None:
+        reasons.append("Data quality indisponible.")
+    elif data_quality.score < 70:
+        reasons.append(f"Data quality insuffisante: {data_quality.score}/100 < 70.")
+    elif data_quality.missing_sources or data_quality.stale_sources:
+        reasons.append("Source critique absente ou stale.")
+    if len(validating) < 2:
+        reasons.append("Moins de deux agents valident la direction.")
+    if len(contradicting) >= 3:
+        reasons.append("Trop de contradictions entre agents.")
+    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
+        reasons.append("Regime Hormuz/Oil Shock: trade locking suspendu sans validation manuelle.")
+    rr1 = compute_risk_reward(
+        global_recommendation.verdict,
+        gold.price,
+        global_recommendation.stop_loss,
+        global_recommendation.take_profit_1,
+    )
+    if rr1 < 0.8:
+        reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.80R.")
+    if global_recommendation.stop_loss == global_recommendation.take_profit_1:
+        reasons.append("SL/TP non exploitables.")
+
+    allowed = not reasons
+    if allowed:
+        reasons.append("Quality Gate valide: score, data quality, agents et regime permettent un Trade Snapshot.")
+    return allowed, reasons, validating, contradicting
+
+
+def build_trade_plan_from_signal(
+    gold: SymbolSnapshot,
+    global_recommendation: TradeRecommendation,
+    data_quality: DataQualitySnapshot | None,
+    agent_results: list[AgentResult],
+    market_regime: MarketRegimeAnalysis | None,
+    event_facts: list[EventFact],
+    technical_readings: list[TechnicalReading],
+    now: datetime | None = None,
+) -> tuple[TradePlan | None, list[str]]:
+    reference = now or datetime.now(timezone.utc)
+    allowed, reasons, validating, contradicting = build_trade_quality_gate(
+        gold,
+        global_recommendation,
+        data_quality,
+        agent_results,
+        market_regime,
+    )
+    if not allowed:
+        return None, reasons
+
+    direction = global_recommendation.verdict
+    entry = gold.price
+    zone_padding = max(1.0, abs(entry - global_recommendation.stop_loss) * 0.12)
+    if direction == "BUY":
+        entry_low, entry_high = entry - zone_padding, entry + zone_padding
+        tp3 = entry + abs(global_recommendation.take_profit_2 - entry) * 1.618
+    else:
+        entry_low, entry_high = entry - zone_padding, entry + zone_padding
+        tp3 = entry - abs(global_recommendation.take_profit_2 - entry) * 1.618
+    signal_id = trade_signal_id(direction, market_regime.name if market_regime else "Normal Macro", entry, global_recommendation.score)
+    elliott = next((agent for agent in agent_results if agent.name == "ElliottWaveAgent"), None)
+    technical_snapshot = "; ".join(
+        f"{reading.timeframe}:{reading.verdict}/{reading.score:+.1f}"
+        for reading in technical_readings[:5]
+    )
+    evidence_sources = sorted({
+        source
+        for agent in agent_results
+        for source in [*(evidence.source for evidence in agent.evidence), *(risk.label for risk in agent.risks)]
+        if source
+    })[:12]
+    created_at = reference.replace(microsecond=0).isoformat()
+    plan = TradePlan(
+        trade_id=f"{created_at.replace(':', '').replace('-', '')}-{signal_id}",
+        created_at=created_at,
+        updated_at=created_at,
+        status="active",
+        direction=direction,
+        entry_type="market_reference",
+        reference_price=round(entry, 2),
+        entry_zone_low=round(entry_low, 2),
+        entry_zone_high=round(entry_high, 2),
+        stop_loss=round(global_recommendation.stop_loss, 2),
+        tp1=round(global_recommendation.take_profit_1, 2),
+        tp2=round(global_recommendation.take_profit_2, 2),
+        tp3=round(tp3, 2),
+        risk_reward_tp1=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_1),
+        risk_reward_tp2=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_2),
+        risk_reward_tp3=compute_risk_reward(direction, entry, global_recommendation.stop_loss, tp3),
+        max_valid_until=(reference + timedelta(hours=6)).replace(microsecond=0).isoformat(),
+        source_signal_id=signal_id,
+        global_score_at_creation=global_recommendation.score,
+        data_quality_score=data_quality.score if data_quality else 0,
+        confidence_score=round(sum(agent.confidence for agent in agent_results) / len(agent_results)) if agent_results else 0,
+        market_regime=market_regime.name if market_regime else "Normal Macro",
+        agents_validating=validating,
+        agents_contradicting=contradicting,
+        evidence_sources=evidence_sources,
+        event_facts_snapshot=[fact.title for fact in event_facts[:4]],
+        technical_snapshot=technical_snapshot,
+        macro_snapshot=next((agent.summary for agent in agent_results if agent.name == "MacroAgent"), ""),
+        geopolitical_snapshot=next((agent.summary for agent in agent_results if agent.name == "GeopoliticalOilShockAgent"), ""),
+        elliott_wave_snapshot=elliott.summary if elliott else "Elliott Wave indisponible.",
+        invalidation_rules=[
+            f"Invalidation principale si prix touche SL {global_recommendation.stop_loss:.2f}.",
+            "Invalidation contextuelle si Data Quality passe sous 55/100 ou si un fait Tier 1 contredit le scenario.",
+        ],
+        outcome="open",
+        outcome_reason="Trade Snapshot cree par Quality Gate; SL/TP figes.",
+        closed_at=None,
+    )
+    return plan, reasons
+
+
+def has_recent_similar_trade(
+    plans: list[TradePlan],
+    candidate: TradePlan,
+    cooldown_minutes: int = 90,
+    now: datetime | None = None,
+) -> bool:
+    reference = now or datetime.now(timezone.utc)
+    for plan in plans:
+        if plan.direction != candidate.direction or plan.market_regime != candidate.market_regime:
+            continue
+        if not trade_plan_closed(plan):
+            return True
+        created = parse_iso_datetime(plan.created_at)
+        if created is not None and (reference - created).total_seconds() <= cooldown_minutes * 60:
+            return True
+    return False
+
+
+def build_trade_ledger_summary(
+    gold: SymbolSnapshot,
+    global_recommendation: TradeRecommendation,
+    data_quality: DataQualitySnapshot | None,
+    agent_results: list[AgentResult],
+    market_regime: MarketRegimeAnalysis | None,
+    event_facts: list[EventFact],
+    technical_readings: list[TechnicalReading],
+    path: Path = TRADE_LEDGER_PATH,
+    now: datetime | None = None,
+    allow_create: bool = True,
+) -> TradeLedgerSummary:
+    reference = now or datetime.now(timezone.utc)
+    plans = update_trade_ledger_outcomes(gold.price, path=path, now=reference)
+    candidate, gate_reasons = build_trade_plan_from_signal(
+        gold,
+        global_recommendation,
+        data_quality,
+        agent_results,
+        market_regime,
+        event_facts,
+        technical_readings,
+        now=reference,
+    )
+    if candidate is not None:
+        if has_recent_similar_trade(plans, candidate, now=reference):
+            gate_reasons = ["Cooldown actif: un trade similaire est deja actif ou trop recent."]
+        elif allow_create:
+            append_trade_plan_snapshot(candidate, path)
+            plans = [candidate, *plans]
+            gate_reasons = ["Trade Snapshot cree et verrouille dans le ledger append-only."]
+
+    active_statuses = {"pending", "active", "tp1_hit"}
+    active_trades = [plan for plan in plans if plan.status in active_statuses]
+    wins = sum(1 for plan in plans if plan.outcome == "win")
+    losses = sum(1 for plan in plans if plan.outcome == "loss")
+    partials = sum(1 for plan in plans if plan.outcome == "partial")
+    expired = sum(1 for plan in plans if plan.outcome == "expired")
+    return TradeLedgerSummary(
+        ledger_path=str(path),
+        generated_at=reference.replace(microsecond=0).isoformat(),
+        quality_gate_status="VALIDATED" if candidate is not None and gate_reasons and gate_reasons[0].startswith("Trade Snapshot") else "WAIT",
+        quality_gate_reasons=gate_reasons,
+        active_trades=active_trades[:5],
+        recent_trades=plans[:10],
+        total_trades=len(plans),
+        wins=wins,
+        losses=losses,
+        partials=partials,
+        expired=expired,
+    )
 
 
 def latest_iso(values: list[str | None]) -> str | None:
@@ -5102,6 +5526,7 @@ def build_payload(
     event_facts: list[EventFact] | None = None,
     political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
+    trade_ledger: TradeLedgerSummary | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -5225,6 +5650,8 @@ def build_payload(
         payload["political_statements"] = [asdict(statement) for statement in political_statements]
     if agent_results:
         payload["agent_results"] = [asdict(agent) for agent in agent_results]
+    if trade_ledger:
+        payload["trade_ledger"] = asdict(trade_ledger)
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
             "symbol": "Weekend Gold",
@@ -5435,6 +5862,32 @@ def build_data_quality_from_payload(data: dict[str, Any] | None) -> DataQualityS
     )
 
 
+def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerSummary | None:
+    if not isinstance(data, dict):
+        return None
+    return TradeLedgerSummary(
+        ledger_path=str(data.get("ledger_path", str(TRADE_LEDGER_PATH))),
+        generated_at=str(data.get("generated_at", iso_now())),
+        quality_gate_status=str(data.get("quality_gate_status", "WAIT")),
+        quality_gate_reasons=[str(item) for item in data.get("quality_gate_reasons", [])],
+        active_trades=[
+            parse_trade_plan(item)
+            for item in data.get("active_trades", [])
+            if isinstance(item, dict)
+        ],
+        recent_trades=[
+            parse_trade_plan(item)
+            for item in data.get("recent_trades", [])
+            if isinstance(item, dict)
+        ],
+        total_trades=int(data.get("total_trades", 0) or 0),
+        wins=int(data.get("wins", 0) or 0),
+        losses=int(data.get("losses", 0) or 0),
+        partials=int(data.get("partials", 0) or 0),
+        expired=int(data.get("expired", 0) or 0),
+    )
+
+
 def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
     return EventFact(
         title=str(data.get("title", "")),
@@ -5482,6 +5935,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     etf_flows_payload = payload.get("etf_flows_analysis")
     macro_catalysts_payload = payload.get("macro_catalysts")
     data_quality_payload = payload.get("data_quality")
+    trade_ledger_payload = payload.get("trade_ledger")
     heuristic = payload.get("heuristic_bias", {})
 
     gold_price = float(gold_data.get("price", 0.0) or 0.0)
@@ -5622,6 +6076,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     etf_flows_analysis = build_etf_flows_analysis_from_payload(etf_flows_payload)
     macro_catalysts = build_macro_catalyst_calendar_from_payload(macro_catalysts_payload)
     data_quality = build_data_quality_from_payload(data_quality_payload)
+    trade_ledger = build_trade_ledger_from_payload(trade_ledger_payload)
 
     analysis = AnalysisResult(
         bias=str(heuristic.get("bias", "neutral")),
@@ -5738,6 +6193,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
         agent_results=agent_results,
+        trade_ledger=trade_ledger,
     )
 
 
@@ -5785,6 +6241,7 @@ def render_report(
     event_facts: list[EventFact] | None = None,
     political_statements: list[PoliticalStatement] | None = None,
     agent_results: list[AgentResult] | None = None,
+    trade_ledger: TradeLedgerSummary | None = None,
 ) -> str:
     support = f"{gold.support:.2f}" if gold.support is not None else "n/a"
     resistance = f"{gold.resistance:.2f}" if gold.resistance is not None else "n/a"
@@ -5928,6 +6385,23 @@ def render_report(
             lines.append(
                 f"- {snapshot.name}: {snapshot.status}, Tier {snapshot.tier}, categorie {snapshot.category}, "
                 f"age {snapshot.age_minutes if snapshot.age_minutes is not None else 'n/a'} min, agents {', '.join(snapshot.allowed_agents[:3])}"
+            )
+
+    if trade_ledger:
+        lines.extend(
+            [
+                "",
+                "## Trade Ledger / Signal Locking",
+                f"- Quality Gate: {trade_ledger.quality_gate_status}",
+                f"- Ledger: {trade_ledger.ledger_path}",
+                f"- Total: {trade_ledger.total_trades} | wins {trade_ledger.wins} | losses {trade_ledger.losses} | partials {trade_ledger.partials} | expired {trade_ledger.expired}",
+                "- Raisons gate: " + ("; ".join(trade_ledger.quality_gate_reasons) if trade_ledger.quality_gate_reasons else "n/a"),
+            ]
+        )
+        for plan in trade_ledger.recent_trades[:6]:
+            lines.append(
+                f"- {plan.trade_id}: {plan.direction} entry {plan.reference_price:.2f}, SL {plan.stop_loss:.2f}, "
+                f"TP {plan.tp1:.2f}/{plan.tp2:.2f}/{plan.tp3:.2f}, status {plan.status}, outcome {plan.outcome}; {plan.outcome_reason}"
             )
 
     if global_recommendation:
@@ -6652,6 +7126,78 @@ def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
       <table class="technical-table">
         <thead><tr><th>Source</th><th>Status</th><th>Fraicheur</th><th>Valeur utilisee</th><th>Agents autorises</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    """.strip()
+
+
+def trade_status_class(status: str) -> str:
+    if status in {"tp1_hit", "tp2_hit", "tp3_hit"}:
+        return "bullish"
+    if status in {"sl_hit", "invalidated"}:
+        return "bearish"
+    return "neutral"
+
+
+def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
+    if ledger is None:
+        return '<div class="empty-state">Trade Ledger indisponible. Aucun trade plan verrouille sur ce snapshot.</div>'
+
+    active_rows = []
+    for plan in ledger.active_trades:
+        active_rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(plan.direction)}</strong><br><span class="soft">{html.escape(plan.trade_id)}</span></td>
+              <td>{plan.reference_price:.2f}<br><span class="soft">{plan.entry_zone_low:.2f} / {plan.entry_zone_high:.2f}</span></td>
+              <td>{plan.stop_loss:.2f}</td>
+              <td>{plan.tp1:.2f} / {plan.tp2:.2f} / {plan.tp3:.2f}</td>
+              <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
+              <td>{html.escape(plan.outcome_reason[:120])}</td>
+            </tr>
+            """.strip()
+        )
+
+    recent_rows = []
+    for plan in ledger.recent_trades[:8]:
+        recent_rows.append(
+            f"""
+            <tr>
+              <td>{html.escape(format_timestamp_for_humans(plan.created_at))}</td>
+              <td>{html.escape(plan.direction)}</td>
+              <td>{plan.reference_price:.2f}</td>
+              <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
+              <td>{html.escape(plan.outcome)}</td>
+              <td>{html.escape(plan.market_regime)}</td>
+            </tr>
+            """.strip()
+        )
+
+    gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in ledger.quality_gate_reasons[:6]) or "<li>Quality Gate non evalue.</li>"
+    return f"""
+    <div class="trade-verdict neutral">Trade Tracker · {html.escape(ledger.quality_gate_status)} · {ledger.total_trades} plan(s)</div>
+    <p class="trade-summary">Le signal live peut changer, mais chaque TradePlan conserve entry, SL, TP, sources et raison au moment de creation.</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Wins</strong><span>{ledger.wins}</span></div>
+      <div class="geo-stat"><strong>Losses</strong><span>{ledger.losses}</span></div>
+      <div class="geo-stat"><strong>Partials</strong><span>{ledger.partials}</span></div>
+      <div class="geo-stat"><strong>Expired</strong><span>{ledger.expired}</span></div>
+    </div>
+    <div class="module-block">
+      <div class="section-kicker">Quality Gate</div>
+      <ul class="reason-list">{gate_reasons}</ul>
+      <div class="metric-footnote">Ledger append-only: {html.escape(ledger.ledger_path)}</div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Trade</th><th>Entry / zone</th><th>SL</th><th>TP1 / TP2 / TP3</th><th>Status</th><th>Outcome reason</th></tr></thead>
+        <tbody>{''.join(active_rows) or '<tr><td colspan="6">Aucun trade actif verrouille pour le moment.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Cree</th><th>Direction</th><th>Entry</th><th>Status</th><th>Outcome</th><th>Regime</th></tr></thead>
+        <tbody>{''.join(recent_rows) or '<tr><td colspan="6">Historique vide.</td></tr>'}</tbody>
       </table>
     </div>
     """.strip()
@@ -8010,6 +8556,7 @@ def render_dashboard_clarity(
     market_regime = bundle.market_regime
     event_facts = bundle.event_facts
     political_statements = bundle.political_statements
+    trade_ledger = bundle.trade_ledger
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -9196,6 +9743,7 @@ def render_dashboard_clarity_v2(
     market_regime = bundle.market_regime
     event_facts = bundle.event_facts
     political_statements = bundle.political_statements
+    trade_ledger = bundle.trade_ledger
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -10559,6 +11107,11 @@ def render_dashboard_clarity_v2(
 
             {render_trade_card(fundamental)}
             {render_trade_card(technical)}
+            <article class="panel span-12">
+              <div class="section-kicker">Trade Tracker</div>
+              <h2>Signal locking et suivi des recommandations</h2>
+              {render_trade_tracker_panel(trade_ledger)}
+            </article>
           </section>
         </section>
 
@@ -10865,6 +11418,12 @@ def render_dashboard_clarity_v2(
             </article>
 
             <article class="panel span-12">
+              <div class="section-kicker">Trade Ledger</div>
+              <h2>Historique des TradePlan verrouilles</h2>
+              {render_trade_tracker_panel(trade_ledger)}
+            </article>
+
+            <article class="panel span-12">
               <div class="section-kicker">Avertissement</div>
               <div class="footer-note">
                 Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
@@ -11091,6 +11650,15 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    trade_ledger = build_trade_ledger_summary(
+        gold,
+        global_recommendation,
+        data_quality,
+        agent_results,
+        market_regime,
+        event_facts,
+        technical_readings,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -11115,6 +11683,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
         agent_results=agent_results,
+        trade_ledger=trade_ledger,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -11144,6 +11713,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.event_facts = event_facts
     live_bundle.political_statements = political_statements
     live_bundle.agent_results = agent_results
+    live_bundle.trade_ledger = trade_ledger
     return live_bundle
 
 
@@ -11252,6 +11822,15 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    trade_ledger = build_trade_ledger_summary(
+        gold,
+        global_recommendation,
+        data_quality,
+        agent_results,
+        market_regime,
+        event_facts,
+        technical_readings,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -11276,6 +11855,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
         agent_results=agent_results,
+        trade_ledger=trade_ledger,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -11310,6 +11890,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
         agent_results=agent_results,
+        trade_ledger=trade_ledger,
     )
 
 
@@ -11350,6 +11931,7 @@ def render_artifacts(
         bundle.event_facts,
         bundle.political_statements,
         bundle.agent_results,
+        bundle.trade_ledger,
     )
     json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
     html_dashboard = (
@@ -11431,6 +12013,7 @@ class DashboardLiveCache:
                 bundle.event_facts,
                 bundle.political_statements,
                 bundle.agent_results,
+                bundle.trade_ledger,
             )
             write_text_file(self.save_path, report)
 

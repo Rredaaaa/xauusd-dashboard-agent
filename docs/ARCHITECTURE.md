@@ -1,32 +1,69 @@
 # Architecture
 
-Le projet est actuellement concentre dans `xauusd_agent.py` pour rester simple a lancer sur Windows.
+Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lancer en local. Le fichier contient plusieurs modules logiques, meme s'ils ne sont pas encore separes en packages Python.
 
-## Modules Logiques
+## Flux general
 
-- Collecte marche: prix spot XAU/USD, DXY, 10Y US nominal, 10Y reel FRED DFII10, bougies proxy.
-- Confirmations cross-asset gratuites: DXY, 10Y reel FRED, USD/JPY, silver futures, GDX/GDXJ, AUD/USD, USD/CHF, TIP, S&P 500, GVZ et VIX.
-- Collecte news: Google News RSS et categories macro/geopolitique/flux.
-- Analyse fondamentale: dollar, taux, prix, headlines.
-- Analyse technique: EMA 20/50/100/200, RSI7, MACD 5/34/5, volume et alignement multi-timeframe.
-- Analyse geopolitique: risk-off, banques centrales, flux physiques, ETF, COT, VIX.
-- Mode event: detection gratuite de regime volatil via GVZ, VIX, volume proxy et mouvement court terme.
-- Rendu: rapport Markdown, JSON, dashboard HTML.
-- Serveur live: `http.server.ThreadingHTTPServer`.
+1. Collecte des sources marche, macro, news, flux et politique.
+2. Normalisation dans des dataclasses.
+3. Construction de la Data Quality.
+4. Construction des agents passifs.
+5. Orchestrateur v2.
+6. Trade Quality Gate et Trade Ledger.
+7. Payload JSON, rapport Markdown, dashboard HTML.
+8. Inspector et audit log.
 
-## Fichiers Generes
+## Modules logiques
+
+- Collecte prix: XAU/USD spot, IG Weekend Gold, DXY, taux, WTI/Brent, cross-assets.
+- Collecte macro: FRED, Fed, BEA, CME FedWatch link.
+- Collecte flux: CFTC COT, WGC ETF, BlackRock IAU.
+- Collecte news: RSS, Google News/fallback, White House.
+- Analyse technique: EMA, RSI, MACD, volume, Elliott Wave passif.
+- Analyse fondamentale: dollar, taux, macro, real yield.
+- Analyse geopolitique: risk-off, Hormuz/Oil Shock, politique, oil/dollar liquidity.
+- Agents passifs: Price, Technical, Elliott Wave, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
+- Orchestrateur v2: pondération multi-agents, contre-signaux et Quality Gate.
+- Trade Ledger: signal locking append-only.
+- Inspector: audit sources/agents/trades.
+
+## Dataclasses importantes
+
+- `BriefingBundle`: paquet complet utilise par le rendu.
+- `SourceSnapshot` / `DataQualitySnapshot`: gouvernance sources.
+- `AgentResult`: sortie d'un agent.
+- `OrchestratorDecision`: decision globale multi-agents.
+- `TradePlan` / `TradeLedgerSummary`: trades historises.
+- `TradeRecommendation`: signal live.
+
+## Fichiers generes
 
 Le dossier `reports/` recoit:
 
 - `xauusd_dashboard.html`
 - `xauusd_data.json`
 - `xauusd_report.md`
+- `trade_ledger.jsonl`
+- `audit_log.jsonl`
 
 Ces fichiers sont ignores par Git car ils changent a chaque execution.
 
-## Points D'extension
+## Serveur live
 
-- Brancher une API OHLC spot XAU/USD plus precise.
-- Ajouter une source structuree pour calendrier economique.
-- Ajouter une source structuree pour COT, ETF flows et open interest.
-- Decomposer `xauusd_agent.py` en package Python si le projet grandit.
+Le serveur local utilise `http.server.ThreadingHTTPServer`.
+
+Endpoints:
+
+- `/`: dashboard complet;
+- `/fragment`: fragment HTML rafraichi par le client;
+- `/api/live.json`: payload JSON live.
+
+L'etat de l'onglet actif est conserve cote client via `localStorage` pour eviter que le refresh renvoie l'utilisateur au premier onglet.
+
+## Points d'extension
+
+- Extraire progressivement `xauusd_agent.py` en modules.
+- Ajouter une API OHLC spot XAU/USD professionnelle.
+- Ajouter alertes/notifications de TradePlan exploitable.
+- Remplacer certains feeds news par des flux institutionnels plus fiables.
+- Refaire le design structurel des vues avec composants dedies.

@@ -1,111 +1,91 @@
-# Agent XAUUSD Dashboard
+# Aureum Flux Terminal
 
-Agent local pour suivre `XAU/USD`, construire un dashboard HTML live et produire un rapport d'aide a la lecture du marche.
+Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL` ou `WAIT` avec niveaux de risque.
 
-Le projet est pense pour etre partage et developpe a deux. Les fichiers de code, documentation, tests et lanceurs sont suivis par Git. Les fichiers generes dans `reports/` restent locaux pour eviter les conflits a chaque lancement.
+Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
-## Fonctionnalites
+## Lancer sur Mac
 
-- Prix spot `XAU/USD` depuis Investing.com.
-- Dashboard local live sur `http://127.0.0.1:8787/`.
-- Chandeliers intraday avec ligne de prix live.
-- Analyse fondamentale, technique et geopolitique.
-- Score gratuit de correlations/confluence: 10Y reel FRED, DXY, USD/JPY, silver, GDX/GDXJ, AUD/USD, USD/CHF, TIP, S&P 500, GVZ et VIX.
-- Mode event volatilite/volume pour signaler les regimes dangereux.
-- Scores `/100`, verdict intraday, `SL`, `TP1`, `TP2`.
-- Rapport Markdown et payload JSON.
-- Mode de repli sur le dernier snapshot si une source externe retourne une erreur temporaire.
+Depuis le dossier du projet:
 
-## Demarrage Rapide
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
+```bash
+./Lancer-Agent-XAUUSD.command
 ```
 
-Lancer le dashboard:
+Le dashboard ouvre ou sert:
+
+```text
+http://127.0.0.1:8787/
+```
+
+Lancement manuel Mac:
+
+```bash
+source .venv/bin/activate
+python xauusd_agent.py --serve-dashboard --quiet --host 127.0.0.1 --port 8787 \
+  --save reports/xauusd_report.md \
+  --data-json reports/xauusd_data.json \
+  --dashboard reports/xauusd_dashboard.html
+```
+
+## Lancer sur Windows / RDP
 
 ```powershell
 .\Lancer-Agent-XAUUSD.bat
 ```
 
-Surveillance continue:
-
-```powershell
-.\Surveiller-Agent-XAUUSD-15min.bat
-```
-
-Execution console:
-
-```powershell
-python .\xauusd_agent.py
-```
-
-Generer les artefacts:
+Generation sans serveur:
 
 ```powershell
 python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .\reports\xauusd_data.json --dashboard .\reports\xauusd_dashboard.html
 ```
 
-## Structure
+## Ce que le dashboard affiche
 
-```text
-.
-|-- xauusd_agent.py                 # Agent, dashboard, serveur live et analyses
-|-- Lancer-Agent-XAUUSD.bat         # Lance le dashboard live
-|-- Surveiller-Agent-XAUUSD-15min.bat
-|-- requirements.txt
-|-- .env.example
-|-- tests/
-|   `-- test_xauusd_agent.py
-|-- docs/
-|   |-- ARCHITECTURE.md
-|   |-- COLLABORATION.md
-|   `-- SETUP.md
-`-- reports/
-    |-- README.md
-    `-- .gitkeep
-```
+- `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
+- `Market`: spot, IG Weekend Gold, chandelles, correlations, regime petrole/politique, COT et ETF flows.
+- `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
+- `Technical`: EMA, RSI, MACD, volume, Elliott Wave passif.
+- `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
+- `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
+- `Inspector`: audit des sources, agents, gates, trades et qualite data.
+- `Reports`: exports Markdown/JSON et recapitulatif complet.
 
-## Configuration IA Optionnelle
+## Signal live vs Trade Plan
 
-La synthese IA est optionnelle. Ne publiez jamais `.env`.
+Le signal live peut changer a chaque refresh car le prix, les sources et les agents evoluent.
 
-```env
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_MODEL=your_model_name_here
-```
+Un `TradePlan` est different: quand le Quality Gate valide un trade exploitable, le terminal fige l'entree, le SL, les TP, les sources, les agents et la raison de creation dans `reports/trade_ledger.jsonl`. Ce trade historise n'est pas modifie retroactivement par le signal live.
+
+## Fichiers generes
+
+Les fichiers dans `reports/` restent locaux et sont ignores par Git:
+
+- `xauusd_dashboard.html`
+- `xauusd_data.json`
+- `xauusd_report.md`
+- `trade_ledger.jsonl`
+- `audit_log.jsonl`
+
+## Documentation
+
+- [Installation et lancement](docs/SETUP.md)
+- [Guide utilisateur](docs/USER_GUIDE.md)
+- [Sources et scoring](docs/SOURCES_AND_SCORING.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Plan v2.0](docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md)
 
 ## Tests
 
-```powershell
-python -B -m unittest discover -s tests -v
+```bash
+python3 -m py_compile xauusd_agent.py
+python3 -m unittest discover -s tests -v
 ```
 
-## Collaboration
+## Limites importantes
 
-Avant de modifier:
-
-```powershell
-git pull
-```
-
-Apres modification:
-
-```powershell
-git status
-git add .
-git commit -m "Description courte"
-git push
-```
-
-Voir [docs/COLLABORATION.md](docs/COLLABORATION.md) pour le workflow conseille entre Maroc et France.
-
-## Limites
-
-- Les scores sont heuristiques: ils aident a lire le marche, ils ne garantissent pas un trade gagnant.
-- Les bougies multi-timeframes utilisent un proxy futures COMEX pour obtenir OHLC/volume puis sont alignees sur le spot.
-- Les sources externes peuvent temporairement retourner des erreurs HTTP. Le dashboard garde alors le dernier snapshot disponible.
-- Ce projet ne fournit pas de conseil financier personnalise.
+- Les scores sont des aides a la decision, pas une certitude de marche.
+- Une source peut etre absente, stale ou contradictoire.
+- IG Weekend Gold est un proxy week-end, distinct du spot classique.
+- Les bougies intraday utilisent un proxy futures COMEX aligne sur le spot.
+- Aucun trade ne doit etre pris sans controle humain du contexte, du spread, de l'heure et du risque.

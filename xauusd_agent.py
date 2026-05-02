@@ -3189,10 +3189,15 @@ def build_fundamental_recommendation(
         reasons.insert(0, f"Mode event actif ({event_mode.score}/100): eviter une entree impulsive.")
 
     summary = (
-        "Lecture fondamentale intraday positive: dollar et taux se detendent, "
-        "avec un flux d'actualites qui ne contredit pas la hausse."
+        (
+            f"Fundamentaux intraday positifs or: DXY {dxy.change_pct:+.2f}%, "
+            f"DGS10 {yield_change_bps:+.1f} bps. News flow score {analysis.score:+d}, sans contradiction majeure."
+        )
         if verdict == "BUY"
-        else "Lecture fondamentale intraday defensive: le contexte macro ne soutient pas assez l'or pour un achat agressif."
+        else (
+            f"Fundamentaux intraday defensifs or: DXY {dxy.change_pct:+.2f}%, "
+            f"DGS10 {yield_change_bps:+.1f} bps. Pas d'avantage macro pour un achat sans confirmation technique."
+        )
     )
 
     return TradeRecommendation(
@@ -3258,17 +3263,23 @@ def build_technical_recommendation(
         stop_loss = min(stop_loss, adjusted_support - (atr_for_levels * 0.35))
         tp1 = max(tp1, spot.day_high or tp1)
         tp2 = max(tp2, adjusted_resistance)
-        summary = "Structure technique intraday constructive: les petits timeframes tirent vers le haut et le plan favorise la continuation."
+        summary = (
+            f"Structure technique BUY: spot {spot.price:.2f} au-dessus support {adjusted_support:.2f}, "
+            f"resistance majeure {adjusted_resistance:.2f}. Continuation valable tant que le prix tient au-dessus du support."
+        )
     else:
         stop_loss = max(stop_loss, adjusted_resistance + (atr_for_levels * 0.35))
         tp1 = min(tp1, spot.day_low or tp1)
         tp2 = min(tp2, adjusted_support)
-        summary = "Structure technique intraday fragile: le poids des timeframes superieurs garde un risque vendeur dominant."
+        summary = (
+            f"Structure technique SELL: spot {spot.price:.2f} sous resistance {adjusted_resistance:.2f}, "
+            f"support majeur {adjusted_support:.2f}. Pivot bear si cassure {adjusted_support:.2f}."
+        )
 
     if event_mode is not None and event_mode.active:
         score = min(score, 62)
         reasons.insert(0, f"Mode event actif ({event_mode.score}/100): signal technique a traiter en attente/confirmation.")
-        summary = f"{summary} Attention: regime volatil, ne pas chasser le mouvement."
+        summary = f"{summary} Regime volatil: attendre une confirmation par cassure et clotures avant entree."
 
     return TradeRecommendation(
         mode="Technique",
@@ -3410,42 +3421,39 @@ def build_executive_summary(
 ) -> str:
     if fundamental.verdict == technical.verdict:
         alignment = (
-            f"Le fondamental et la technique pointent tous les deux vers {fundamental.verdict}. "
-            "Le marche envoie donc un message plus propre que d'habitude."
+            f"Fondamental et technique alignes en {fundamental.verdict}: signal directionnel coherent."
         )
     elif fundamental.verdict == "BUY":
         alignment = (
-            "Le fondamental reste favorable a l'or, mais le graphique intraday ne donne pas encore "
-            "un point d'entree assez propre pour suivre ce biais sans prudence."
+            "Fondamental BUY, technique SELL: pas d'entree macro tant que le pivot technique n'est pas casse a la hausse."
         )
     else:
         alignment = (
-            "La technique reste plus fragile que le contexte macro. Cela veut dire que le marche "
-            "peut encore vendre les rebonds meme si le decor de fond n'est pas franchement anti-or."
+            "Fondamental SELL, technique BUY: rebonds vendables tant que macro reste defavorable a l'or."
         )
 
     geo_lines: list[str] = []
     if geopolitical:
         if geopolitical.risk_off_status == "actif":
             geo_lines.append(
-                "Le risque geopolitique reste actif, donc la demande de couverture sur l'or ne disparait pas."
+                "Risk-off geopolitique mesurable: demande de couverture or maintenue tant que VIX reste eleve."
             )
         elif geopolitical.risk_off_status == "en reflux":
             geo_lines.append(
-                "Le stress geopolitique se calme un peu, ce qui retire une partie du soutien refuge."
+                "Stress geopolitique en reflux: soutien refuge en retrait, surveiller VIX et TIP."
             )
 
         if geopolitical.central_bank_bias == "restrictif":
             geo_lines.append(
-                "En meme temps, le marche craint qu'un choc energie ou une inflation plus tenace retarde les baisses de taux."
+                "Banques centrales restrictives: choc energie ou inflation pourrait retarder les baisses de taux."
             )
         elif geopolitical.central_bank_bias == "accommodant":
             geo_lines.append(
-                "Le ton des banques centrales parait moins hostile, ce qui aide l'or via un dollar et des rendements moins agressifs."
+                "Banques centrales accommodantes: dollar et rendements moins agressifs, biais favorable a l'or."
             )
         else:
             geo_lines.append(
-                "Le message des banques centrales reste partage, donc l'or garde du soutien sans obtenir un feu vert total."
+                "Banques centrales mitigees: ni catalyseur haussier net, ni catalyseur baissier net pour l'or."
             )
 
         if geopolitical.large_speculators == "net long":
@@ -3941,11 +3949,17 @@ def build_cross_asset_analysis(
     elif score_int <= 45:
         status = "plutot defavorable"
         verdict = "BUY fragile"
-        summary = "Les correlations ne confirment pas assez le BUY gold: prudence ou attente d'une meilleure confluence."
+        summary = (
+            f"Cross-assets divergents (score {score_int}/100): seuil de validation BUY non atteint. "
+            f"Confirmations attendues: DXY en baisse, GDX/silver en hausse, real yield en baisse."
+        )
     else:
         status = "mitige"
         verdict = "neutre"
-        summary = "Le contexte cross-asset reste partage: mieux vaut exiger un signal technique propre avant d'agir."
+        summary = (
+            f"Cross-assets equilibres (score {score_int}/100): pas d'avantage directionnel. "
+            f"Exiger une cassure technique propre avant d'agir."
+        )
 
     return CrossAssetAnalysis(
         score=score_int,
@@ -4064,7 +4078,10 @@ def build_market_regime_analysis(
         oil_shock_score += 12
         reasons.append(f"WTI/Brent gardent une prime de risque: variation max {oil_change:+.2f}%.")
     elif oil_available:
-        reasons.append(f"WTI/Brent ne confirment pas encore un choc petrole fort ({oil_change:+.2f}%).")
+        reasons.append(
+            f"WTI/Brent ne confirment pas un choc petrole tant que la variation reste sous +1.0% sur 1h "
+            f"(actuel {oil_change:+.2f}%)."
+        )
     else:
         reasons.append("WTI/Brent indisponibles: regime oil shock moins fiable.")
 
@@ -4079,7 +4096,9 @@ def build_market_regime_analysis(
         reasons.append(f"Gold recule ({gold.change_pct:+.2f}%) pendant le stress: flux pas automatiquement refuge.")
     if event_mode is not None and event_mode.active:
         oil_shock_score += 6
-        reasons.append("Mode event actif: prudence renforcee sur les entrees gold.")
+        reasons.append(
+            f"Mode event actif (score {event_mode.score}/100): exposition or reduite tant que la volatilite reste elevee."
+        )
 
     oil_shock_score = round(clamp(oil_shock_score, 0, 100))
     if oil_shock_score >= 58:
@@ -4619,7 +4638,11 @@ def build_passive_agent_results(
             bias="CAUTION" if risk_reasons else "NEUTRAL",
             score=risk_score,
             confidence=72,
-            summary="Controle passif du risque: verifie regime, contradictions, SL/TP et prudence execution.",
+            summary=(
+                f"RiskManager: regime {market_regime.name if market_regime else 'inconnu'}, "
+                f"data quality {data_quality.score if data_quality else 0}/100. "
+                f"Alertes actives: {', '.join(risk_reasons) if risk_reasons else 'aucune majeure'}."
+            ),
             evidence=[
                 AgentEvidence("Decision officielle", f"{global_recommendation.verdict} {global_recommendation.score}/100" if global_recommendation else "indisponible", "Scoring actuel"),
                 AgentEvidence("Alertes risque", "; ".join(risk_reasons) if risk_reasons else "aucune alerte majeure", "Event/regime"),
@@ -4659,7 +4682,7 @@ def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
     if buy_agents and sell_agents:
         contradictions.append(f"BUY vs SELL: {', '.join(buy_agents[:3])} contre {', '.join(sell_agents[:3])}.")
     if caution_agents:
-        contradictions.append(f"Prudence active: {', '.join(caution_agents[:4])}.")
+        contradictions.append(f"Vigilance active: {', '.join(caution_agents[:4])}.")
     weak_confidence = [agent.name for agent in agent_results if agent.confidence < 45]
     if weak_confidence:
         contradictions.append(f"Confiance faible: {', '.join(weak_confidence[:4])}.")
@@ -5228,7 +5251,9 @@ def build_geopolitical_analysis(
         reasons.append("Le VIX/fear gauge penche vers l'aversion au risque.")
     elif vix_tone == "risk-on":
         score -= 5
-        reasons.append("Le VIX/fear gauge ne confirme pas un besoin fort de couverture.")
+        reasons.append(
+            "Le VIX/fear gauge ne confirme pas un besoin fort de couverture tant qu'il reste sous le seuil 20."
+        )
     else:
         reasons.append("Le VIX reste neutre.")
 
@@ -5446,7 +5471,10 @@ def explain_headline_reason(item: NewsItem) -> str:
             return "La guerre pousse les investisseurs a chercher de la liquidite immediate en dollar, pas seulement des refuges comme l'or."
         if text_contains_any(text, ("oil", "barrel", "fuel", "hormuz", "shipping", "ports", "blockade")):
             return "Le marche craint une perturbation durable du petrole, donc plus d'inflation energie et plus de stress global."
-        return "Le conflit brouille les reperes habituels de marche et augmente l'aversion au risque."
+        return (
+            "Tension geopolitique elargie: aversion au risque mesurable via VIX et flight-to-quality TIP. "
+            "Si VIX progresse et TIP est bid, biais refuge or; sinon attendre confirmation oil/DXY."
+        )
 
     if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "hike", "higher for longer")):
         return "Cette headline change la lecture du marche sur le calendrier des taux de la Fed."
@@ -5484,9 +5512,18 @@ def explain_headline_gold_impact(item: NewsItem) -> tuple[str, str]:
         if text_contains_any(text, ("oil", "barrel", "fuel", "inflation")):
             return (
                 "mixte",
-                "Le choc petrole soutient le theme refuge et inflation pour l'or, mais il peut aussi repousser les baisses de taux de la Fed.",
+                (
+                    "Choc petrole: deux effets opposes pour l'or. Effet inflation -> taux reels potentiellement en hausse "
+                    "-> negatif court terme. Effet refuge -> bid possible. Trancher via DFII10 et DXY."
+                ),
             )
-        return ("bullish", "Plus d'incertitude geopolitique soutient en general la demande de couverture sur l'or.")
+        return (
+            "bullish",
+            (
+                "Aversion geopolitique mesurable: si VIX progresse et flight-to-quality TIP confirme, "
+                "demande de couverture or attendue. Sinon biais a confirmer par DXY et oil."
+            ),
+        )
 
     if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "dovish", "pause")) or item.category == "macro_fed":
         if item.score > 0:
@@ -5730,17 +5767,17 @@ def political_impacts(theme: str, item: NewsItem) -> tuple[str, str, str, int]:
                 -1,
             )
         return (
-            "mixte: soutien refuge possible, mais pression possible si oil/USD captent la liquidite.",
-            "haussier si sanctions, menaces ou risque maritime augmentent.",
-            "haussier possible si le marche cherche du cash dollar.",
+            "mixte: refuge or si VIX > seuil, sinon liquidite USD captee par oil/DXY.",
+            "haussier or si WTI > +1.0% sur 1h ou Brent > +1.0% sur 1h.",
+            "haussier USD si DXY > +0.50% intraday sur message risk-off.",
             -1,
         )
     if theme == "Fed / Rates":
         if text_contains_any(text, ("cut", "lower", "pressure", "fire powell", "replace powell")):
             return (
-                "haussier si le marche price des taux plus bas ou une Fed moins restrictive.",
+                "haussier or si le marche price des taux plus bas ou une Fed moins restrictive.",
                 "neutre sauf impact inflation/risque.",
-                "baissier possible si les taux attendus reculent.",
+                "baissier USD si les taux attendus reculent: DXY sous le pivot du jour.",
                 1,
             )
         return (
@@ -5759,8 +5796,8 @@ def political_impacts(theme: str, item: NewsItem) -> tuple[str, str, str, int]:
     if theme == "Tariffs / Trade":
         return (
             "mixte: inflation/refuge bullish, dollar/taux potentiellement bearish.",
-            "legerement haussier si tarifs touchent energie/logistique.",
-            "haussier possible si risque commercial soutient le dollar.",
+            "haussier or si tarifs touchent energie/logistique avec WTI > +1.0% sur 1h.",
+            "haussier USD si risque commercial pousse DXY au-dessus du pivot du jour.",
             0,
         )
     return ("impact gold a confirmer.", "impact oil a confirmer.", "impact USD a confirmer.", 0)
@@ -5982,14 +6019,29 @@ def render_news_lines(items: list[NewsItem], max_items: int) -> list[str]:
 
 def heuristic_decision_sentence(analysis: AnalysisResult) -> str:
     if analysis.bias == "bullish":
-        return "Biais court terme: haussier, mais a confirmer seulement si le dollar reste mou et les taux poursuivent leur detente."
+        return (
+            "Biais court terme: BUY conditionnel. Declencheur: DXY < seuil intraday et baisse continue des taux US. "
+            "Invalidation: rebond DXY ou rendement 10Y au-dessus du pivot du jour."
+        )
     if analysis.bias == "slightly bullish":
-        return "Biais court terme: legerement haussier, avec besoin d'une confirmation par les news macro et le comportement du DXY."
+        return (
+            "Biais court terme: WATCH_BUY. Declencheur: cassure de la resistance intraday avec DXY confirme en baisse. "
+            "Invalidation: retour sous le pivot M15."
+        )
     if analysis.bias == "bearish":
-        return "Biais court terme: baissier, surtout si les rendements US et le dollar reprennent de la force."
+        return (
+            "Biais court terme: SELL conditionnel. Declencheur: poursuite hausse rendements US 10Y et DXY au-dessus du pivot. "
+            "Invalidation: detente brusque taux/dollar."
+        )
     if analysis.bias == "slightly bearish":
-        return "Biais court terme: legerement baissier, sans signal de conviction tres eleve."
-    return "Biais court terme: neutre, le contexte ne donne pas encore un avantage propre dans un sens."
+        return (
+            "Biais court terme: WATCH_SELL. Declencheur: cassure du support intraday avec DXY confirme en hausse. "
+            "Invalidation: retour au-dessus du pivot M15."
+        )
+    return (
+        "Biais court terme: NO_TRADE directionnel. Aucun avantage dollar, taux ou structure intraday. "
+        "Attendre un seuil franchi sur DXY ou un trigger news."
+    )
 
 
 def call_openai_analysis(payload: dict[str, Any]) -> str | None:
@@ -7231,9 +7283,9 @@ def render_report(
 def format_bias_label(bias: str) -> str:
     labels = {
         "bullish": "Haussier",
-        "slightly bullish": "Legerement haussier",
+        "slightly bullish": "Haussier modeste",
         "bearish": "Baissier",
-        "slightly bearish": "Legerement baissier",
+        "slightly bearish": "Baissier modeste",
         "neutral": "Neutre",
     }
     return labels.get(bias, bias.title())
@@ -8226,9 +8278,9 @@ def render_event_facts_panel(event_facts: list[EventFact]) -> str:
               </div>
               <div class="section-kicker">Fait detecte · {html.escape(fact.confirmation_level)} · confiance {fact.confidence}/100</div>
               <h3>{html.escape(fact.title)}</h3>
-              <p><strong>Acteurs:</strong> {html.escape(", ".join(fact.actors))}</p>
-              <p><strong>Lieux:</strong> {html.escape(", ".join(fact.locations))}</p>
-              <p><strong>Themes:</strong> {html.escape(", ".join(fact.themes))}</p>
+              {f'<p><strong>Acteurs:</strong> {html.escape(", ".join(fact.actors))}</p>' if fact.actors else ''}
+              {f'<p><strong>Lieux:</strong> {html.escape(", ".join(fact.locations))}</p>' if fact.locations else ''}
+              {f'<p><strong>Themes:</strong> {html.escape(", ".join(fact.themes))}</p>' if fact.themes else ''}
               <p><strong>Chaine marche:</strong> {html.escape(fact.market_chain)}</p>
               <p><strong>Impact gold:</strong> {html.escape(fact.gold_impact)}</p>
               {source_link}
@@ -8445,16 +8497,18 @@ def build_what_happens_now_lines(
     if geopolitical is not None:
         if geopolitical.risk_off_status == "actif":
             geo_sentence = (
-                "Le risque geopolitique reste actif. Cela soutient la demande de couverture sur l'or, "
-                "mais cela peut aussi envoyer une partie des capitaux vers le dollar pour chercher de la liquidite."
+                "Risk-off geopolitique en cours. Soutien refuge or possible, mais une partie des capitaux peut filer "
+                "vers le dollar pour chercher de la liquidite. Trancher via DXY et VIX."
             )
         elif geopolitical.risk_off_status == "en reflux":
             geo_sentence = (
-                "Le stress geopolitique se calme un peu. L'or perd alors une partie de son soutien refuge."
+                "Stress geopolitique en reflux. Soutien refuge or qui se reduit, surveiller un retour de la demande "
+                "de couverture si VIX se retend."
             )
         else:
             geo_sentence = (
-                "Le fond geopolitique reste brouille: il y a du stress, mais pas un signal unique assez fort pour imposer seul la direction."
+                "Fond geopolitique mixte: stress mesurable mais aucun signal unique dominant. Direction or "
+                "depend de la prochaine confirmation oil/DXY/VIX."
             )
         lines.append(("Geopolitique", geo_sentence))
 
@@ -11630,7 +11684,7 @@ def render_dashboard_clarity_v2(
           <section class="layout-decision">
             <article class="summary-box span-7"><div class="section-kicker">Synthese prioritaire</div><h2>Ce qui compte maintenant</h2><p class="lead">{html.escape(executive_summary)}</p>{render_what_happens_now(story_lines)}</article>
             <article class="summary-box span-5">
-              <div class="section-kicker">Decision & prudence</div><h2>Lecture des scores</h2>
+              <div class="section-kicker">Decision & validation</div><h2>Lecture des scores</h2>
               <div class="decision-grid">
                 <div class="decision-item"><strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong><span>{html.escape(global_recommendation.summary)}</span></div>
                 <div class="decision-item"><strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong><span>{html.escape(fundamental.summary)}</span></div>
@@ -11670,7 +11724,7 @@ def render_dashboard_clarity_v2(
           <div class="view-header"><div><div class="section-kicker">Geopolitics & Flows</div><h2>Faits concrets, politique et flux</h2><p>La vue separe les faits, les declarations politiques, le regime oil/dollar et les flows.</p></div></div>
           <section class="layout-geopolitics">
             <article class="panel span-8"><div class="section-kicker">Geopolitics & Flows</div><h2>Risque externe qui soutient ou freine l'or</h2>{render_geopolitical_panel(geopolitical_analysis)}</article>
-            <article class="panel span-4"><div class="section-kicker">Regime de volatilite</div><h2>Mode event et prudence SL</h2>{render_event_mode_panel(event_mode)}</article>
+            <article class="panel span-4"><div class="section-kicker">Regime de volatilite</div><h2>Mode event et risque execution</h2>{render_event_mode_panel(event_mode)}</article>
             <article class="panel span-12"><div class="section-kicker">Regime politique / petrole</div><h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
             <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>Demande papier institutionnelle</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
             <article class="panel span-6"><div class="section-kicker">Catalyseurs du jour</div><h2>Messages qui expliquent le mouvement</h2><p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p><div class="digest-grid">{render_information_digest(digest_items)}</div></article>

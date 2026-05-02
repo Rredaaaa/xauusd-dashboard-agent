@@ -2,6 +2,8 @@
 
 Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL` ou `WAIT` avec niveaux de risque.
 
+A partir de la v3.0, deux statuts intermediaires `WATCH_BUY` et `WATCH_SELL` seront ajoutes pour signaler les setups en surveillance sans forcer un trade. Tant que la v3.0 n'est pas livree, seuls `BUY`, `SELL` et `WAIT` sont affiches.
+
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
 Etat roadmap:
@@ -49,7 +51,7 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 - `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
 - `Market`: spot, IG Weekend Gold, chandelles, correlations, regime petrole/politique, COT et ETF flows.
 - `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
-- `Technical`: EMA, RSI, MACD, volume, Elliott Wave passif.
+- `Technical`: EMA, RSI, MACD, volume, Elliott Wave passif (experimental, mis en quarantaine du scoring a partir de la v3.0 tant que le Chart Store OHLC et l'Elliott Engine v3 ne sont pas livres).
 - `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
 - `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
 - `Inspector`: audit des sources, agents, gates, trades et qualite data.

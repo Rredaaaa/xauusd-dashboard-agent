@@ -2,6 +2,13 @@
 
 Ce projet est partage entre plusieurs personnes. L'objectif est de garder le repo propre et facile a reprendre.
 
+Avant toute modification:
+- v2.0 est stabilisee apres la Phase 18;
+- la suite officielle est la v3.0 documentee dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`;
+- aucune phase ne demarre sans validation explicite de l'utilisateur;
+- avant chaque phase: verifier `git status` et la synchronisation avec `origin/main`;
+- apres chaque phase: tests adaptes, commit et push.
+
 ## Regle Importante
 
 Ne jamais publier:

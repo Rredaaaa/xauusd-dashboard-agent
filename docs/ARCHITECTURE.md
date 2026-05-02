@@ -30,7 +30,9 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
 - la v3.0 doit commencer par l'audit editorial et la couche d'explication avant d'ajouter de nouveaux moteurs;
-- `ElliottWaveAgent` est actuellement passif et experimental; il doit etre sorti du scoring ou refondu avec un vrai Chart Store OHLC multi-timeframe.
+- `ElliottWaveAgent` est actuellement passif et experimental; il doit etre sorti du scoring ou refondu avec un vrai Chart Store OHLC multi-timeframe;
+- la decision v3 ajoutera les statuts `WATCH_BUY` et `WATCH_SELL` aux cotes de `BUY`, `SELL` et `WAIT` pour exposer les setups en surveillance sans forcer un trade;
+- la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
 ## Dataclasses importantes
 

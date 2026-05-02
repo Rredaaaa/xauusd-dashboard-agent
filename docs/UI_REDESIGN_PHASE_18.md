@@ -1,5 +1,7 @@
 # Phase 18 - Redesign structurel UI
 
+Statut: phase livree dans la v2.0. Ce document est conserve comme reference de specification et garde-fou historique. La suite officielle du projet est documentee dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
+
 Ce document sert de garde-fou avant de modifier le dashboard. La Phase 18 ne doit pas changer l'analyse, les agents, les sources, le Trade Ledger ou l'Orchestrateur.
 
 ## Probleme a corriger

@@ -1716,6 +1716,182 @@ Critere de fin:
 - un utilisateur peut lancer et comprendre le dashboard;
 - un utilisateur comprend qu'un trade historise n'est pas modifie retroactivement par le prix live.
 
+### Phase 18 - Redesign structurel du terminal
+
+Objectif:
+- corriger le probleme de design a la racine;
+- transformer le dashboard en vraie interface terminal, pas seulement en ancien monopage habille;
+- rendre chaque vue lisible, compacte, auditable et exploitable.
+
+Diagnostic:
+- la Phase 15 a ajoute une couche visuelle, mais elle a recycle trop de blocs anciens;
+- certains composants sont affiches dans des colonnes trop etroites;
+- des textes deviennent verticaux ou compresses;
+- des zones vides apparaissent dans plusieurs onglets;
+- il existe une navigation redondante: side rail, top nav et tabs;
+- le rendu reste trop proche d'un long document scrolle au lieu d'un terminal structure.
+
+Regle absolue:
+- ne pas modifier le moteur d'analyse pendant cette phase;
+- ne pas modifier scoring, agents, sources, Trade Ledger, Orchestrateur, Inspector ou calculs;
+- limiter la phase au rendu HTML/CSS, a l'organisation visuelle et aux composants d'interface.
+
+#### Phase 18A - Audit visuel et specification UI
+
+Objectif:
+- documenter les problemes exacts avant codage.
+
+Actions:
+1. Capturer les problemes par onglet.
+2. Lister les composants a refaire.
+3. Definir les composants communs:
+   - `terminal_shell`;
+   - `top_status_bar`;
+   - `side_nav`;
+   - `decision_card`;
+   - `metric_strip`;
+   - `compact_panel`;
+   - `wide_table_panel`;
+   - `risk_banner`;
+   - `source_health_table`;
+   - `agent_output_table`;
+   - `trade_tracker_table`.
+4. Definir ce qui reste dans chaque onglet.
+5. Valider avec l'utilisateur avant implementation.
+
+Livrable:
+- specification claire du redesign.
+
+Critere de fin:
+- l'utilisateur valide le plan visuel avant code.
+
+#### Phase 18B - Shell global et navigation
+
+Objectif:
+- construire une base UI propre.
+
+Actions:
+1. Garder une seule navigation principale.
+2. Conserver le side rail comme navigation dominante desktop.
+3. Garder la topbar pour statut, prix, refresh et alertes.
+4. Supprimer ou neutraliser la navigation tabs redondante si elle nuit a la lisibilite.
+5. Stabiliser les largeurs, grilles, espacements et overflow.
+6. Conserver l'etat d'onglet actif au refresh live.
+
+Critere de fin:
+- navigation claire;
+- pas de double/triple navigation confuse;
+- refresh live ne casse pas l'onglet actif.
+
+#### Phase 18C - Dashboard et Decision
+
+Objectif:
+- refaire les deux vues les plus critiques.
+
+Dashboard doit afficher:
+- prix live;
+- decision globale;
+- SL/TP live;
+- regime;
+- Quality Gate;
+- Trade Tracker resume;
+- alertes sources/regime.
+
+Decision doit afficher:
+- Orchestrateur v2;
+- top raisons;
+- contre-signaux;
+- contradictions;
+- Decision Gate;
+- Trade Gate;
+- separation claire entre signal live et TradePlan historise.
+
+Critere de fin:
+- un trader comprend en moins de 10 secondes quoi faire ou pourquoi attendre.
+
+#### Phase 18D - Market, Technical et Macro
+
+Objectif:
+- rendre lisibles les vues analytiques.
+
+Market doit afficher:
+- spot et IG Weekend Gold;
+- chandelles et niveaux;
+- correlations;
+- WTI/Brent et regime oil/dollar;
+- COT;
+- ETF flows.
+
+Technical doit afficher:
+- matrice multi-timeframe;
+- Elliott Wave;
+- scenarios;
+- timing et invalidation.
+
+Macro doit afficher:
+- DXY;
+- FRED officiel;
+- taux reels;
+- calendrier Fed/BEA;
+- MacroAgent.
+
+Critere de fin:
+- aucune carte compressee;
+- tables lisibles;
+- pas de grands vides inutiles.
+
+#### Phase 18E - Geopolitics, Inspector et Reports
+
+Objectif:
+- rendre les vues d'audit et de contexte plus propres.
+
+Geopolitics doit afficher:
+- Event Facts;
+- Trump / White House;
+- Hormuz/Oil Shock;
+- oil/dollar liquidity;
+- headlines expliquees.
+
+Inspector doit afficher:
+- sources actives;
+- sources stale/missing/weak;
+- agents actifs;
+- sorties recentes;
+- trades;
+- outcomes;
+- audit log.
+
+Reports doit rester simple:
+- liens/chemins exports;
+- resume des fichiers generes;
+- avertissement.
+
+Critere de fin:
+- l'audit est clair et lisible sans fouiller dans le JSON.
+
+#### Phase 18F - Responsive, verification et polish
+
+Objectif:
+- valider que le redesign fonctionne en conditions reelles.
+
+Actions:
+1. Verifier desktop.
+2. Verifier mobile/tablette.
+3. Verifier screenshots.
+4. Verifier pas de texte vertical.
+5. Verifier pas de debordement horizontal incoherent.
+6. Verifier les onglets apres refresh live.
+7. Verifier `/api/live.json`.
+8. Lancer les tests.
+9. Commit et push GitHub.
+
+Critere de fin:
+- dashboard lisible;
+- onglets fonctionnels;
+- pas d'erreur console critique;
+- tests OK;
+- GitHub synchronise.
+
 ## 15. Ordre recommande de livraison
 
 Ordre prioritaire:
@@ -1738,12 +1914,13 @@ Ordre prioritaire:
 16. Finaliser Phase 15 - Design Aureum Flux Terminal 2.0.
 17. Faire Phase 16 - Monitoring / Audit / Inspector.
 18. Faire Phase 17 - Documentation utilisateur.
+19. Faire Phase 18 - Redesign structurel du terminal, en commencant par Phase 18A.
 
 Point de reprise officiel:
 - Phase 0: faite;
 - Phase 1: faite;
-- Phases 2 a 7: finalisees et synchronisees;
-- prochaine phase a lancer uniquement apres validation utilisateur: Phase 8.
+- Phases 2 a 17: finalisees et synchronisees;
+- prochaine phase a lancer uniquement apres validation utilisateur: Phase 18A.
 
 ## 16. Regles de prudence
 
@@ -1791,6 +1968,7 @@ La v2.0 est terminee quand:
 - les SL/TP des trades historises ne changent pas retroactivement;
 - le terminal sait expliquer pourquoi une recommandation precedente a gagne, perdu, expire ou ete invalidee;
 - un inspector permet d'auditer sources, agents et trades;
+- le design structurel est coherent, sans texte vertical, sans cartes compressees et sans grands vides inutiles;
 - les tests passent;
 - les sources sont documentees.
 
@@ -1798,6 +1976,7 @@ La v2.0 est terminee quand:
 
 Avant implementation, l'utilisateur doit valider:
 
+- specification Phase 18A avant tout redesign;
 - noms exacts des onglets;
 - priorite des sources;
 - poids du scoring;
@@ -1824,19 +2003,20 @@ Commencer par les fondations les plus utiles:
 6. Phase 12 - gouvernance des flux inspiree Fincept;
 7. Phase 13 - Trade Ledger / Signal Locking;
 8. Phase 14 - orchestrateur et scoring global final.
+9. Phase 18 - redesign structurel UI en sous-phases courtes.
 
-Decision a partir de la Phase 8:
-- continuer dans l'ordre officiel sans relancer les phases finalisees;
-- enrichir les sources et les agents progressivement;
-- introduire la gouvernance des flux avant le Trade Ledger;
-- introduire le Trade Ledger avant l'orchestrateur final;
-- ne pas activer l'orchestrateur comme moteur principal avant validation utilisateur.
+Decision apres Phase 17:
+- ne plus ajouter de nouvelle logique d'analyse avant d'avoir corrige le design structurel;
+- commencer par Phase 18A pour figer la specification UI;
+- livrer le redesign par sous-phases afin de limiter les risques;
+- garder le moteur d'analyse intact pendant toute la Phase 18.
 
 Ces elements corrigent les plus gros problemes restants:
-- politique et declarations Trump encore trop peu structurees;
-- sources nombreuses mais pas encore gouvernees par qualite/fraicheur;
-- recommandations live qui peuvent changer avec le prix;
-- absence d'historique win/loss/expired/invalidated;
-- besoin d'un audit clair des sources, agents et trades.
+- design encore trop proche de l'ancien monopage;
+- composants compresses dans de mauvaises colonnes;
+- navigation redondante;
+- textes verticaux ou mal repartis;
+- grands vides inutiles;
+- besoin d'une hierarchie visuelle plus professionnelle.
 
-Une fois ces bases solides, le terminal peut passer a l'orchestrateur final et a la decision BUY/SELL/WAIT plus robuste.
+Une fois ces bases solides, le terminal pourra reprendre l'enrichissement fonctionnel sans accumuler de dette visuelle.

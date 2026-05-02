@@ -10770,7 +10770,7 @@ def render_dashboard_clarity_v2(
     technical_matrix = (
         render_technical_table(technical_readings)
         if technical_readings
-        else '<div class="footer-note">Lecture technique indisponible.</div>'
+        else '<div class="empty-state">Lecture technique indisponible.</div>'
     )
     regime_name = market_regime.name if market_regime is not None else "Normal Macro"
     regime_status = market_regime.status if market_regime is not None else "NORMAL"
@@ -10783,6 +10783,25 @@ def render_dashboard_clarity_v2(
     )
     regime_summary = market_regime.summary if market_regime is not None else "Pas de regime special confirme."
     banner_class = recommendation_css_class(global_recommendation.verdict)
+    active_trades = len(trade_ledger.active_trades) if trade_ledger else 0
+    data_quality_score = data_quality.score if data_quality else 0
+    data_quality_status = data_quality.status if data_quality else "N/A"
+
+    def nav_links(css_class: str) -> str:
+        items = [
+            ("dashboard", "Dashboard"),
+            ("market", "Market"),
+            ("decision", "Decision"),
+            ("technical", "Technical"),
+            ("macro", "Macro"),
+            ("geopolitics", "Geopolitics & Flows"),
+            ("inspector", "Inspector"),
+            ("reports", "Reports"),
+        ]
+        return "".join(
+            f'<a class="{css_class}{" active" if key == "dashboard" else ""}" href="#{key}" data-tab-target="{key}" aria-selected="{"true" if key == "dashboard" else "false"}">{html.escape(label)}</a>'
+            for key, label in items
+        )
 
     meta_refresh = "" if live_client else '  <meta http-equiv="refresh" content="60">\n'
     refresh_enabled = "true" if live_client else "false"
@@ -10868,751 +10887,392 @@ def render_dashboard_clarity_v2(
   <style>
     :root {{
       --bg: #020617;
-      --bg-2: #060e20;
-      --panel: rgba(15, 23, 42, 0.76);
-      --panel-alt: rgba(19, 27, 46, 0.9);
-      --panel-bright: #222a3d;
-      --text: #dae2fd;
+      --rail: #050a17;
+      --panel: #0b1222;
+      --panel-2: #111827;
+      --panel-3: #151e31;
+      --text: #e5e7f5;
       --soft: #9aa4b8;
-      --muted: #2d3449;
-      --line: #1e293b;
+      --muted: #313a50;
+      --line: #263247;
       --bull: #4edea3;
       --bear: #ffb4ab;
       --amber: #d4af37;
       --gold: #f2ca50;
       --blue: #8ab4ff;
     }}
-    * {{
-      box-sizing: border-box;
-    }}
+    * {{ box-sizing: border-box; }}
     html, body {{
       margin: 0;
       min-height: 100vh;
       color: var(--text);
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
-      scroll-behavior: smooth;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       overflow-x: hidden;
+      scroll-behavior: smooth;
     }}
     body {{
-      background:
-        radial-gradient(circle at 18% 0%, rgba(212, 175, 55, 0.11), transparent 27%),
-        radial-gradient(circle at 96% 12%, rgba(78, 222, 163, 0.08), transparent 22%),
-        linear-gradient(180deg, #020617 0%, #071020 45%, #020617 100%);
+      background: linear-gradient(180deg, #020617 0%, #071020 58%, #020617 100%);
     }}
-    a {{
-      color: var(--blue);
-      text-decoration: none;
-    }}
-    a:hover {{
-      text-decoration: underline;
-    }}
-    h1, h2, h3, p {{
-      margin: 0;
-    }}
-    .page {{
-      width: 100%;
-      min-height: 100vh;
-      margin: 0;
-    }}
+    a {{ color: var(--blue); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    h1, h2, h3, p {{ margin: 0; }}
+    .page {{ min-height: 100vh; width: 100%; }}
     .terminal-shell {{
       display: grid;
-      grid-template-columns: 260px minmax(0, 1fr);
+      grid-template-columns: 270px minmax(0, 1fr);
       min-height: 100vh;
+      min-width: 0;
+      max-width: 100%;
     }}
     .side-rail {{
       position: sticky;
       top: 0;
       height: 100vh;
-      padding: 22px 16px;
+      padding: 24px 18px;
+      background: var(--rail);
       border-right: 1px solid var(--line);
-      background: rgba(2, 6, 23, 0.9);
-      backdrop-filter: blur(18px);
     }}
     .brand {{
       color: var(--amber);
-      font-size: 24px;
+      font-family: "Space Grotesk", monospace;
+      font-size: 26px;
       font-weight: 900;
-      line-height: 1;
-      letter-spacing: 0;
+      line-height: 0.95;
       text-transform: uppercase;
-      text-shadow: 0 0 16px rgba(212, 175, 55, 0.35);
+      text-shadow: 0 0 16px rgba(212, 175, 55, 0.24);
     }}
     .rail-card {{
       margin-top: 28px;
-      padding: 14px;
-      border: 1px solid rgba(153, 144, 124, 0.34);
+      padding: 15px;
+      border: 1px solid rgba(212, 175, 55, 0.22);
       border-radius: 8px;
-      background: rgba(19, 27, 46, 0.72);
+      background: rgba(17, 24, 39, 0.72);
     }}
     .rail-card strong {{
       display: block;
       color: var(--text);
+      font-family: "Space Grotesk", monospace;
       font-size: 13px;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }}
-    .rail-card span {{
-      display: block;
-      margin-top: 6px;
-      color: var(--soft);
-      font-size: 13px;
-    }}
+    .rail-card span {{ display: block; margin-top: 6px; color: var(--soft); font-size: 13px; }}
     .rail-status {{
       margin-top: 12px;
-      padding: 9px 10px;
-      border: 1px solid rgba(78, 222, 163, 0.32);
-      border-radius: 4px;
+      padding: 8px 10px;
+      border: 1px solid rgba(78, 222, 163, 0.34);
+      border-radius: 5px;
       color: var(--bull);
       background: rgba(78, 222, 163, 0.08);
       font-family: "Space Grotesk", monospace;
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
+      font-weight: 800;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }}
-    .rail-nav {{
-      display: grid;
-      gap: 6px;
-      margin-top: 28px;
-    }}
+    .rail-nav {{ display: grid; gap: 6px; margin-top: 28px; }}
     .rail-link {{
       display: block;
-      padding: 13px 14px;
+      padding: 12px 12px 12px 14px;
       border-left: 3px solid transparent;
-      border-radius: 0 5px 5px 0;
+      border-radius: 0 6px 6px 0;
       color: var(--soft);
       font-family: "Space Grotesk", monospace;
       font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
+      font-weight: 800;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       text-decoration: none;
       cursor: pointer;
     }}
-    .rail-link:hover {{
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
-      text-decoration: none;
-    }}
-    .rail-link.active {{
-      color: var(--amber);
-      border-left-color: var(--amber);
-      background: rgba(212, 175, 55, 0.08);
-    }}
-    .view-tabs {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      margin: 0 0 14px;
-      padding: 8px;
-      border: 1px solid rgba(45, 52, 73, 0.78);
-      border-radius: 8px;
-      background: rgba(6, 14, 32, 0.68);
-    }}
-    .view-tab {{
-      display: inline-flex;
-      align-items: center;
-      min-height: 34px;
-      padding: 8px 10px;
-      border: 1px solid transparent;
-      border-radius: 5px;
-      color: var(--soft);
-      font-family: "Space Grotesk", monospace;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      text-decoration: none;
-    }}
-    .view-tab:hover {{
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
-      text-decoration: none;
-    }}
-    .view-tab.active {{
-      color: var(--amber);
-      border-color: rgba(212, 175, 55, 0.34);
-      background: rgba(212, 175, 55, 0.1);
-    }}
-    .tab-view {{
-      display: none;
-    }}
-    .tab-view.active {{
-      display: block;
-    }}
-    .global-live-strip {{
-      display: grid;
-      grid-template-columns: minmax(210px, 1.05fr) repeat(4, minmax(130px, 0.62fr));
-      gap: 8px;
-      margin-bottom: 14px;
-      padding: 10px;
-      border: 1px solid rgba(212, 175, 55, 0.28);
-      border-radius: 8px;
-      background:
-        linear-gradient(135deg, rgba(212, 175, 55, 0.1), transparent 42%),
-        rgba(15, 23, 42, 0.82);
-    }}
-    .global-live-strip.bullish {{
-      border-color: rgba(78, 222, 163, 0.26);
-    }}
-    .global-live-strip.bearish {{
-      border-color: rgba(255, 180, 171, 0.3);
-    }}
-    .state-board {{
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 8px;
-      margin: 0 0 14px;
-    }}
-    .state-card {{
-      min-width: 0;
-      padding: 10px 11px;
-      border: 1px solid rgba(45, 52, 73, 0.86);
-      border-left: 4px solid var(--line);
-      border-radius: 8px;
-      background: rgba(15, 23, 42, 0.78);
-    }}
-    .state-card.bullish {{ border-left-color: var(--bull); }}
-    .state-card.bearish {{ border-left-color: var(--bear); }}
-    .state-card.caution {{ border-left-color: var(--amber); }}
-    .state-card.neutral {{ border-left-color: var(--blue); }}
-    .state-card small {{
-      display: block;
-      color: var(--soft);
-      font-family: "Space Grotesk", monospace;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-    }}
-    .state-card strong {{
-      display: block;
-      margin-top: 5px;
-      color: var(--text);
-      font-family: "Space Grotesk", monospace;
-      font-size: 16px;
-      line-height: 1.15;
-      overflow-wrap: anywhere;
-    }}
-    .state-card span {{
-      display: block;
-      margin-top: 4px;
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }}
-    .live-cell {{
-      min-width: 0;
-      padding: 9px 10px;
-      border: 1px solid rgba(45, 52, 73, 0.7);
-      border-radius: 6px;
-      background: rgba(6, 14, 32, 0.5);
-    }}
-    .live-cell small {{
-      display: block;
-      color: var(--soft);
-      font-family: "Space Grotesk", monospace;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-    }}
-    .live-cell strong {{
-      display: block;
-      margin-top: 4px;
-      color: var(--text);
-      font-family: "Space Grotesk", monospace;
-      font-size: 18px;
-      line-height: 1.15;
-    }}
-    .live-cell span {{
-      display: block;
-      margin-top: 3px;
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }}
-    .anchor-target {{
-      scroll-margin-top: 72px;
-    }}
+    .rail-link:hover {{ color: var(--text); background: rgba(255, 255, 255, 0.04); text-decoration: none; }}
+    .rail-link.active {{ color: var(--amber); border-left-color: var(--amber); background: rgba(212, 175, 55, 0.1); }}
     .workspace {{
       min-width: 0;
-      max-width: 100%;
+      max-width: 1680px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 18px 26px 30px;
       overflow-x: hidden;
-      padding: 22px 24px 28px;
     }}
     .topbar {{
+      position: sticky;
+      top: 0;
+      z-index: 4;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 16px;
       min-height: 58px;
-      margin: -22px -24px 22px;
-      padding: 0 24px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(2, 6, 23, 0.72);
-      backdrop-filter: blur(18px);
-    }}
-    .topbar-left {{
-      display: flex;
-      align-items: center;
       min-width: 0;
-      gap: 18px;
+      margin: -18px -26px 22px;
+      padding: 0 26px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(2, 6, 23, 0.88);
+      backdrop-filter: blur(16px);
     }}
     .topbar-brand {{
-      flex: 0 0 auto;
       color: var(--amber);
       font-family: "Space Grotesk", monospace;
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: 0;
+      font-size: 17px;
+      font-weight: 900;
       white-space: nowrap;
-      text-shadow: 0 0 16px rgba(212, 175, 55, 0.32);
     }}
-    .top-nav {{
+    .top-status {{
       display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       align-items: center;
-      gap: 4px;
+      gap: 8px;
       min-width: 0;
+      max-width: 100%;
       overflow-x: auto;
       scrollbar-width: none;
     }}
-    .top-nav::-webkit-scrollbar {{
-      display: none;
-    }}
-    .top-nav a {{
-      flex: 0 0 auto;
-      min-height: 34px;
-      padding: 10px 9px 8px;
-      border-bottom: 2px solid transparent;
+    .top-status::-webkit-scrollbar {{ display: none; }}
+    .status-pill {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
       color: var(--soft);
+      background: rgba(17, 24, 39, 0.72);
       font-family: "Space Grotesk", monospace;
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 800;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      text-decoration: none;
+      white-space: nowrap;
     }}
-    .top-nav a:hover {{
-      color: var(--text);
-      text-decoration: none;
-    }}
-    .top-nav a.active {{
-      color: var(--amber);
-      border-bottom-color: var(--amber);
-    }}
-    .topbar-title {{
-      color: var(--amber);
-      font-family: "Space Grotesk", monospace;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.26em;
-      text-transform: uppercase;
-    }}
-    .topbar-meta {{
-      color: var(--soft);
-      font-family: "Space Grotesk", monospace;
-      font-size: 11px;
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
-    }}
+    .status-pill.bullish {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.34); }}
+    .status-pill.bearish {{ color: var(--bear); border-color: rgba(255, 180, 171, 0.34); }}
+    .status-pill.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.36); }}
+    .mobile-nav {{ display: none; }}
+    .top-nav {{ display: none; min-width: 0; }}
     .terminal-header {{
       display: flex;
       justify-content: space-between;
       align-items: flex-end;
       gap: 16px;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
     }}
-    .terminal-header > div {{
-      min-width: 0;
-      max-width: 100%;
-    }}
+    .terminal-header > div {{ min-width: 0; max-width: 100%; }}
     .terminal-header h1 {{
       color: var(--text);
-      font-size: clamp(28px, 3.6vw, 44px);
-      font-weight: 800;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 1;
+      font-weight: 900;
       letter-spacing: 0;
       overflow-wrap: anywhere;
-      word-break: break-word;
     }}
-    .mobile-title-break {{
-      display: none;
-    }}
-    .terminal-header p {{
-      margin-top: 5px;
-      color: var(--soft);
-      font-size: 13px;
-    }}
-    .sync-pill {{
-      padding: 8px 11px;
-      border: 1px solid rgba(78, 222, 163, 0.25);
-      border-radius: 999px;
-      color: var(--bull);
-      background: rgba(78, 222, 163, 0.08);
-      font-family: "Space Grotesk", monospace;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-    }}
-    .hero-grid,
-    .summary-grid,
-    .digest-grid,
-    .content-grid,
-    .headline-grid,
-    .metrics-grid,
-    .trade-levels,
-    .key-levels,
-    .scenario-grid,
-    .geo-grid,
-    .geo-columns {{
-      display: grid;
-      gap: 10px;
-      min-width: 0;
-    }}
-    .hero-grid {{
-      grid-template-columns: minmax(520px, 1.55fr) minmax(280px, 0.72fr) minmax(280px, 0.72fr);
-      margin-bottom: 12px;
-    }}
-    .summary-grid {{
-      grid-template-columns: minmax(0, 1.38fr) minmax(330px, 0.82fr);
-      margin-bottom: 10px;
-    }}
-    .digest-grid {{
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      margin-top: 10px;
-    }}
-    .content-grid {{
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      margin-top: 10px;
-    }}
-    .headline-grid {{
-      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-      margin-top: 10px;
-    }}
-    .metrics-grid {{
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      margin-top: 10px;
-    }}
-    .trade-levels,
-    .key-levels {{
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }}
-    .scenario-grid {{
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }}
-    .geo-grid {{
-      grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-    }}
-    .geo-columns {{
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      margin-top: 10px;
-    }}
-    .panel,
-    .trade-card,
-    .summary-box,
-    .digest-card,
-    .headline-brief,
-    .story-row,
-    .metric-chip,
-    .level-chip,
-    .scenario {{
-      background: var(--panel);
-      border: 1px solid rgba(45, 52, 73, 0.88);
-      border-radius: 8px;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 60px rgba(0, 0, 0, 0.16);
-      backdrop-filter: blur(18px);
-    }}
-    .panel,
-    .trade-card,
-    .summary-box {{
-      padding: 14px;
-      min-width: 0;
-    }}
-    .digest-card {{
-      padding: 12px;
-      background: var(--panel-alt);
-    }}
-    .span-5 {{ grid-column: span 5; }}
-    .span-7 {{ grid-column: span 7; }}
-    .span-12 {{ grid-column: span 12; }}
+    .terminal-header p {{ margin-top: 8px; color: var(--soft); font-size: 14px; }}
     .section-kicker {{
       color: var(--amber);
       font-family: "Space Grotesk", monospace;
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }}
-    .hero-price {{
-      background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(6, 14, 32, 0.9));
-      border-left: 5px solid var(--amber);
-    }}
-    .ticker-symbol {{
-      color: var(--amber);
-      font-size: 13px;
-      letter-spacing: 0.12em;
+      font-weight: 900;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
     }}
-    .ticker-row {{
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 12px;
-      margin-top: 6px;
-    }}
-    .ticker-price {{
-      font-size: clamp(46px, 6vw, 74px);
-      font-family: "Space Grotesk", monospace;
-      font-weight: 700;
-      line-height: 0.95;
-      letter-spacing: 0;
-      white-space: nowrap;
-    }}
-    .ticker-delta {{
-      font-family: "Space Grotesk", monospace;
-      font-size: 22px;
-      font-weight: 700;
-    }}
-    .ticker-price.bullish,
-    .ticker-delta.bullish,
-    .bullish,
-    .headline-brief.bullish h3 {{
+    .sync-pill {{
+      flex: 0 0 auto;
+      padding: 9px 12px;
+      border: 1px solid rgba(78, 222, 163, 0.28);
+      border-radius: 999px;
       color: var(--bull);
-    }}
-    .ticker-price.bearish,
-    .ticker-delta.bearish,
-    .bearish,
-    .headline-brief.bearish h3 {{
-      color: var(--bear);
-    }}
-    .ticker-price.neutral,
-    .ticker-delta.neutral,
-    .neutral,
-    .headline-brief.neutral h3 {{
-      color: var(--text);
-    }}
-    .ticker-cursor {{
-      display: inline-block;
-      width: 10px;
-      height: 0.92em;
-      margin-left: 8px;
-      background: currentColor;
-      vertical-align: text-bottom;
-      animation: blink 1s steps(1) infinite;
-    }}
-    @keyframes blink {{
-      50% {{ opacity: 0; }}
-    }}
-    .ticker-meta {{
-      margin-top: 10px;
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.55;
-    }}
-    .weekend-proxy {{
-      margin-top: 12px;
-      padding: 12px;
-      border-left: 5px solid rgba(212, 175, 55, 0.78);
-      background:
-        linear-gradient(135deg, rgba(212, 175, 55, 0.12), transparent 46%),
-        rgba(19, 27, 46, 0.84);
-    }}
-    .weekend-proxy-head {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: flex-start;
-      margin-bottom: 10px;
-    }}
-    .weekend-proxy-head strong {{
-      display: block;
-      color: var(--text);
+      background: rgba(78, 222, 163, 0.08);
       font-family: "Space Grotesk", monospace;
-      font-size: 30px;
-      line-height: 1;
-    }}
-    .weekend-proxy-head span {{
-      font-family: "Space Grotesk", monospace;
-      font-size: 14px;
-      font-weight: 700;
-      white-space: nowrap;
-    }}
-    .weekend-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-    }}
-    .weekend-grid div {{
-      min-width: 0;
-      padding: 8px;
-      border: 1px solid rgba(45, 52, 73, 0.74);
-      border-radius: 6px;
-      background: rgba(6, 14, 32, 0.48);
-    }}
-    .weekend-grid small {{
-      display: block;
-      color: var(--amber);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }}
-    .weekend-grid b {{
-      display: block;
-      margin-top: 3px;
-      color: var(--text);
-      font-family: "Space Grotesk", monospace;
-      font-size: 17px;
-    }}
-    .weekend-note {{
-      margin-top: 9px;
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.45;
-    }}
-    .global-signal {{
-      margin-top: 14px;
-      padding: 14px;
-      border: 1px solid rgba(212, 175, 55, 0.26);
-      border-left: 5px solid var(--muted);
-      border-radius: 8px;
-      background:
-        linear-gradient(135deg, rgba(212, 175, 55, 0.09), transparent 44%),
-        rgba(19, 27, 46, 0.92);
-    }}
-    .global-signal.bullish {{
-      border-left-color: rgba(78, 222, 163, 0.9);
-    }}
-    .global-signal.bearish {{
-      border-left-color: rgba(255, 180, 171, 0.9);
-    }}
-    .global-signal-head {{
+    .tab-view {{ display: none; min-width: 0; }}
+    .tab-view.active {{ display: block; }}
+    .view-header {{
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      margin-bottom: 10px;
+      align-items: flex-end;
+      gap: 16px;
+      margin: 8px 0 14px;
     }}
-    .global-signal h2 {{
-      font-size: 18px;
-      margin-top: 3px;
-    }}
-    .global-position {{
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 10px;
-    }}
-    .global-position strong {{
-      font-family: "Space Grotesk", monospace;
-      font-size: 42px;
-      line-height: 1;
-      letter-spacing: 0.02em;
-    }}
-    .global-position span {{
-      color: var(--soft);
-      font-size: 13px;
-      line-height: 1.45;
-    }}
-    .global-score {{
-      color: var(--amber);
-      font-family: "Space Grotesk", monospace;
-      font-size: 36px;
-      font-weight: 700;
-      white-space: nowrap;
-      text-shadow: 0 0 16px rgba(212, 175, 55, 0.34);
-    }}
-    .global-score small {{
-      color: var(--soft);
-      font-size: 15px;
-    }}
-    .global-summary {{
-      color: var(--text);
-      font-size: 13px;
-      line-height: 1.55;
-      margin-top: 8px;
-    }}
+    .view-header h2 {{ font-size: 26px; line-height: 1.1; }}
+    .view-header p {{ margin-top: 5px; color: var(--soft); font-size: 13px; line-height: 1.5; }}
+    .panel,
+    .summary-box,
+    .quick-card,
     .metric-chip,
-    .level-chip {{
-      padding: 10px 11px;
+    .level-chip,
+    .story-row,
+    .digest-card,
+    .headline-card,
+    .headline-brief,
+    .scenario,
+    .decision-item,
+    .global-signal {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      min-width: 0;
     }}
+    .panel,
+    .summary-box {{ padding: 16px; }}
+    .panel h2,
+    .summary-box h2 {{ color: var(--text); font-size: 22px; line-height: 1.18; margin-top: 4px; margin-bottom: 8px; }}
+    .layout-dashboard,
+    .layout-decision,
+    .layout-market,
+    .layout-technical,
+    .layout-macro,
+    .layout-geopolitics,
+    .layout-inspector,
+    .layout-reports {{
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+      min-width: 0;
+    }}
+    .span-3 {{ grid-column: span 3; }}
+    .span-4 {{ grid-column: span 4; }}
+    .span-5 {{ grid-column: span 5; }}
+    .span-6 {{ grid-column: span 6; }}
+    .span-7 {{ grid-column: span 7; }}
+    .span-8 {{ grid-column: span 8; }}
+    .span-12 {{ grid-column: span 12; }}
+    .global-live-strip {{
+      display: grid;
+      grid-template-columns: minmax(240px, 1.2fr) repeat(4, minmax(155px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 10px;
+      border: 1px solid rgba(212, 175, 55, 0.28);
+      border-radius: 10px;
+      background: rgba(11, 18, 34, 0.9);
+    }}
+    .live-cell,
+    .state-card,
+    .geo-stat {{
+      min-width: 0;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel-2);
+    }}
+    .live-cell small,
+    .state-card small,
+    .geo-stat strong,
     .metric-chip strong,
     .level-chip strong {{
       display: block;
       color: var(--amber);
-      font-size: 11px;
-      letter-spacing: 0.08em;
+      font-family: "Space Grotesk", monospace;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
       margin-bottom: 5px;
     }}
+    .live-cell strong,
+    .state-card strong,
     .metric-chip span,
     .level-chip span {{
       display: block;
-      font-size: 20px;
-      font-weight: 700;
       color: var(--text);
       font-family: "Space Grotesk", monospace;
+      font-size: 20px;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
     }}
+    .live-cell span,
+    .state-card span,
+    .geo-stat span,
+    .geo-stat small,
     .metric-chip small {{
       display: block;
-      margin-top: 5px;
       color: var(--soft);
       font-size: 12px;
-      line-height: 1.45;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
     }}
+    .state-board {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }}
+    .state-card {{ border-left: 4px solid var(--blue); }}
+    .state-card.bullish {{ border-left-color: var(--bull); }}
+    .state-card.bearish {{ border-left-color: var(--bear); }}
+    .state-card.caution {{ border-left-color: var(--amber); }}
+    .decision-hero {{
+      padding: 18px;
+      border: 1px solid rgba(212, 175, 55, 0.34);
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(212, 175, 55, 0.1), rgba(11, 18, 34, 0.94) 42%);
+    }}
+    .ticker-symbol {{ color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; }}
+    .ticker-row {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; margin: 8px 0 6px; }}
+    .ticker-price {{ font-family: "Space Grotesk", monospace; font-size: clamp(42px, 7vw, 86px); font-weight: 900; line-height: 0.95; }}
+    .ticker-delta {{ font-family: "Space Grotesk", monospace; font-size: 24px; font-weight: 900; }}
+    .ticker-meta {{ color: var(--soft); font-size: 13px; line-height: 1.55; }}
+    .global-position {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-top: 10px; }}
+    .global-position strong {{ font-family: "Space Grotesk", monospace; font-size: clamp(34px, 5vw, 58px); line-height: 1; }}
+    .global-position span {{ color: var(--soft); font-size: 14px; line-height: 1.45; }}
+    .global-score {{ color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 34px; font-weight: 900; white-space: nowrap; }}
+    .global-score small {{ color: var(--soft); font-size: 14px; }}
+    .global-summary,
+    .trade-summary,
+    .story-text,
+    .headline-brief p,
+    .footer-note {{ color: var(--text); font-size: 13px; line-height: 1.58; }}
+    .metric-strip,
+    .metrics-grid,
+    .trade-levels,
+    .key-levels,
+    .geo-grid,
+    .scenario-grid,
+    .decision-grid,
+    .digest-grid,
+    .headline-grid,
+    .agent-grid,
+    .geo-columns {{ display: grid; gap: 10px; min-width: 0; }}
+    .metric-strip {{ grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }}
+    .metrics-grid {{ grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); margin-top: 10px; }}
+    .trade-levels,
+    .key-levels {{ grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 10px; }}
+    .geo-grid {{ grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-top: 10px; }}
+    .geo-columns {{ grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }}
+    .scenario-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .scenario-stack {{ grid-template-columns: 1fr; }}
+    .digest-grid {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 10px; }}
+    .headline-grid {{ grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 10px; }}
+    .agent-grid {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 12px; }}
     .trade-card {{
       border-left: 5px solid var(--muted);
-      background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(19, 27, 46, 0.88));
+      background: var(--panel);
+      min-width: 0;
     }}
     .trade-card.bullish {{ border-left-color: rgba(78, 222, 163, 0.75); }}
     .trade-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.75); }}
-    .trade-card-head {{
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      align-items: flex-start;
-      margin-bottom: 8px;
-    }}
-    .trade-card h2 {{
-      color: var(--text);
-      font-size: 19px;
-      margin-top: 2px;
-    }}
-    .trade-score {{
-      color: var(--amber);
-      font-family: "Space Grotesk", monospace;
-      font-size: 28px;
-      font-weight: 700;
-      white-space: nowrap;
-    }}
-    .trade-score small {{
-      font-size: 15px;
-      color: var(--soft);
-    }}
+    .trade-card-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 8px; }}
+    .trade-card h2 {{ color: var(--text); font-size: 20px; line-height: 1.2; margin-top: 2px; }}
+    .trade-score {{ color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 28px; font-weight: 900; white-space: nowrap; }}
+    .trade-score small {{ color: var(--soft); font-size: 14px; }}
     .trade-verdict {{
-      display: inline-block;
+      display: inline-flex;
+      max-width: 100%;
       padding: 6px 10px;
-      background: var(--panel-alt);
       border: 1px solid var(--line);
-      border-radius: 4px;
+      border-radius: 5px;
+      background: var(--panel-2);
       font-family: "Space Grotesk", monospace;
-      font-size: 14px;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 900;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       margin-bottom: 8px;
+      overflow-wrap: anywhere;
     }}
-    .tag-row {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 0 0 9px;
-    }}
+    .tag-row {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 9px; }}
     .source-tag {{
       display: inline-flex;
       align-items: center;
@@ -11625,8 +11285,8 @@ def render_dashboard_clarity_v2(
       background: rgba(6, 14, 32, 0.62);
       font-family: "Space Grotesk", monospace;
       font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
+      font-weight: 800;
+      letter-spacing: 0.07em;
       text-transform: uppercase;
       overflow-wrap: anywhere;
     }}
@@ -11635,162 +11295,33 @@ def render_dashboard_clarity_v2(
     .source-tag.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.34); }}
     .source-tag.neutral {{ color: var(--blue); border-color: rgba(138, 180, 255, 0.34); }}
     .source-tag.OK {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.34); }}
-    .trade-summary,
-    .story-text,
-    .headline-brief p,
-    .footer-note {{
-      color: var(--text);
-      font-size: 13px;
-      line-height: 1.55;
-    }}
-    .trade-levels {{
-      margin: 9px 0;
-    }}
-    .trade-levels div {{
-      background: var(--panel-alt);
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 8px 10px;
-    }}
-    .trade-levels span {{
-      display: block;
-      color: var(--amber);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }}
-    .trade-levels strong {{
-      display: block;
-      margin-top: 4px;
-      font-size: 18px;
-      font-family: "Space Grotesk", monospace;
-      color: var(--text);
-    }}
+    .trade-levels div,
+    .metric-chip,
+    .level-chip {{ padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }}
+    .trade-levels span {{ display: block; color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 10px; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; }}
+    .trade-levels strong {{ display: block; margin-top: 4px; font-size: 20px; font-family: "Space Grotesk", monospace; color: var(--text); overflow-wrap: anywhere; }}
     .trade-reasons,
-    .reason-list {{
-      margin: 0;
-      padding-left: 18px;
-      line-height: 1.5;
-      font-size: 12px;
-      color: var(--text);
-    }}
-    .trade-footer {{
-      margin-top: 9px;
-      padding-top: 9px;
-      border-top: 1px solid var(--line);
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.45;
-      display: grid;
-      gap: 4px;
-    }}
-    .summary-box h2,
-    .panel h2 {{
-      font-size: 21px;
-      color: var(--text);
-      margin-bottom: 6px;
-    }}
-    .summary-box .lead {{
-      color: var(--text);
-      font-size: 14px;
-      line-height: 1.6;
-      margin-bottom: 10px;
-    }}
-    .story-row {{
-      padding: 10px 11px;
-      margin-top: 8px;
-      background: var(--panel-alt);
-    }}
-    .digest-tag {{
-      color: var(--amber);
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }}
-    .digest-card h3 {{
-      font-size: 14px;
-      line-height: 1.45;
-      margin-bottom: 6px;
-      color: var(--text);
-    }}
-    .digest-card p {{
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.55;
-      margin: 0;
-    }}
-    .story-label {{
-      color: var(--amber);
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }}
-    .decision-grid {{
-      display: grid;
-      gap: 8px;
-      margin-top: 8px;
-    }}
-    .decision-item {{
-      padding: 10px;
-      background: var(--panel-alt);
-      border: 1px solid var(--line);
-      border-radius: 4px;
-    }}
-    .decision-item strong {{
-      display: block;
-      font-size: 15px;
-      margin-bottom: 4px;
-    }}
-    .decision-item span {{
-      color: var(--soft);
-      font-size: 13px;
-      line-height: 1.6;
-    }}
-    .agent-grid {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 10px;
-      margin-top: 12px;
-    }}
-    .agent-card {{
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-top: 3px solid var(--line);
-      border-radius: 6px;
-      background: var(--panel-alt);
-      min-width: 0;
-    }}
+    .reason-list,
+    .agent-evidence-list,
+    .agent-risk-list {{ margin: 8px 0 0; padding-left: 18px; color: var(--text); font-size: 12px; line-height: 1.55; }}
+    .trade-footer {{ margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 4px; color: var(--soft); font-size: 12px; line-height: 1.45; }}
+    .summary-box .lead {{ color: var(--text); font-size: 14px; line-height: 1.6; margin-bottom: 10px; }}
+    .story-row,
+    .digest-card,
+    .decision-item,
+    .scenario {{ padding: 12px; }}
+    .story-label,
+    .digest-tag {{ color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 10px; font-weight: 900; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }}
+    .decision-item strong {{ display: block; font-size: 15px; margin-bottom: 5px; }}
+    .decision-item span {{ color: var(--soft); font-size: 13px; line-height: 1.58; }}
+    .agent-card {{ padding: 13px; border: 1px solid var(--line); border-top: 3px solid var(--blue); border-radius: 7px; background: var(--panel-2); min-width: 0; }}
     .agent-card.bullish {{ border-top-color: var(--bull); }}
     .agent-card.bearish {{ border-top-color: var(--bear); }}
     .agent-card.caution {{ border-top-color: var(--amber); }}
-    .agent-card.neutral {{ border-top-color: var(--blue); }}
-    .agent-card-top {{
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      align-items: flex-start;
-      margin-bottom: 8px;
-    }}
-    .agent-card h3 {{
-      font-size: 15px;
-      line-height: 1.3;
-      color: var(--text);
-      margin: 0;
-    }}
-    .agent-score {{
-      flex: 0 0 auto;
-      color: var(--gold);
-      font-family: "Space Grotesk", monospace;
-      font-size: 20px;
-      font-weight: 800;
-    }}
-    .agent-score small {{
-      color: var(--soft);
-      font-size: 11px;
-      margin-left: 2px;
-    }}
+    .agent-card-top {{ display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 8px; }}
+    .agent-card h3 {{ font-size: 15px; line-height: 1.3; color: var(--text); }}
+    .agent-score {{ flex: 0 0 auto; color: var(--gold); font-family: "Space Grotesk", monospace; font-size: 20px; font-weight: 900; }}
+    .agent-score small {{ color: var(--soft); font-size: 11px; }}
     .agent-badge {{
       display: inline-flex;
       margin-bottom: 8px;
@@ -11799,8 +11330,8 @@ def render_dashboard_clarity_v2(
       border-radius: 4px;
       font-family: "Space Grotesk", monospace;
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
+      font-weight: 800;
+      letter-spacing: 0.07em;
       text-transform: uppercase;
     }}
     .agent-badge.bullish {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.35); }}
@@ -11808,292 +11339,96 @@ def render_dashboard_clarity_v2(
     .agent-badge.caution {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.35); }}
     .agent-badge.neutral {{ color: var(--blue); border-color: rgba(138, 180, 255, 0.35); }}
     .agent-card p,
-    .agent-muted {{
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.55;
-      margin: 0;
-    }}
-    .agent-confidence {{
-      margin-top: 8px;
-      color: var(--text);
-      font-size: 12px;
-      font-weight: 700;
-    }}
-    .agent-evidence-list,
-    .agent-risk-list {{
-      margin: 8px 0 0;
-      padding-left: 17px;
-      color: var(--soft);
-      font-size: 12px;
-      line-height: 1.5;
-    }}
-    .agent-evidence-list strong,
-    .agent-risk-list strong {{
-      color: var(--text);
-    }}
-    .agent-evidence-list small {{
-      display: block;
-      color: var(--amber);
-      font-size: 10px;
-      margin-top: 2px;
-    }}
-    .confidence-bar {{
-      height: 10px;
-      margin-top: 10px;
-      background: #172033;
-      border-radius: 999px;
-      overflow: hidden;
-    }}
-    .confidence-bar span {{
-      display: block;
-      width: {confidence_width}%;
-      height: 100%;
-      background: linear-gradient(90deg, var(--amber), var(--bull));
-      box-shadow: 0 0 14px rgba(78, 222, 163, 0.26);
-    }}
-    .chart-wrap {{
-      margin-top: 10px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      overflow: hidden;
-      background: #060e20;
-    }}
-    .chart-wrap svg {{
-      display: block;
-      width: 100%;
-      height: auto;
-    }}
-    .headline-brief {{
-      padding: 12px;
-      border-left: 5px solid var(--line);
-    }}
-    .headline-brief.bullish {{ border-left-color: rgba(0, 208, 132, 0.55); }}
-    .headline-brief.bearish {{ border-left-color: rgba(255, 77, 109, 0.55); }}
-    .headline-brief.neutral {{ border-left-color: rgba(243, 179, 92, 0.45); }}
-    .headline-brief-top {{
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 8px;
-      color: var(--soft);
-      font-size: 12px;
-    }}
-    .headline-brief h3 {{
-      font-size: 15px;
-      line-height: 1.4;
-      margin-bottom: 8px;
-    }}
-    .headline-brief p + p {{
-      margin-top: 8px;
-    }}
-    .headline-brief a {{
-      display: inline-block;
-      margin-top: 10px;
-      font-size: 13px;
-    }}
-    .table-wrap {{
-      overflow-x: auto;
-      margin-top: 10px;
-      border: 1px solid var(--line);
-      border-radius: 5px;
-      background: var(--panel-alt);
-    }}
-    .technical-table {{
-      width: 100%;
-      min-width: 860px;
-      border-collapse: collapse;
-    }}
+    .agent-muted {{ color: var(--soft); font-size: 12px; line-height: 1.55; }}
+    .agent-confidence {{ margin-top: 8px; color: var(--text); font-size: 12px; font-weight: 800; }}
+    .agent-evidence-list small {{ display: block; color: var(--amber); font-size: 10px; margin-top: 2px; }}
+    .confidence-bar {{ height: 10px; margin-top: 10px; background: #172033; border-radius: 999px; overflow: hidden; }}
+    .confidence-bar span {{ display: block; width: {confidence_width}%; height: 100%; background: linear-gradient(90deg, var(--amber), var(--bull)); }}
+    .chart-wrap {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #060e20; }}
+    .chart-wrap svg {{ display: block; width: 100%; height: auto; }}
+    .headline-brief {{ padding: 13px; border-left: 5px solid var(--line); }}
+    .headline-brief.bullish {{ border-left-color: rgba(78, 222, 163, 0.65); }}
+    .headline-brief.bearish {{ border-left-color: rgba(255, 180, 171, 0.65); }}
+    .headline-brief.neutral {{ border-left-color: rgba(212, 175, 55, 0.52); }}
+    .headline-brief-top {{ display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--soft); font-size: 12px; }}
+    .headline-brief h3,
+    .digest-card h3 {{ font-size: 15px; line-height: 1.38; margin-bottom: 7px; color: var(--text); }}
+    .headline-brief p + p {{ margin-top: 8px; }}
+    .headline-brief a {{ display: inline-block; margin-top: 10px; font-size: 13px; }}
+    .table-wrap {{ overflow-x: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }}
+    .technical-table {{ width: 100%; min-width: 860px; border-collapse: collapse; }}
     .technical-table th,
-    .technical-table td {{
-      padding: 9px 10px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      font-size: 12px;
-      color: var(--text);
-    }}
-    .technical-table th {{
-      background: #0f172a;
-      color: var(--amber);
-      font-family: "Space Grotesk", monospace;
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-    }}
-    .technical-table small {{
-      color: var(--soft);
-      font-size: 11px;
-    }}
-    .geo-stat {{
-      padding: 10px 11px;
-      background: var(--panel-alt);
-      border: 1px solid var(--line);
-      border-radius: 5px;
-    }}
-    .geo-stat strong {{
-      display: block;
-      color: var(--amber);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }}
-    .geo-stat span {{
-      display: block;
-      color: var(--text);
-      font-size: 13px;
-      line-height: 1.45;
-    }}
-    .geo-stat small {{
-      display: block;
-      margin-top: 4px;
-      color: var(--soft);
-      font-size: 11px;
-      line-height: 1.35;
-    }}
-    .scenario {{
-      padding: 11px;
-    }}
-    .scenario h3 {{
-      font-size: 14px;
-      margin-bottom: 6px;
-    }}
+    .technical-table td {{ padding: 10px 11px; border-bottom: 1px solid var(--line); text-align: left; font-size: 12px; color: var(--text); vertical-align: top; }}
+    .technical-table th {{ background: #0f172a; color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }}
+    .technical-table small,
+    .soft {{ color: var(--soft); font-size: 11px; }}
     .scenario.positive h3 {{ color: var(--bull); }}
     .scenario.negative h3 {{ color: var(--bear); }}
     .scenario.neutral h3 {{ color: var(--amber); }}
-    .ai-panel {{
-      margin-top: 10px;
-    }}
-    .terminal-line {{
-      display: grid;
-      grid-template-columns: auto auto 1fr;
-      gap: 10px;
-      align-items: start;
-      margin-top: 10px;
-    }}
-    .prompt {{
-      color: var(--bull);
-      font-weight: 700;
-    }}
-    .terminal-tag {{
-      color: var(--amber);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }}
-    .ai-copy {{
-      color: var(--text);
-      line-height: 1.55;
-      font-size: 13px;
-    }}
-    .scenario-stack {{
-      grid-template-columns: 1fr;
-      gap: 8px;
-    }}
-    .module-block {{
-      margin-top: 10px;
-    }}
-    .empty-state {{
-      color: var(--soft);
-      font-size: 14px;
-      padding: 10px 0;
-    }}
-    @media (max-width: 1180px) {{
-      .terminal-shell {{
-        grid-template-columns: 1fr;
-      }}
-      .side-rail {{
-        display: none;
-      }}
-      .hero-grid,
-      .summary-grid,
-      .digest-grid,
-      .headline-grid,
-      .metrics-grid,
+    .terminal-line {{ display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 10px; }}
+    .prompt {{ color: var(--bull); font-weight: 800; }}
+    .terminal-tag {{ color: var(--amber); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }}
+    .ai-copy {{ color: var(--text); line-height: 1.58; font-size: 13px; }}
+    .module-block {{ margin-top: 10px; }}
+    .empty-state {{ color: var(--soft); font-size: 14px; padding: 10px 0; }}
+    .bullish {{ color: var(--bull); }}
+    .bearish {{ color: var(--bear); }}
+    .neutral {{ color: var(--soft); }}
+    .caution {{ color: var(--amber); }}
+    @media (max-width: 1280px) {{
+      .terminal-shell {{ grid-template-columns: 240px minmax(0, 1fr); }}
       .global-live-strip,
-      .state-board,
-      .scenario-grid,
-      .geo-grid,
-      .geo-columns {{
-        grid-template-columns: 1fr;
-      }}
+      .state-board {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .span-3,
+      .span-4,
       .span-5,
+      .span-6,
       .span-7,
-      .span-12 {{
-        grid-column: span 12;
-      }}
+      .span-8 {{ grid-column: span 12; }}
+      .metric-strip {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
     }}
     @media (max-width: 900px) {{
-      .page {{
-        width: 100%;
-        margin: 0;
+      .page,
+      .terminal-shell,
+      .workspace {{ width: 100vw; max-width: 100vw; }}
+      .terminal-shell {{ grid-template-columns: minmax(0, 1fr); overflow-x: hidden; }}
+      .side-rail {{ display: none; }}
+      .workspace {{ padding: 14px 10px 20px; }}
+      .topbar {{ margin: -14px -10px 14px; padding: 10px; align-items: flex-start; flex-direction: column; }}
+      .topbar-brand,
+      .top-nav,
+      .top-status {{ max-width: 100%; }}
+      .top-status {{ width: 100%; min-width: 0; justify-content: flex-start; flex-wrap: nowrap; padding-bottom: 2px; }}
+      .status-pill {{ flex: 0 0 auto; }}
+      .top-nav {{ display: flex; width: 100%; min-width: 0; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }}
+      .top-nav::-webkit-scrollbar {{ display: none; }}
+      .top-nav a {{
+        flex: 0 0 auto;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--soft);
+        font-family: "Space Grotesk", monospace;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        text-decoration: none;
       }}
-      .workspace {{
-        padding: 14px 10px 18px;
-      }}
-      .topbar {{
-        margin: -14px -10px 14px;
-        padding: 0 10px;
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 6px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-      }}
-      .topbar-left {{
-        width: 100%;
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 6px;
-      }}
-      .top-nav {{
-        width: 100%;
-      }}
-      .topbar-meta {{
-        white-space: normal;
-        line-height: 1.35;
-      }}
-      .terminal-header {{
-        align-items: flex-start;
-        flex-direction: column;
-        width: 100%;
-        max-width: 100%;
-      }}
-      .terminal-header > div {{
-        width: 100%;
-      }}
-      .terminal-header h1 {{
-        font-size: 28px;
-        line-height: 1.05;
-        max-width: 22rem;
-        white-space: normal;
-      }}
-      .terminal-header p {{
-        max-width: 22rem;
-        overflow-wrap: anywhere;
-      }}
-      .mobile-title-break {{
-        display: block;
-      }}
-      .view-tabs {{
-        overflow-x: auto;
-      }}
-      .global-live-strip {{
-        width: 100%;
-      }}
-      .live-cell strong,
-      .state-card strong {{
-        overflow-wrap: anywhere;
-      }}
-      .hero-grid,
+      .top-nav a.active {{ color: var(--amber); border-color: rgba(212, 175, 55, 0.42); background: rgba(212, 175, 55, 0.08); }}
+      .terminal-header {{ align-items: flex-start; flex-direction: column; }}
+      .terminal-header h1 {{ max-width: 100%; font-size: 28px; line-height: 1.05; }}
+      .sync-pill {{ white-space: normal; }}
+      .global-live-strip,
+      .state-board,
+      .metric-strip,
       .trade-levels,
-      .key-levels {{
-        grid-template-columns: 1fr;
-      }}
-      .ticker-row {{
-        flex-direction: column;
-        align-items: flex-start;
-      }}
+      .key-levels,
+      .scenario-grid,
+      .geo-columns {{ grid-template-columns: 1fr; }}
+      .ticker-row {{ flex-direction: column; align-items: flex-start; }}
+      .ticker-price {{ font-size: 48px; }}
+      .technical-table {{ min-width: 720px; }}
     }}
   </style>
 </head>
@@ -12108,33 +11443,23 @@ def render_dashboard_clarity_v2(
           <div class="rail-status">Live analysis</div>
         </div>
         <nav class="rail-nav" aria-label="Sections dashboard">
-          <a class="rail-link active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
-          <a class="rail-link" href="#market" data-tab-target="market" aria-selected="false">Market</a>
-          <a class="rail-link" href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
-          <a class="rail-link" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
-          <a class="rail-link" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
-          <a class="rail-link" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
-          <a class="rail-link" href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
-          <a class="rail-link" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
+          {nav_links("rail-link")}
         </nav>
       </aside>
       <div class="workspace">
         <header class="topbar">
-          <div class="topbar-left">
-            <div class="topbar-brand">AUREUM FLUX</div>
-            <nav class="top-nav" aria-label="Navigation principale">
-              <a class="active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
-              <a href="#market" data-tab-target="market" aria-selected="false">Market</a>
-              <a href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
-              <a href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
-              <a href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
-              <a href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics</a>
-              <a href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
-              <a href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
-            </nav>
+          <div class="topbar-brand">AUREUM FLUX</div>
+          <nav class="top-nav" aria-label="Navigation mobile">
+            {nav_links("top-nav-link")}
+          </nav>
+          <div class="top-status">
+            <span class="status-pill {price_class}">XAU {gold.price:.2f} / {gold.change_pct:+.2f}%</span>
+            <span class="status-pill {recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)} {global_recommendation.score}/100</span>
+            <span class="status-pill caution">{html.escape(regime_name[:28])}</span>
+            <span class="status-pill">{html.escape(generated_at)}</span>
           </div>
-          <div class="topbar-meta">System online | {html.escape(generated_at)}</div>
         </header>
+
         <section class="terminal-header">
           <div>
             <div class="section-kicker">Institutional analytics package</div>
@@ -12143,16 +11468,6 @@ def render_dashboard_clarity_v2(
           </div>
           <div class="sync-pill">Ready for export</div>
         </section>
-        <nav class="view-tabs" aria-label="Vues Aureum Flux">
-          <a class="view-tab active" href="#dashboard" data-tab-target="dashboard" aria-selected="true">Dashboard</a>
-          <a class="view-tab" href="#market" data-tab-target="market" aria-selected="false">Market</a>
-          <a class="view-tab" href="#decision" data-tab-target="decision" aria-selected="false">Decision</a>
-          <a class="view-tab" href="#technical" data-tab-target="technical" aria-selected="false">Technical</a>
-          <a class="view-tab" href="#macro" data-tab-target="macro" aria-selected="false">Macro</a>
-          <a class="view-tab" href="#geopolitics" data-tab-target="geopolitics" aria-selected="false">Geopolitics & Flows</a>
-          <a class="view-tab" href="#inspector" data-tab-target="inspector" aria-selected="false">Inspector</a>
-          <a class="view-tab" href="#reports" data-tab-target="reports" aria-selected="false">Reports</a>
-        </nav>
 
         <section class="global-live-strip {banner_class}" data-verdict="{html.escape(global_recommendation.verdict)}" data-regime="{html.escape(regime_name)}" data-alert="{html.escape(regime_alert)}">
           <div class="live-cell">
@@ -12184,409 +11499,169 @@ def render_dashboard_clarity_v2(
         {render_terminal_state_board(global_recommendation, trade_ledger, data_quality, orchestrator_decision, market_regime)}
 
         <section class="tab-view active" id="dashboard" data-tab-view="dashboard">
-          <section class="hero-grid anchor-target">
-            <article class="panel hero-price">
-              <div class="section-kicker">Tableau de bord intraday</div>
+          <div class="view-header">
+            <div><div class="section-kicker">Dashboard</div><h2>Signal live et risque immediat</h2><p>Lecture rapide: prix, decision, gate et trade locking.</p></div>
+          </div>
+          <section class="layout-dashboard">
+            <article class="decision-hero span-8">
               <div class="ticker-symbol">XAU/USD spot | live</div>
               <div class="ticker-row">
-                <div class="ticker-price {price_class}">{gold.price:.2f}<span class="ticker-cursor"></span></div>
+                <div class="ticker-price {price_class}">{gold.price:.2f}</div>
                 <div class="ticker-delta {price_class}">{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</div>
               </div>
               <div class="ticker-meta">
-                Mis a jour {html.escape(generated_at)}<br>
-                Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
+                Mis a jour {html.escape(generated_at)} · Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
                 Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
               </div>
-              {render_weekend_gold_proxy(weekend_gold, gold)}
-              <div class="global-signal {recommendation_css_class(global_recommendation.verdict)}">
-                <div class="global-signal-head">
-                  <div>
-                    <div class="section-kicker">Scoring global prioritaire</div>
-                    <h2>Position conseillee</h2>
-                  </div>
-                  <div class="global-score">{global_recommendation.score}<small>/100</small></div>
-                </div>
-                <div class="global-position">
-                  <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
-                  <span>SL {global_recommendation.stop_loss:.2f} | TP1 {global_recommendation.take_profit_1:.2f} | TP2 {global_recommendation.take_profit_2:.2f}</span>
-                </div>
-                <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
-                {render_trade_levels(global_recommendation)}
+              <div class="global-position">
+                <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
+                <span>SL {global_recommendation.stop_loss:.2f} · TP1 {global_recommendation.take_profit_1:.2f} · TP2 {global_recommendation.take_profit_2:.2f}</span>
               </div>
-              <div class="metrics-grid">
-                <div class="metric-chip">
-                  <strong>Biais</strong>
-                  <span class="{price_class}">{format_bias_label(analysis.bias)}</span>
-                  <small>{heuristic_decision_sentence(analysis)}</small>
-                </div>
-                <div class="metric-chip">
-                  <strong>Confiance</strong>
-                  <span>{analysis.confidence}/100</span>
-                  <div class="confidence-bar"><span></span></div>
-                </div>
-                <div class="metric-chip">
-                  <strong>DXY</strong>
-                  <span class="{dxy_class}">{dxy.price:.2f}</span>
-                  <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
-                </div>
-                <div class="metric-chip">
-                  <strong>10Y US</strong>
-                  <span class="{us10y_class}">{us10y.price:.2f}%</span>
-                  <small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small>
-                </div>
+              <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
+              {render_trade_levels(global_recommendation)}
+              <div class="metric-strip">
+                <div class="metric-chip"><strong>Biais</strong><span class="{price_class}">{format_bias_label(analysis.bias)}</span><small>{heuristic_decision_sentence(analysis)}</small></div>
+                <div class="metric-chip"><strong>Confiance</strong><span>{analysis.confidence}/100</span><div class="confidence-bar"><span></span></div></div>
+                <div class="metric-chip"><strong>DXY</strong><span class="{dxy_class}">{dxy.price:.2f}</span><small>{dxy.change_pct:+.2f}% aujourd'hui</small></div>
+                <div class="metric-chip"><strong>10Y US</strong><span class="{us10y_class}">{us10y.price:.2f}%</span><small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small></div>
               </div>
             </article>
-
-            {render_trade_card(fundamental)}
-            {render_trade_card(technical)}
-            <article class="panel span-12">
+            <article class="panel span-4">
+              <div class="section-kicker">Risk banner</div>
+              <h2>{html.escape(regime_name)}</h2>
+              <div class="trade-verdict {state_tone_class(regime_status)}">{html.escape(regime_status)}</div>
+              <p class="trade-summary">{html.escape(regime_summary)}</p>
+              <div class="geo-grid">
+                <div class="geo-stat"><strong>Data quality</strong><span>{data_quality_score}/100</span><small>{html.escape(data_quality_status)}</small></div>
+                <div class="geo-stat"><strong>Trades actifs</strong><span>{active_trades}</span><small>Signal live separe du ledger</small></div>
+              </div>
+            </article>
+            <article class="panel span-6">
               <div class="section-kicker">Orchestrateur v2</div>
-              <h2>Score global multi-agents</h2>
+              <h2>Decision multi-agents</h2>
               {render_orchestrator_decision_panel(orchestrator_decision)}
             </article>
-            <article class="panel span-12">
+            <article class="panel span-6">
               <div class="section-kicker">Trade Tracker</div>
               <h2>Signal locking et suivi des recommandations</h2>
               {render_trade_tracker_panel(trade_ledger)}
+            </article>
+            <article class="panel span-6">
+              <div class="section-kicker">Fondamental</div>
+              <h2>Lecture macro/fondamentale</h2>
+              {render_trade_card(fundamental)}
+            </article>
+            <article class="panel span-6">
+              <div class="section-kicker">Technique</div>
+              <h2>Timing intraday</h2>
+              {render_trade_card(technical)}
             </article>
           </section>
         </section>
 
         <section class="tab-view" id="market" data-tab-view="market">
-          <section class="content-grid anchor-target">
+          <div class="view-header"><div><div class="section-kicker">Market</div><h2>Prix, proxies et confluence inter-marches</h2><p>Spot classique, IG Weekend Gold, chandelles, correlations, COT et ETF flows.</p></div></div>
+          <section class="layout-market">
             <article class="panel span-12">
               <div class="section-kicker">Source prix & proxy week-end</div>
               <h2>Spot classique et IG Weekend Gold</h2>
-              <div class="ticker-meta">
-                Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
-                Prix spot actuel: {format_number(gold.price)} · Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
-              </div>
+              <div class="ticker-meta">Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>Prix spot actuel: {format_number(gold.price)} · Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}</div>
               {render_weekend_gold_proxy(weekend_gold, gold)}
             </article>
-
-            <article class="panel span-7">
+            <article class="panel span-8">
               <div class="section-kicker">Prix & niveaux</div>
               <h2>Chandelles 5m + ligne de prix live</h2>
               <div class="chart-wrap">{chart_svg}</div>
-              <div class="footer-note" style="margin-top:10px;">
-                Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD.
-                La ligne ambre montre le prix spot en temps reel.
-              </div>
-              <div class="key-levels" style="margin-top:10px;">
-                <div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div>
-                <div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div>
-                <div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div>
-              </div>
+              <div class="footer-note" style="margin-top:10px;">Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD. La ligne ambre montre le prix spot en temps reel.</div>
+              <div class="key-levels"><div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div><div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div><div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div></div>
             </article>
-
-            <article class="panel span-5">
+            <article class="panel span-4">
+              <div class="section-kicker">Regime politique / petrole</div>
+              <h2>Oil / dollar pressure</h2>
+              {render_market_regime_panel(market_regime, cross_asset_analysis)}
+            </article>
+            <article class="panel span-12">
               <div class="section-kicker">Confluence inter-marches</div>
               <h2>Ce qui renforce ou affaiblit Gold</h2>
               {render_cross_asset_panel(cross_asset_analysis, real_yield)}
             </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Regime politique / petrole</div>
-              <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
-              {render_market_regime_panel(market_regime, cross_asset_analysis)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">COT officiel CFTC</div>
-              <h2>Positionnement Gold Futures COMEX</h2>
-              <p class="footer-note">Lecture hebdomadaire officielle CFTC: Managed Money, Producer/Merchant, Swap Dealers, Non-reportable et open interest.</p>
-              {render_cftc_positioning_panel(cftc_positioning)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">ETF flows officiels</div>
-              <h2>WGC + GLD + IAU</h2>
-              <p class="footer-note">Lecture des flux institutionnels gold-backed ETF: WGC global, SPDR GLD via WGC, iShares IAU via BlackRock.</p>
-              {render_etf_flows_panel(etf_flows_analysis)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Agents passifs experimentaux</div>
-              <h2>Market agents</h2>
-              {render_agent_department_panel(agent_results, "Market")}
-            </article>
+            <article class="panel span-6"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2><p class="footer-note">Lecture hebdomadaire officielle CFTC: Managed Money, Producer/Merchant, Swap Dealers, Non-reportable et open interest.</p>{render_cftc_positioning_panel(cftc_positioning)}</article>
+            <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>WGC + GLD + IAU</h2><p class="footer-note">Lecture des flux institutionnels gold-backed ETF: WGC global, SPDR GLD via WGC, iShares IAU via BlackRock.</p>{render_etf_flows_panel(etf_flows_analysis)}</article>
+            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Market agents</h2>{render_agent_department_panel(agent_results, "Market")}</article>
           </section>
         </section>
 
         <section class="tab-view" id="decision" data-tab-view="decision">
-          <section class="summary-grid anchor-target">
-            <article class="summary-box">
-              <div class="section-kicker">Synthese prioritaire</div>
-              <h2>Ce qui compte maintenant</h2>
-              <p class="lead">{html.escape(executive_summary)}</p>
-              {render_what_happens_now(story_lines)}
-            </article>
-
-            <article class="summary-box">
-              <div class="section-kicker">Decision & prudence</div>
-              <h2>Lecture des scores</h2>
+          <div class="view-header"><div><div class="section-kicker">Decision</div><h2>Pourquoi le terminal attend, achete ou vend</h2><p>Orchestrateur, gates, contradictions et separation du signal live avec les trades historises.</p></div></div>
+          <section class="layout-decision">
+            <article class="summary-box span-7"><div class="section-kicker">Synthese prioritaire</div><h2>Ce qui compte maintenant</h2><p class="lead">{html.escape(executive_summary)}</p>{render_what_happens_now(story_lines)}</article>
+            <article class="summary-box span-5">
+              <div class="section-kicker">Decision & prudence</div><h2>Lecture des scores</h2>
               <div class="decision-grid">
-                <div class="decision-item">
-                  <strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong>
-                  <span>{html.escape(global_recommendation.summary)}</span>
-                </div>
-                <div class="decision-item">
-                  <strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong>
-                  <span>{html.escape(fundamental.summary)}</span>
-                </div>
-                <div class="decision-item">
-                  <strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong>
-                  <span>{html.escape(technical.summary)}</span>
-                </div>
-                <div class="decision-item">
-                  <strong class="{geo_class}">Geopolitics & Flows: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong>
-                  <span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span>
-                </div>
-                <div class="decision-item">
-                  <strong>Ce que cela veut dire pour vous</strong>
-                  <span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span>
-                </div>
+                <div class="decision-item"><strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong><span>{html.escape(global_recommendation.summary)}</span></div>
+                <div class="decision-item"><strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong><span>{html.escape(fundamental.summary)}</span></div>
+                <div class="decision-item"><strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong><span>{html.escape(technical.summary)}</span></div>
+                <div class="decision-item"><strong class="{geo_class}">Geopolitics & Flows: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong><span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span></div>
+                <div class="decision-item"><strong>Ce que cela veut dire pour vous</strong><span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span></div>
               </div>
             </article>
-          </section>
-          <section class="content-grid anchor-target">
-            <article class="panel span-12">
-              <div class="section-kicker">Orchestrateur v2</div>
-              <h2>Ponderation, preuves et contre-signaux</h2>
-              {render_orchestrator_decision_panel(orchestrator_decision)}
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Regime decisionnel</div>
-              <h2>WTI/Brent + Hormuz/Oil Shock</h2>
-              {render_market_regime_panel(market_regime, cross_asset_analysis)}
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Data Feed Governance</div>
-              <h2>Qualite, fraicheur et fiabilite des sources</h2>
-              {render_data_quality_panel(data_quality)}
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Agents passifs experimentaux</div>
-              <h2>Decision agents & contradictions</h2>
-              {render_agent_department_panel(agent_results, "Decision")}
-              <div class="module-block">
-                <div class="section-kicker">Contradictions entre agents</div>
-                {render_agent_contradictions(agent_results)}
-              </div>
-            </article>
+            <article class="panel span-12"><div class="section-kicker">Orchestrateur v2</div><h2>Ponderation, preuves et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
+            <article class="panel span-6"><div class="section-kicker">Regime decisionnel</div><h2>WTI/Brent + Hormuz/Oil Shock</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
+            <article class="panel span-6"><div class="section-kicker">Data Feed Governance</div><h2>Qualite, fraicheur et fiabilite des sources</h2>{render_data_quality_panel(data_quality)}</article>
+            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Decision agents & contradictions</h2>{render_agent_department_panel(agent_results, "Decision")}<div class="module-block"><div class="section-kicker">Contradictions entre agents</div>{render_agent_contradictions(agent_results)}</div></article>
           </section>
         </section>
 
         <section class="tab-view" id="technical" data-tab-view="technical">
-          <section class="content-grid anchor-target">
-            <article class="panel span-7">
-              <div class="section-kicker">Technique multi-timeframe</div>
-              <h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>
-              {technical_matrix}
-            </article>
-
-            <article class="panel span-5">
-              <div class="section-kicker">Plan d'execution intraday</div>
-              <h2>Hausse | baisse | attente</h2>
-              <div class="scenario-grid scenario-stack" style="margin-top:10px;">
-                <div class="scenario positive">
-                  <h3>Scenario hausse</h3>
-                  <p>{html.escape(bullish_case)}</p>
-                </div>
-                <div class="scenario negative">
-                  <h3>Scenario baisse</h3>
-                  <p>{html.escape(bearish_case)}</p>
-                </div>
-                <div class="scenario neutral">
-                  <h3>Scenario attente</h3>
-                  <p>{html.escape(wait_case)}</p>
-                </div>
-              </div>
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Agents passifs experimentaux</div>
-              <h2>Technical agents</h2>
-              {render_agent_department_panel(agent_results, "Technical")}
-            </article>
+          <div class="view-header"><div><div class="section-kicker">Technical</div><h2>Timing, invalidation et Elliott Wave</h2><p>La vue technique doit rester lisible: matrice en pleine largeur, scenarios separes, agents sous la preuve.</p></div></div>
+          <section class="layout-technical">
+            <article class="panel span-8"><div class="section-kicker">Technique multi-timeframe</div><h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>{technical_matrix}</article>
+            <article class="panel span-4"><div class="section-kicker">Plan d'execution intraday</div><h2>Hausse | baisse | attente</h2><div class="scenario-grid scenario-stack"><div class="scenario positive"><h3>Scenario hausse</h3><p>{html.escape(bullish_case)}</p></div><div class="scenario negative"><h3>Scenario baisse</h3><p>{html.escape(bearish_case)}</p></div><div class="scenario neutral"><h3>Scenario attente</h3><p>{html.escape(wait_case)}</p></div></div></article>
+            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Technical agents</h2>{render_agent_department_panel(agent_results, "Technical")}</article>
           </section>
         </section>
 
         <section class="tab-view" id="macro" data-tab-view="macro">
-          <section class="content-grid anchor-target">
-            <article class="panel span-7">
-              <div class="section-kicker">Macro | dollar | taux</div>
-              <h2>DXY, FRED officiel, taux reel et lecture fondamentale</h2>
-              <div class="metrics-grid">
-                <div class="metric-chip">
-                  <strong>DXY</strong>
-                  <span class="{dxy_class}">{dxy.price:.2f}</span>
-                  <small>{dxy.change_pct:+.2f}% aujourd'hui</small>
-                </div>
-                <div class="metric-chip">
-                  <strong>10Y US officiel</strong>
-                  <span class="{us10y_class}">{us10y.price:.2f}%</span>
-                  <small>FRED DGS10 prioritaire; Yahoo ^TNX controle</small>
-                </div>
-                <div class="metric-chip">
-                  <strong>10Y reel</strong>
-                  <span class="{real_yield_class}">{format_number(real_yield.price if real_yield else None, 2, '%')}</span>
-                  <small>{'FRED DFII10' if real_yield else 'Indisponible'}</small>
-                </div>
-              </div>
-            </article>
-            {render_trade_card(fundamental)}
-            <article class="panel span-12">
-              <div class="section-kicker">Bloc macro officiel</div>
-              <h2>FRED DGS10 | DGS2 | T10YIE | DFII10</h2>
-              {render_official_macro_panel(official_macro_rates, us10y)}
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Macro Catalysts</div>
-              <h2>Calendrier economique et Fed</h2>
-              <p class="footer-note">FOMC, Fed speeches, BEA high impact et lien CME FedWatch. Le bloc explique pourquoi chaque evenement peut changer la lecture gold.</p>
-              {render_macro_catalysts_panel(macro_catalysts)}
-            </article>
-            <article class="panel span-12">
-              <div class="section-kicker">Agents passifs experimentaux</div>
-              <h2>Macro agents</h2>
-              {render_agent_department_panel(agent_results, "Macro")}
-            </article>
+          <div class="view-header"><div><div class="section-kicker">Macro</div><h2>Dollar, taux reels, Fed et calendrier</h2><p>FRED officiel prioritaire, Yahoo en controle et calendrier macro explicite.</p></div></div>
+          <section class="layout-macro">
+            <article class="panel span-8"><div class="section-kicker">Macro | dollar | taux</div><h2>DXY, FRED officiel, taux reel et lecture fondamentale</h2><div class="metrics-grid"><div class="metric-chip"><strong>DXY</strong><span class="{dxy_class}">{dxy.price:.2f}</span><small>{dxy.change_pct:+.2f}% aujourd'hui</small></div><div class="metric-chip"><strong>10Y US officiel</strong><span class="{us10y_class}">{us10y.price:.2f}%</span><small>FRED DGS10 prioritaire; Yahoo ^TNX controle</small></div><div class="metric-chip"><strong>10Y reel</strong><span class="{real_yield_class}">{format_number(real_yield.price if real_yield else None, 2, '%')}</span><small>{'FRED DFII10' if real_yield else 'Indisponible'}</small></div></div></article>
+            <article class="panel span-4"><div class="section-kicker">Fondamental</div><h2>Lecture fondamentale</h2>{render_trade_card(fundamental)}</article>
+            <article class="panel span-12"><div class="section-kicker">Bloc macro officiel</div><h2>FRED DGS10 | DGS2 | T10YIE | DFII10</h2>{render_official_macro_panel(official_macro_rates, us10y)}</article>
+            <article class="panel span-12"><div class="section-kicker">Macro Catalysts</div><h2>Calendrier economique et Fed</h2><p class="footer-note">FOMC, Fed speeches, BEA high impact et lien CME FedWatch. Le bloc explique pourquoi chaque evenement peut changer la lecture gold.</p>{render_macro_catalysts_panel(macro_catalysts)}</article>
+            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Macro agents</h2>{render_agent_department_panel(agent_results, "Macro")}</article>
           </section>
         </section>
 
         <section class="tab-view" id="geopolitics" data-tab-view="geopolitics">
-          <section class="content-grid anchor-target">
-            <article class="panel span-7">
-              <div class="section-kicker">Geopolitics & Flows</div>
-              <h2>Risque externe qui soutient ou freine l'or</h2>
-              {render_geopolitical_panel(geopolitical_analysis)}
-            </article>
-
-            <article class="panel span-5">
-              <div class="section-kicker">Regime de volatilite</div>
-              <h2>Mode event et prudence SL</h2>
-              {render_event_mode_panel(event_mode)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Regime politique / petrole</div>
-              <h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>
-              {render_market_regime_panel(market_regime, cross_asset_analysis)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">ETF flows officiels</div>
-              <h2>Demande papier institutionnelle</h2>
-              {render_etf_flows_panel(etf_flows_analysis)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Catalyseurs du jour</div>
-              <h2>Messages qui expliquent le mouvement</h2>
-              <p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p>
-              <div class="digest-grid">
-                {render_information_digest(digest_items)}
-              </div>
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Event Facts</div>
-              <h2>Faits detectes, sources et chaine marche</h2>
-              <p class="footer-note">Chaque conclusion geopolitique doit pouvoir pointer vers un fait concret, une source, un niveau de confirmation et une transmission marche.</p>
-              {render_event_facts_panel(event_facts)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Trump / White House</div>
-              <h2>Declarations politiques sourcees</h2>
-              <p class="footer-note">L'agent separe source officielle, agence fiable et rumeur. Une declaration politique ne devient importante que si sa source et sa chaine marche sont explicites.</p>
-              {render_political_statements_panel(political_statements)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Headlines expliquees</div>
-              <h2>Titres sources et impact probable sur l'or</h2>
-              <p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p>
-              <div class="headline-grid">
-                {render_headline_reason_cards(bundle.news, limit=6)}
-              </div>
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Agents passifs experimentaux</div>
-              <h2>Geopolitics & Flows agents</h2>
-              {render_agent_department_panel(agent_results, "Geopolitics & Flows")}
-            </article>
+          <div class="view-header"><div><div class="section-kicker">Geopolitics & Flows</div><h2>Faits concrets, politique et flux</h2><p>La vue separe les faits, les declarations politiques, le regime oil/dollar et les flows.</p></div></div>
+          <section class="layout-geopolitics">
+            <article class="panel span-8"><div class="section-kicker">Geopolitics & Flows</div><h2>Risque externe qui soutient ou freine l'or</h2>{render_geopolitical_panel(geopolitical_analysis)}</article>
+            <article class="panel span-4"><div class="section-kicker">Regime de volatilite</div><h2>Mode event et prudence SL</h2>{render_event_mode_panel(event_mode)}</article>
+            <article class="panel span-12"><div class="section-kicker">Regime politique / petrole</div><h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
+            <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>Demande papier institutionnelle</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
+            <article class="panel span-6"><div class="section-kicker">Catalyseurs du jour</div><h2>Messages qui expliquent le mouvement</h2><p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p><div class="digest-grid">{render_information_digest(digest_items)}</div></article>
+            <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaine marche</h2><p class="footer-note">Chaque conclusion geopolitique doit pouvoir pointer vers un fait concret, une source, un niveau de confirmation et une transmission marche.</p>{render_event_facts_panel(event_facts)}</article>
+            <article class="panel span-12"><div class="section-kicker">Trump / White House</div><h2>Declarations politiques sourcees</h2><p class="footer-note">L'agent separe source officielle, agence fiable et rumeur. Une declaration politique ne devient importante que si sa source et sa chaine marche sont explicites.</p>{render_political_statements_panel(political_statements)}</article>
+            <article class="panel span-12"><div class="section-kicker">Headlines expliquees</div><h2>Titres sources et impact probable sur l'or</h2><p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p><div class="headline-grid">{render_headline_reason_cards(bundle.news, limit=6)}</div></article>
+            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Geopolitics & Flows agents</h2>{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
           </section>
         </section>
 
         <section class="tab-view" id="inspector" data-tab-view="inspector">
-          <section class="content-grid anchor-target">
-            <article class="panel span-12">
-              <div class="section-kicker">Monitoring / Audit / Inspector</div>
-              <h2>Flux, sources, agents et trades</h2>
-              {render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}
-            </article>
-          </section>
+          <div class="view-header"><div><div class="section-kicker">Inspector</div><h2>Audit sources, agents, gates et trades</h2><p>Tout ce qui explique pourquoi une decision ou un trade existe.</p></div></div>
+          <section class="layout-inspector"><article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}</article></section>
         </section>
 
         <section class="tab-view" id="reports" data-tab-view="reports">
-          <section class="content-grid anchor-target">
+          <div class="view-header"><div><div class="section-kicker">Reports</div><h2>Exports et documentation locale</h2><p>Les rapports restent simples: chemins, donnees et avertissement.</p></div></div>
+          <section class="layout-reports">
             {render_ai_summary(ai_analysis)}
-
-            <article class="panel span-12">
-              <div class="section-kicker">Exports</div>
-              <h2>Rapports disponibles</h2>
-              <div class="decision-grid">
-                <div class="decision-item">
-                  <strong>Markdown</strong>
-                  <span>Le rapport principal est genere dans reports/xauusd_report.md.</span>
-                </div>
-                <div class="decision-item">
-                  <strong>JSON</strong>
-                  <span>Le payload structure est genere dans reports/xauusd_data.json.</span>
-                </div>
-                <div class="decision-item">
-                  <strong>Dernier calcul</strong>
-                  <span>{html.escape(generated_at)}</span>
-                </div>
-              </div>
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Fondation multi-agents passive</div>
-              <h2>Inventaire agents Phase 5</h2>
-              {render_agent_department_panel(agent_results, "Market")}
-              {render_agent_department_panel(agent_results, "Decision")}
-              {render_agent_department_panel(agent_results, "Technical")}
-              {render_agent_department_panel(agent_results, "Macro")}
-              {render_agent_department_panel(agent_results, "Geopolitics & Flows")}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Source Registry</div>
-              <h2>Gouvernance des flux d'information</h2>
-              {render_data_quality_panel(data_quality)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Trade Ledger</div>
-              <h2>Historique des TradePlan verrouilles</h2>
-              {render_trade_tracker_panel(trade_ledger)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Monitoring Inspector</div>
-              <h2>Audit sources, agents et trades</h2>
-              {render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}
-            </article>
-
-            <article class="panel span-12">
-              <div class="section-kicker">Avertissement</div>
-              <div class="footer-note">
-                Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise.
-              </div>
-            </article>
+            <article class="panel span-6"><div class="section-kicker">Exports</div><h2>Rapports disponibles</h2><div class="decision-grid"><div class="decision-item"><strong>Markdown</strong><span>Le rapport principal est genere dans reports/xauusd_report.md.</span></div><div class="decision-item"><strong>JSON</strong><span>Le payload structure est genere dans reports/xauusd_data.json.</span></div><div class="decision-item"><strong>Dernier calcul</strong><span>{html.escape(generated_at)}</span></div></div></article>
+            <article class="panel span-6"><div class="section-kicker">Avertissement</div><h2>Usage</h2><div class="footer-note">Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise. Un TradePlan historise ne doit pas etre confondu avec le signal live.</div></article>
+            <article class="panel span-12"><div class="section-kicker">Fondation multi-agents passive</div><h2>Inventaire agents Phase 5</h2>{render_agent_department_panel(agent_results, "Market")}{render_agent_department_panel(agent_results, "Decision")}{render_agent_department_panel(agent_results, "Technical")}{render_agent_department_panel(agent_results, "Macro")}{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
+            <article class="panel span-12"><div class="section-kicker">Source Registry</div><h2>Gouvernance des flux d'information</h2>{render_data_quality_panel(data_quality)}</article>
+            <article class="panel span-12"><div class="section-kicker">Trade Ledger</div><h2>Historique des TradePlan verrouilles</h2>{render_trade_tracker_panel(trade_ledger)}</article>
+            <article class="panel span-12"><div class="section-kicker">Monitoring Inspector</div><h2>Audit sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}</article>
           </section>
         </section>
       </div>
@@ -12595,7 +11670,6 @@ def render_dashboard_clarity_v2(
 {live_script}
 </body>
 </html>"""
-
 
 def extract_dashboard_main_inner(html_document: str) -> str:
     marker = '<main class="page" id="dashboard-app">'

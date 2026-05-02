@@ -26,6 +26,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from explanation_layer import (
+    ExplanationContext,
+    ExplanationLayer,
+    render_experimental_agent,
+)
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -4090,15 +4096,21 @@ def build_market_regime_analysis(
         )
 
     if oil_shock_headlines and oil_change <= -0.35:
+        deesc_ctx = ExplanationContext(
+            fact=f"{oil_shock_headlines} headline(s) Iran/Hormuz/petrole detectees mais oil recule",
+            evidence=f"WTI/Brent: variation max {oil_change:+.2f}%, DXY {dxy.change_pct:+.2f}%",
+            confirmation=(
+                "necessiterait WTI > +1.0% sur 1h ou DXY > +0.50% pour confirmer un choc"
+            ),
+            impact="prime de risque qui sort de l'or si oil et volatilite se detendent",
+            action="WATCH_SELL gold tant que oil baisse, sinon NO_TRADE refuge",
+        )
         return MarketRegimeAnalysis(
             name="De-escalation / Oil Relief",
             status="SURVEILLANCE",
             score=round(clamp(45 + oil_shock_headlines * 5, 0, 100)),
             gold_impact="prime de risque en reflux",
-            summary=(
-                "Le theme Iran/Hormuz existe, mais le petrole ne confirme pas un choc. "
-                "La prime de risque peut sortir de gold si oil et volatilite se detendent."
-            ),
+            summary=ExplanationLayer.geopolitical_regime(deesc_ctx),
             reasons=reasons[:6],
         )
 
@@ -4178,11 +4190,17 @@ def build_elliott_wave_agent(gold: SymbolSnapshot) -> AgentResult:
             bias="NEUTRAL",
             score=50,
             confidence=35,
-            summary="Lecture Elliott passive indisponible: pas assez de points pour compter les swings.",
+            summary=render_experimental_agent(
+                agent_name="ElliottWaveAgent",
+                hypothesis="indisponible",
+                blocking_reason=(
+                    "Historique intraday insuffisant pour pivots multi-timeframe"
+                ),
+            ),
             evidence=[
                 AgentEvidence(
                     "Base theorique",
-                    "Motive 5 vagues, correction ABC, Fibonacci, avec prudence sur les sequences modernes.",
+                    "Motive 5 vagues, correction ABC, Fibonacci. Detection v3 prevue avec Chart Store OHLC.",
                     "elliottwave-forecast.com/elliott-wave-theory",
                 )
             ],
@@ -4196,21 +4214,37 @@ def build_elliott_wave_agent(gold: SymbolSnapshot) -> AgentResult:
     short_change = ((recent - reference_5) / reference_5) * 100 if reference_5 else 0.0
     absolute_move = abs(medium_change)
 
+    elliott_blocking_reason = (
+        "Aucun Chart Store OHLC multi-timeframe avant Elliott Engine v3"
+    )
+
     if medium_change > 0.12 and short_change >= -0.08:
         bias = "BUY"
         score = clamp_score(56 + min(18, absolute_move * 8))
         phase = "sequence haussiere incomplete"
-        summary = "Lecture Elliott passive: le prix garde une sequence motive haussiere tant que le dernier repli reste contenu."
+        summary = render_experimental_agent(
+            agent_name="ElliottWaveAgent",
+            hypothesis="impulsion haussiere",
+            blocking_reason=elliott_blocking_reason,
+        )
     elif medium_change < -0.12 and short_change <= 0.08:
         bias = "SELL"
         score = clamp_score(44 - min(18, absolute_move * 8))
         phase = "sequence baissiere incomplete"
-        summary = "Lecture Elliott passive: le prix garde une sequence motive baissiere tant que le rebond court reste limite."
+        summary = render_experimental_agent(
+            agent_name="ElliottWaveAgent",
+            hypothesis="impulsion baissiere",
+            blocking_reason=elliott_blocking_reason,
+        )
     else:
         bias = "NEUTRAL"
         score = 50
         phase = "correction / range probable"
-        summary = "Lecture Elliott passive: la structure ressemble davantage a une correction qu'a une impulsion propre."
+        summary = render_experimental_agent(
+            agent_name="ElliottWaveAgent",
+            hypothesis="structure corrective",
+            blocking_reason=elliott_blocking_reason,
+        )
 
     return AgentResult(
         name="ElliottWaveAgent",

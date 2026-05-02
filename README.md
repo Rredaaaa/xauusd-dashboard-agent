@@ -79,6 +79,7 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - [Architecture](docs/ARCHITECTURE.md)
 - [Plan v2.0](docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md)
 - [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
+- [Skills Aureum pour reprise Claude](skills/README.md)
 
 ## Tests
 

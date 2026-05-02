@@ -1,0 +1,75 @@
+---
+name: aureum-data-preflight
+description: Verifications de sources avant analyse v3.0: availability, freshness, quality, fallback et mode degrade.
+category: data
+---
+
+# Aureum Data Preflight
+
+## But
+
+Verifier les sources avant que les agents et l'orchestrateur produisent une decision.
+
+Le terminal ne doit pas afficher une conclusion forte si une source critique est absente, stale ou contradictoire.
+
+## Sources a verifier
+
+- Prix XAU/USD principal;
+- IG Weekend Gold si contexte week-end;
+- DXY;
+- US yields FRED;
+- real yield FRED;
+- WTI/Brent;
+- news feeds;
+- Event Facts;
+- CFTC COT;
+- WGC/GLD/IAU ETF flows;
+- Chart Store OHLC quand disponible;
+- Trade Ledger;
+- Audit Log.
+
+## Status globaux
+
+- `READY`: tout est exploitable.
+- `USABLE`: quelques sources secondaires manquent.
+- `DEGRADED`: source importante stale ou weak.
+- `NO_TRADE_DATA`: le dashboard peut afficher, mais ne doit pas creer de trade.
+- `OFFLINE`: sources critiques absentes.
+
+## Sortie SourceQuality
+
+```text
+source_id
+source_name
+tier
+last_update
+freshness_seconds
+status
+is_critical
+missing
+stale
+confidence
+message_for_inspector
+```
+
+## Regles UI
+
+- Dashboard principal: afficher seulement le statut utile.
+- Inspector: afficher details complets.
+- Decision: expliquer seulement les sources qui changent la decision.
+
+## Exemple
+
+```text
+Status: DEGRADED.
+Cause: FRED OK, prix XAU stale, Google News weak.
+Impact: trade bloque, mais lecture macro/market reste consultable.
+```
+
+## Tests
+
+- source critique missing -> `NO_TRADE_DATA`;
+- source secondaire missing -> `USABLE`;
+- stale price -> bloque trade;
+- OHLC absent -> Elliott `INSUFFICIENT_HISTORY`;
+- news weak -> degrade NewsFact confidence.

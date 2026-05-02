@@ -349,10 +349,14 @@ Actions:
    - `skills/aureum-editorial-style/SKILL.md`;
    - `skills/aureum-news-engine/SKILL.md`;
    - `skills/aureum-elliott-wave/SKILL.md`;
+   - `skills/aureum-chart-store/SKILL.md`;
+   - `skills/aureum-data-preflight/SKILL.md`;
    - `skills/aureum-gold-macro/SKILL.md`;
    - `skills/aureum-geopolitical-oil/SKILL.md`;
    - `skills/aureum-risk-manager/SKILL.md`;
-   - `skills/aureum-trade-quality-gate/SKILL.md`.
+   - `skills/aureum-scenario-orchestrator/SKILL.md`;
+   - `skills/aureum-trade-quality-gate/SKILL.md`;
+   - `skills/aureum-replay-shadow-terminal/SKILL.md`.
 3. Chaque skill doit definir:
    - role;
    - inputs;

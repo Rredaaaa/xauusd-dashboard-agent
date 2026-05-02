@@ -31,6 +31,11 @@ from explanation_layer import (
     ExplanationLayer,
     render_experimental_agent,
 )
+from news_facts import (
+    NewsFact,
+    build_news_fact as _build_news_fact_v3,
+    deduplicate_news_facts,
+)
 
 HEADERS = {
     "User-Agent": (
@@ -5872,7 +5877,16 @@ def build_event_market_chain(themes: list[str], item: NewsItem) -> str:
     )
 
 
-def build_event_fact_from_news(item: NewsItem) -> EventFact:
+def build_event_fact_from_news(
+    item: NewsItem,
+    *,
+    wti: SymbolSnapshot | None = None,
+    brent: SymbolSnapshot | None = None,
+    dxy: SymbolSnapshot | None = None,
+    us10y: SymbolSnapshot | None = None,
+    gold: SymbolSnapshot | None = None,
+) -> NewsFact:
+    """Construit un NewsFact v3 a partir d'un NewsItem et des snapshots marche."""
     text = clean_display_text(item.title)
     actors = detect_fact_labels(text, FACT_ACTOR_KEYWORDS) or ["Marche"]
     locations = detect_fact_labels(text, FACT_LOCATION_KEYWORDS) or ["Global"]
@@ -5880,7 +5894,7 @@ def build_event_fact_from_news(item: NewsItem) -> EventFact:
     confirmation_level, base_confidence = classify_confirmation_level(item)
     impact_bias, impact_text = explain_headline_gold_impact(item)
     confidence = round(clamp(base_confidence + min(abs(item.score) * 3, 9), 35, 92))
-    return EventFact(
+    return _build_news_fact_v3(
         title=text,
         source=clean_display_text(item.source),
         source_url=item.link,
@@ -5894,39 +5908,40 @@ def build_event_fact_from_news(item: NewsItem) -> EventFact:
         gold_impact=impact_text,
         impact_bias=impact_bias,
         confidence=confidence,
+        wti_change=wti.change_pct if wti else None,
+        brent_change=brent.change_pct if brent else None,
+        dxy_change=dxy.change_pct if dxy else None,
+        rates_change_bps=(us10y.change_abs * 100) if us10y else None,
+        gold_change=gold.change_pct if gold else None,
     )
 
 
-def build_event_facts(news: list[NewsItem], limit: int = 6) -> list[EventFact]:
-    facts: list[EventFact] = []
-    seen: set[str] = set()
+def build_event_facts(
+    news: list[NewsItem],
+    limit: int = 6,
+    *,
+    wti: SymbolSnapshot | None = None,
+    brent: SymbolSnapshot | None = None,
+    dxy: SymbolSnapshot | None = None,
+    us10y: SymbolSnapshot | None = None,
+    gold: SymbolSnapshot | None = None,
+) -> list[NewsFact]:
+    """Construit les NewsFacts v3 avec deduplication semantique et snapshots marche."""
     priority_categories = {
-        "geopolitical",
-        "risk_vix",
-        "gold",
-        "events_fomc",
-        "events_calendar",
-        "macro_fed",
-        "macro_cpi",
-        "macro_nfp",
-        "sentiment_cot",
-        "sentiment_etf",
-        "sentiment_oi",
+        "geopolitical", "risk_vix", "gold", "events_fomc", "events_calendar",
+        "macro_fed", "macro_cpi", "macro_nfp", "sentiment_cot", "sentiment_etf", "sentiment_oi",
     }
     candidates = [
         item
-        for item in pick_story_headlines(news, limit=max(limit * 3, 12))
+        for item in pick_story_headlines(news, limit=max(limit * 3, 18))
         if item.category in priority_categories or abs(item.score) >= 1
     ]
-    for item in candidates:
-        key = normalize_title_for_dedupe(item.title)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        facts.append(build_event_fact_from_news(item))
-        if len(facts) >= limit:
-            break
-    return facts
+    raw_facts = [
+        build_event_fact_from_news(item, wti=wti, brent=brent, dxy=dxy, us10y=us10y, gold=gold)
+        for item in candidates
+    ]
+    deduped = deduplicate_news_facts(raw_facts, threshold=0.55)
+    return deduped[:limit]
 
 
 def build_information_digest_items(
@@ -6527,8 +6542,8 @@ def build_orchestrator_decision_from_payload(data: dict[str, Any] | None) -> Orc
     )
 
 
-def build_event_fact_from_payload(data: dict[str, Any]) -> EventFact:
-    return EventFact(
+def build_event_fact_from_payload(data: dict[str, Any]) -> NewsFact:
+    return _build_news_fact_v3(
         title=str(data.get("title", "")),
         source=str(data.get("source", "Source inconnue")),
         source_url=str(data.get("source_url", "")),
@@ -8260,30 +8275,63 @@ def render_event_mode_panel(event_mode: EventModeAnalysis | None) -> str:
     """.strip()
 
 
-def render_event_facts_panel(event_facts: list[EventFact]) -> str:
+def _trader_action_badge(action: str) -> str:
+    colors = {
+        "WATCH_BUY": "bull",
+        "WATCH_SELL": "bear",
+        "NO_TRADE": "muted",
+        "WAIT": "muted",
+    }
+    css = colors.get(action, "muted")
+    return f'<span class="badge badge-{css}">{html.escape(action)}</span>'
+
+
+def render_event_facts_panel(event_facts: list[NewsFact]) -> str:
     cards: list[str] = []
     for fact in event_facts[:6]:
         tone_class = "bullish" if fact.impact_bias == "bullish" else "bearish" if fact.impact_bias == "bearish" else "neutral"
         source_link = (
-            f'<a href="{html.escape(fact.source_url)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>'
-            if fact.source_url
-            else ""
+            f'<a href="{html.escape(fact.source_url)}" target="_blank" rel="noopener noreferrer">Source</a>'
+            if fact.source_url else ""
         )
+        # Confirmation marche — affichage compact (NewsFact v3 uniquement)
+        mc = getattr(fact, "market_confirmation", None)
+        mc_html = (
+            f'<p class="news-fact-confirmation">{html.escape(mc.summary)}</p>'
+            if mc and mc.summary else ""
+        )
+        trader_action = getattr(fact, "trader_action", "WAIT")
+        trader_action_detail = getattr(fact, "trader_action_detail", "")
+        why_it_matters = getattr(fact, "why_it_matters", "")
+        source_tier_label = getattr(fact, "source_tier_label", "")
+        fact_type_label = getattr(fact, "fact_type_label", fact.confirmation_level)
+
+        # Acteurs lisibles
+        actors_str = html.escape(", ".join(fact.actors)) if fact.actors else ""
+
         cards.append(
             f"""
             <article class="headline-brief {tone_class}">
               <div class="headline-brief-top">
-                <div class="headline-brief-source">{html.escape(fact.source)}</div>
+                <div class="headline-brief-source">
+                  {html.escape(fact.source)}
+                  {f'<span class="source-tier">{html.escape(source_tier_label)}</span>' if source_tier_label else ''}
+                </div>
                 <div class="headline-brief-time">{html.escape(format_timestamp_for_humans(fact.published_at))}</div>
               </div>
-              <div class="section-kicker">Fait detecte · {html.escape(fact.confirmation_level)} · confiance {fact.confidence}/100</div>
+              <div class="section-kicker">
+                {html.escape(fact_type_label)} · confiance {fact.confidence}/100
+                {f'· {html.escape(actors_str)}' if actors_str else ''}
+              </div>
               <h3>{html.escape(fact.title)}</h3>
-              {f'<p><strong>Acteurs:</strong> {html.escape(", ".join(fact.actors))}</p>' if fact.actors else ''}
-              {f'<p><strong>Lieux:</strong> {html.escape(", ".join(fact.locations))}</p>' if fact.locations else ''}
-              {f'<p><strong>Themes:</strong> {html.escape(", ".join(fact.themes))}</p>' if fact.themes else ''}
-              <p><strong>Chaine marche:</strong> {html.escape(fact.market_chain)}</p>
-              <p><strong>Impact gold:</strong> {html.escape(fact.gold_impact)}</p>
-              {source_link}
+              {f'<p class="news-fact-why"><strong>Pourquoi:</strong> {html.escape(why_it_matters)}</p>' if why_it_matters else ''}
+              {mc_html}
+              <p class="news-fact-impact"><strong>Impact or:</strong> {html.escape(fact.gold_impact)}</p>
+              <div class="news-fact-action">
+                {_trader_action_badge(trader_action)}
+                {f'<span class="action-detail">{html.escape(trader_action_detail)}</span>' if trader_action_detail else ''}
+              </div>
+              {f'<div class="news-fact-link">{source_link}</div>' if source_link else ''}
             </article>
             """.strip()
         )
@@ -8291,7 +8339,7 @@ def render_event_facts_panel(event_facts: list[EventFact]) -> str:
     if not cards:
         return (
             '<div class="empty-state">'
-            "Aucun fait structure detecte pour le moment. Les headlines restent disponibles dans le bloc suivant."
+            "Aucun fait structure detecte. Headlines disponibles dans le bloc suivant."
             "</div>"
         )
     return '<div class="headline-grid">' + "".join(cards) + "</div>"
@@ -11898,7 +11946,9 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         etf_flows_analysis=live_bundle.etf_flows_analysis,
     )
     geopolitical_analysis = analysis.geopolitical
-    event_facts = build_event_facts(live_bundle.news)
+    event_facts = build_event_facts(
+        live_bundle.news, wti=wti, brent=brent, dxy=dxy, us10y=us10y, gold=gold
+    )
     political_statements = live_bundle.political_statements
     data_quality = build_data_quality_snapshot(
         gold,
@@ -12082,7 +12132,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         etf_flows_analysis=etf_flows_analysis,
     )
     geopolitical_analysis = analysis.geopolitical
-    event_facts = build_event_facts(news)
+    event_facts = build_event_facts(news, dxy=dxy, us10y=us10y, gold=gold)
     political_statements = build_political_statements(news)
     data_quality = build_data_quality_snapshot(
         gold,

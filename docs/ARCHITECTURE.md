@@ -27,6 +27,11 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Trade Ledger: signal locking append-only.
 - Inspector: audit sources/agents/trades.
 
+Note de passation v3.0:
+- l'architecture v2 reste concentree dans `xauusd_agent.py`;
+- la v3.0 doit commencer par l'audit editorial et la couche d'explication avant d'ajouter de nouveaux moteurs;
+- `ElliottWaveAgent` est actuellement passif et experimental; il doit etre sorti du scoring ou refondu avec un vrai Chart Store OHLC multi-timeframe.
+
 ## Dataclasses importantes
 
 - `BriefingBundle`: paquet complet utilise par le rendu.
@@ -66,4 +71,4 @@ L'etat de l'onglet actif est conserve cote client via `localStorage` pour eviter
 - Ajouter une API OHLC spot XAU/USD professionnelle.
 - Ajouter alertes/notifications de TradePlan exploitable.
 - Remplacer certains feeds news par des flux institutionnels plus fiables.
-- Refaire le design structurel des vues avec composants dedies.
+- Suivre le plan v3.0: `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.

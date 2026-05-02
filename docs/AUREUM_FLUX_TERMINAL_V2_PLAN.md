@@ -1,9 +1,9 @@
 # Aureum Flux Terminal 2.0 - Plan de conception et d'implementation
 
-Version du document: 1.4
-Date: 2026-04-29
-Statut: roadmap stable mise a jour avec gouvernance des flux et suivi des trades
-Objectif: servir de base officielle pour toutes les evolutions v2.0 du dashboard XAU/USD.
+Version du document: 1.5
+Date: 2026-05-02
+Statut: v2.0 terminee apres Phase 18, passation ouverte vers v3.0
+Objectif: archive officielle des evolutions v2.0 du dashboard XAU/USD.
 
 ## 0. Stabilite du plan
 
@@ -16,6 +16,11 @@ Regles:
 - apres chaque phase finalisee: tests adaptes, commit et push GitHub;
 - le plan ne doit plus etre modifie jusqu'a la livraison finale, sauf demande et validation explicites de l'utilisateur;
 - les avis externes Claude/Antigravity sont integres dans cette version, mais la source officielle reste ce document.
+
+Note 2026-05-02:
+- les phases v2.0 jusqu'a la Phase 18 sont terminees;
+- la suite du projet doit partir du document `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`;
+- la v3.0 traite l'audit editorial, News Facts v3, Chart Store, Elliott Engine v3, Scenario Engine et Trade Tracker v3.
 
 ## 1. Vision generale
 
@@ -1413,7 +1418,7 @@ Critere de fin:
 
 ### Phase 8 - Trump / Political Statements
 
-Statut: prochaine phase.
+Statut: terminee.
 
 Objectif:
 - suivre les declarations politiques a fort impact;
@@ -1894,7 +1899,7 @@ Critere de fin:
 
 ## 15. Ordre recommande de livraison
 
-Ordre prioritaire:
+Ordre prioritaire historique v2.0:
 
 1. Finaliser Phase 0 - Audit de reprise.
 2. Conserver Phase 1 - Base stable.
@@ -1914,13 +1919,13 @@ Ordre prioritaire:
 16. Finaliser Phase 15 - Design Aureum Flux Terminal 2.0.
 17. Faire Phase 16 - Monitoring / Audit / Inspector.
 18. Faire Phase 17 - Documentation utilisateur.
-19. Faire Phase 18 - Redesign structurel du terminal, en commencant par Phase 18A.
+19. Faire Phase 18 - Redesign structurel du terminal.
 
 Point de reprise officiel:
 - Phase 0: faite;
 - Phase 1: faite;
-- Phases 2 a 17: finalisees et synchronisees;
-- prochaine phase a lancer uniquement apres validation utilisateur: Phase 18A.
+- Phases 2 a 18: finalisees et synchronisees;
+- prochaine phase officielle: v3.0 Phase 19, uniquement apres validation utilisateur.
 
 ## 16. Regles de prudence
 
@@ -2006,10 +2011,10 @@ Commencer par les fondations les plus utiles:
 9. Phase 18 - redesign structurel UI en sous-phases courtes.
 
 Decision apres Phase 17:
-- ne plus ajouter de nouvelle logique d'analyse avant d'avoir corrige le design structurel;
-- commencer par Phase 18A pour figer la specification UI;
-- livrer le redesign par sous-phases afin de limiter les risques;
-- garder le moteur d'analyse intact pendant toute la Phase 18.
+- le redesign structurel Phase 18 a ete livre;
+- la prochaine priorite n'est plus le visuel, mais l'intelligence utilisateur;
+- la suite officielle est documentee dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`;
+- commencer par v3.0 Phase 19 puis Phase 20 avant toute nouvelle logique majeure.
 
 Ces elements corrigent les plus gros problemes restants:
 - design encore trop proche de l'ancien monopage;
@@ -2020,3 +2025,12 @@ Ces elements corrigent les plus gros problemes restants:
 - besoin d'une hierarchie visuelle plus professionnelle.
 
 Une fois ces bases solides, le terminal pourra reprendre l'enrichissement fonctionnel sans accumuler de dette visuelle.
+
+Decision apres Phase 18:
+- Aureum Flux Terminal 2.0 est considere comme stabilise;
+- les problemes restants appartiennent a la v3.0:
+  - audit phrase par phrase;
+  - reecriture des news en faits concrets;
+  - Elliott Agent non fiable tant qu'il n'a pas de vraie charte OHLC;
+  - ajout de `WATCH_BUY` / `WATCH_SELL`;
+  - replay, shadow terminal, preflight, settings et reports v3.

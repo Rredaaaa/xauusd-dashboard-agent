@@ -63,6 +63,8 @@ Vue technique:
 - scenarios hausse/baisse/attente;
 - agents techniques, dont Elliott Wave Agent.
 
+Note: dans la v2, Elliott Wave est un agent passif experimental. Il ne doit pas etre lu comme un vrai comptage de vagues multi-timeframe tant que la v3.0 n'a pas livre le Chart Store OHLC et l'Elliott Engine v3.
+
 ### Macro
 
 Vue macro:
@@ -174,6 +176,7 @@ Ce fichier trace:
 
 - `BUY` ou `SELL` ne veut pas dire entrer au marche sans verification.
 - `WAIT` veut dire que le terminal refuse de valider une direction exploitable.
+- La v3.0 ajoutera des statuts intermediaires `WATCH_BUY` et `WATCH_SELL` pour afficher les setups a surveiller sans forcer un trade.
 - Un regime Hormuz/Oil Shock peut inverser la lecture classique geopolitique -> gold.
 - Si le petrole capte la liquidite et que le dollar monte, gold peut baisser malgre le risque geopolitique.
 - Le spread, l'heure, la volatilite et le calendrier macro doivent etre verifies avant toute decision.

@@ -4,6 +4,10 @@ Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il 
 
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
+Etat roadmap:
+- v2.0 est stabilisee apres la Phase 18;
+- la suite officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md).
+
 ## Lancer sur Mac
 
 Depuis le dossier du projet:
@@ -74,6 +78,7 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - [Sources et scoring](docs/SOURCES_AND_SCORING.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Plan v2.0](docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md)
+- [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
 
 ## Tests
 

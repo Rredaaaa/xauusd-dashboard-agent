@@ -344,7 +344,7 @@ def _build_confirmation_summary(conf: MarketConfirmation, is_geo_oil: bool) -> s
 
     if conf.oil_trend != "indisponible":
         sign = "+" if (conf.oil_change_pct or 0) >= 0 else ""
-        status = "confirme" if conf.oil_confirms else "ne confirme pas"
+        status = "confirme" if conf.oil_confirms else "diverge"
         parts.append(f"Oil {sign}{conf.oil_change_pct:.1f}% ({status})")
 
     if conf.dxy_change_pct is not None:
@@ -373,7 +373,7 @@ def _build_confirmation_summary(conf: MarketConfirmation, is_geo_oil: bool) -> s
     elif score == 1:
         verdict = "Confirmation faible."
     else:
-        verdict = "Marche ne confirme pas."
+        verdict = "Validation marche absente."
 
     return f"{verdict} {' | '.join(parts)}."
 
@@ -412,7 +412,7 @@ def build_trader_action(
         return (
             "WAIT",
             (
-                "Fait bullish mais marche ne confirme pas encore. "
+                "Fait bullish sans validation marche. "
                 "Attendre oil/DXY/taux dans le bon sens avant d'entrer."
             ),
         )
@@ -430,7 +430,7 @@ def build_trader_action(
         return (
             "WAIT",
             (
-                "Fait bearish mais marche ne confirme pas encore. "
+                "Fait bearish sans validation marche. "
                 "Attendre DXY/taux/oil dans le bon sens."
             ),
         )

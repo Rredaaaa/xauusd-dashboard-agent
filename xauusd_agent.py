@@ -4759,7 +4759,7 @@ def build_regime_component(
 ) -> OrchestratorComponent:
     score, bias, reason = regime_directional_score(market_regime)
     if event_mode is not None and event_mode.active:
-        reason = f"{reason} Mode event actif: le regime impose une prudence execution."
+        reason = f"{reason} Mode event actif: le regime impose un risque execution renforce."
     return OrchestratorComponent(
         key="regime",
         label="Regime",

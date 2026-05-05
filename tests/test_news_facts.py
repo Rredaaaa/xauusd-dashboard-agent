@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 
+from explanation_layer import validate_phrase
 from news_facts import (
     MarketConfirmation,
     NewsFact,
@@ -199,7 +200,8 @@ class MarketConfirmationTests(unittest.TestCase):
             gold_change=-0.5,
         )
         self.assertEqual(conf.confirmation_score, 0)
-        self.assertIn("ne confirme pas", conf.summary)
+        self.assertIn("Validation marche absente", conf.summary)
+        self.assertEqual(validate_phrase(conf.summary), [])
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +223,12 @@ class TraderActionTests(unittest.TestCase):
     def test_wait_when_bullish_but_not_confirmed(self):
         action, detail = build_trader_action("bullish", self._conf(0), "unconfirmed_headline", 72)
         self.assertEqual(action, "WAIT")
+        self.assertEqual(validate_phrase(detail), [])
 
     def test_watch_sell_when_bearish_and_confirmed(self):
         action, detail = build_trader_action("bearish", self._conf(2), "confirmed_fact", 80)
         self.assertEqual(action, "WATCH_SELL")
+        self.assertEqual(validate_phrase(detail), [])
 
     def test_no_trade_on_rumor(self):
         action, detail = build_trader_action("bullish", self._conf(3), "rumor", 90)
@@ -285,6 +289,22 @@ class NewsfactIntegrationTests(unittest.TestCase):
             market_chain="", gold_impact="", impact_bias="bullish", confidence=40,
         )
         self.assertEqual(fact.trader_action, "NO_TRADE")
+
+    def test_rendered_news_fact_fields_pass_editorial_validator(self):
+        facts = [
+            _iran_fact(wti_change=-2.5, brent_change=-2.0, dxy_change=+0.1, gold_change=-0.2),
+            _iran_fact(wti_change=+1.5, brent_change=+1.2, dxy_change=-0.3, gold_change=+0.4),
+            _fed_fact(dxy_change=-0.4, rates_change_bps=-4.0, gold_change=+0.5),
+        ]
+        for fact in facts:
+            fields = [
+                fact.why_it_matters,
+                fact.market_confirmation.summary,
+                fact.gold_impact,
+                fact.trader_action_detail,
+            ]
+            for text in fields:
+                self.assertEqual(validate_phrase(text), [], text)
 
 
 # ---------------------------------------------------------------------------

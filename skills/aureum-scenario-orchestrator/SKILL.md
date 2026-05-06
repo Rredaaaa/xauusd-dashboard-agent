@@ -69,3 +69,49 @@ Il ne doit pas aller dans le Trade Ledger comme trade actif, mais peut aller dan
 - trigger + quality gate OK -> TRADE;
 - source stale critique -> NO_TRADE ou WAIT;
 - Elliott unclear -> poids 0.
+
+## Phase 23 Contract
+
+### Role
+
+Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou refus.
+
+### Inputs
+
+- Agent outputs;
+- NewsFacts;
+- market regime;
+- technical context;
+- macro context;
+- risk manager decision.
+
+### Outputs
+
+- scenario principal;
+- scenario alternatif;
+- status v3;
+- trigger;
+- invalidation;
+- reasons.
+
+### Methodologie
+
+1. Separar biais marche et trade exploitable.
+2. Pondérer selon regime.
+3. Identifier contradictions.
+4. Generer trigger/invalidation.
+5. Deleguer la validation trade au Risk Manager.
+
+### Limites
+
+- Ne pas masquer les contradictions.
+- Ne pas forcer un trade pour reduire WAIT.
+- Elliott unclear vaut poids zero.
+
+### Bons exemples
+
+- `WATCH_SELL: correlations et technique alignes, trade bloque jusqu'a cloture M15 sous support.`
+
+### Mauvais exemples
+
+- `SELL car score global 55/100` sans trigger.

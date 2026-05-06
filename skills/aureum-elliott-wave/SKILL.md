@@ -102,3 +102,50 @@ Statut: WATCH_BUY, pas TRADE_BUY tant que le declencheur n'est pas confirme.
 - violation regle vague 2;
 - wave 3 shortest invalid;
 - insufficient history.
+
+## Phase 23 Contract
+
+### Role
+
+Identifier la structure de vague probable uniquement apres livraison du Chart Store.
+
+### Inputs
+
+- OHLC multi-timeframe;
+- pivots valides;
+- Fibonacci retracements/extensions;
+- confirmations des autres agents;
+- source quality.
+
+### Outputs
+
+- `WaveScenario`;
+- scenario principal;
+- scenario alternatif;
+- invalidation;
+- trigger;
+- targets;
+- statut `UNCLEAR` si doute.
+
+### Methodologie
+
+1. Lire D1/H4 pour le degre superieur.
+2. Lire H1/M15 pour la sous-vague.
+3. Valider les regles Elliott.
+4. Calculer Fibonacci.
+5. Produire scenario principal et alternatif.
+6. Refuser toute conclusion si l'historique est insuffisant.
+
+### Limites
+
+- Ne pas scorer avant Phase 27.
+- Ne pas annoncer vague 3 sans trigger.
+- Ne pas ignorer corrections complexes WXY/WXYXZ.
+
+### Bons exemples
+
+- `WATCH_BUY: fin possible vague 2 de 3, trigger cassure sommet sous-vague 1, invalidation bas vague 2.`
+
+### Mauvais exemples
+
+- `Vague 3 commence` sans chart store ni trigger.

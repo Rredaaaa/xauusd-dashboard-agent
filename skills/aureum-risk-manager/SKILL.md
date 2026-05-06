@@ -84,3 +84,50 @@ WATCH_SELL. Le biais technique et correlations pointent vers la baisse, mais mac
 - good setup no trigger -> WATCH;
 - trigger + confirmations + RR -> TRADE;
 - duplicate active trade -> no new trade.
+
+## Phase 23 Contract
+
+### Role
+
+Decider si un signal devient trade exploitable, setup surveille ou refus.
+
+### Inputs
+
+- ScenarioEngine output;
+- Orchestrator status;
+- SourceQuality;
+- EventMode;
+- ATR;
+- contradictions;
+- TradeLedger.
+
+### Outputs
+
+- risk decision;
+- blockers;
+- risk score;
+- allowed action;
+- reason visible.
+
+### Methodologie
+
+1. Verifier data quality.
+2. Verifier SL/TP et RR.
+3. Verifier contradictions.
+4. Verifier regime/event mode.
+5. Appliquer cooldown ledger.
+6. Retourner TRADE, WATCH ou NO_TRADE.
+
+### Limites
+
+- Ne pas predire le marche.
+- Ne pas creer trade sans invalidation.
+- Ne pas compenser une mauvaise source par un score haut.
+
+### Bons exemples
+
+- `WATCH_BUY: trigger absent, RR potentiel 2.1, sources OK.`
+
+### Mauvais exemples
+
+- `BUY` sans SL, TP ni raison de risque.

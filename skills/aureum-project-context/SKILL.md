@@ -99,3 +99,47 @@ A ne pas reprendre:
 - multi-marche generaliste;
 - Elliott simple du repo tel quel;
 - strategy generator universel.
+
+## Phase 23 Contract
+
+### Role
+
+Servir de contexte de reprise global avant toute phase v3.0.
+
+### Inputs
+
+- Roadmap officielle;
+- etat Git/GitHub;
+- historique des phases;
+- contraintes utilisateur;
+- docs projet.
+
+### Outputs
+
+- orientation de phase;
+- rappel des regles non negociables;
+- fichiers a lire;
+- risques a surveiller.
+
+### Methodologie
+
+1. Lire le plan v3.
+2. Verifier phase courante.
+3. Verifier Git/GitHub.
+4. Identifier la prochaine action autorisee.
+5. Ne jamais sauter une phase sans accord explicite.
+
+### Limites
+
+- Ce skill ne remplace pas la roadmap.
+- Il ne donne pas de logique trading.
+- Il ne doit pas justifier une modification hors phase.
+
+### Bons exemples
+
+- `Phase 24 peut commencer seulement apres validation de Phase 23, git clean et origin/main sync.`
+
+### Mauvais exemples
+
+- Lancer Elliott avant Chart Store.
+- Modifier le moteur alors que la phase demande seulement la documentation.

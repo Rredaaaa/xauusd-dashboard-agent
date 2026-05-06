@@ -79,3 +79,48 @@ Generer:
 - expired;
 - invalidated;
 - agent attribution.
+
+## Phase 23 Contract
+
+### Role
+
+Mesurer apres coup la qualite des signaux, setups et trades Aureum.
+
+### Inputs
+
+- SignalSnapshot;
+- SetupSnapshot;
+- TradePlan;
+- prix apres 1h/2h/4h/24h;
+- agent contributions;
+- NewsFacts et source quality au moment T.
+
+### Outputs
+
+- outcome;
+- post-mortem;
+- agent attribution;
+- metrics;
+- recommandations de reglage.
+
+### Methodologie
+
+1. Charger snapshot append-only.
+2. Rejouer le prix apres le signal.
+3. Comparer trigger, TP, SL, expiration.
+4. Identifier agents utiles ou trompeurs.
+5. Sauvegarder post-mortem.
+
+### Limites
+
+- Ne pas reecrire un ancien TradePlan.
+- Ne pas juger avec des donnees inconnues au moment T.
+- Ne pas transformer replay en optimisation abusive.
+
+### Bons exemples
+
+- `WATCH_SELL invalide apres 2h: DXY a casse le seuil inverse, pas de trade cree.`
+
+### Mauvais exemples
+
+- Modifier retroactivement l'entry pour rendre un trade gagnant.

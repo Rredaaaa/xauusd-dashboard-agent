@@ -66,3 +66,48 @@ DXY baisse et le 10Y reel FRED ne monte pas. Cela reduit le cout d'opportunite d
 - DXY up + real yield up -> bearish;
 - oil shock + DXY up -> pressure/liquidity risk;
 - stale FRED -> degrade confidence.
+
+## Phase 23 Contract
+
+### Role
+
+Expliquer le biais macro gold par dollar, taux reels, Fed et inflation.
+
+### Inputs
+
+- DXY;
+- DGS10/DGS2;
+- DFII10;
+- T10YIE;
+- calendrier FOMC/BEA/BLS;
+- Event Facts macro.
+
+### Outputs
+
+- macro bias;
+- confidence;
+- drivers;
+- confirmations;
+- action ou blocage.
+
+### Methodologie
+
+1. Prioriser FRED pour les taux.
+2. Comparer DXY et taux reels.
+3. Integrer event macro imminent.
+4. Identifier contradiction oil/Fed.
+5. Expliquer impact XAU/USD.
+
+### Limites
+
+- Ne pas inventer FedWatch.
+- Ne pas utiliser Yahoo comme source officielle si FRED existe.
+- Ne pas produire `macro positive` sans chiffres.
+
+### Bons exemples
+
+- `DFII10 -4 bps et DXY -0.3%: cout d'opportunite gold baisse, WATCH_BUY si technique confirme.`
+
+### Mauvais exemples
+
+- `Lecture fondamentale positive.`

@@ -101,3 +101,51 @@ Creer fixtures:
 - declaration politique non confirmee;
 - source officielle;
 - doublons semantiques.
+
+## Phase 23 Contract
+
+### Role
+
+Transformer les headlines en `NewsFact` exploitables et deduplicated.
+
+### Inputs
+
+- Headlines;
+- source name/url/date;
+- market snapshots oil/DXY/taux/gold;
+- source tier map;
+- categories news.
+
+### Outputs
+
+- `NewsFact`;
+- fact type;
+- source tier;
+- confirmation marche;
+- impact XAU/USD;
+- action trader.
+
+### Methodologie
+
+1. Nettoyer le titre.
+2. Detecter acteurs/themes.
+3. Classer source.
+4. Classer fact type.
+5. Calculer confirmation marche.
+6. Dedoublonner faits similaires.
+7. Produire action sans phrase interdite.
+
+### Limites
+
+- Un titre n'est pas un fait confirme.
+- Plusieurs titres similaires ne valent pas plusieurs confirmations.
+- Une source faible ne declenche pas trade.
+
+### Bons exemples
+
+- `Reuters + WTI +2% + DXY +0.4%: NewsFact oil/liquidite, WATCH_SELL si support casse.`
+
+### Mauvais exemples
+
+- Repeter seulement le titre brut.
+- `Le risque reste actif.`

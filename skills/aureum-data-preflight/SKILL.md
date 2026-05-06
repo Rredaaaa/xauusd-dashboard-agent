@@ -73,3 +73,48 @@ Impact: trade bloque, mais lecture macro/market reste consultable.
 - stale price -> bloque trade;
 - OHLC absent -> Elliott `INSUFFICIENT_HISTORY`;
 - news weak -> degrade NewsFact confidence.
+
+## Phase 23 Contract
+
+### Role
+
+Verifier les donnees avant tout scoring, affichage decisionnel ou creation de TradePlan.
+
+### Inputs
+
+- SourceRegistry;
+- snapshots prix/macro/news/flows;
+- timestamps;
+- seuils freshness;
+- criticite de chaque source.
+
+### Outputs
+
+- `SourceQuality`;
+- statut global data;
+- blockers trade;
+- messages Inspector.
+
+### Methodologie
+
+1. Verifier presence source.
+2. Verifier freshness.
+3. Verifier coherence simple entre sources.
+4. Degrader confidence si une source est faible.
+5. Bloquer trade si une source critique manque.
+
+### Limites
+
+- Preflight ne remplace pas l'analyse.
+- Preflight ne corrige pas les donnees.
+- Une source secondaire absente ne doit pas cacher tout le dashboard.
+
+### Bons exemples
+
+- `NO_TRADE_DATA: prix XAU stale 11 min, trade bloque.`
+- `USABLE: COT absent, decision intraday disponible avec confidence reduite.`
+
+### Mauvais exemples
+
+- `Tout est OK` sans source ni timestamp.
+- Continuer un trade si le prix principal est stale.

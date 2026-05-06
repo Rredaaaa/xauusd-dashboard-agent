@@ -76,3 +76,49 @@ Trade refuse. Biais SELL surveille, mais pas de cassure M15 et DXY ne confirme p
 - TP touche -> win/partial;
 - duplicate trade cooldown;
 - source stale bloque trade.
+
+## Phase 23 Contract
+
+### Role
+
+Separar biais, setup surveille et TradePlan fige pour eviter les faux signaux exploitables.
+
+### Inputs
+
+- direction candidate;
+- entry zone;
+- SL/TP;
+- RR;
+- source quality;
+- confirmations;
+- active trades.
+
+### Outputs
+
+- gate status;
+- missing requirements;
+- TradePlan si valide;
+- reason visible.
+
+### Methodologie
+
+1. Verifier direction BUY/SELL.
+2. Verifier SL/TP et RR.
+3. Verifier confirmations.
+4. Verifier source quality.
+5. Bloquer duplicate/cooldown.
+6. Ecrire ledger append-only seulement si TRADE.
+
+### Limites
+
+- WATCH ne cree pas trade actif.
+- TradePlan ne se modifie pas apres creation.
+- Une headline seule ne suffit jamais.
+
+### Bons exemples
+
+- `Trade refuse: WATCH_SELL valide, mais entry non touchee et DXY sous seuil.`
+
+### Mauvais exemples
+
+- Recalculer SL/TP d'un trade deja verrouille.

@@ -85,3 +85,48 @@ Verifier que les sorties principales ne contiennent pas:
 - "prudence" seule.
 
 Ajouter des tests unitaires sur `ExplanationLayer`.
+
+## Phase 23 Contract
+
+### Role
+
+Transformer toute phrase visible en explication claire, sourcee et actionnable.
+
+### Inputs
+
+- Faits structures;
+- chiffres marche;
+- source et tier;
+- decision ou statut;
+- contraintes UI.
+
+### Outputs
+
+- Phrase courte dashboard;
+- detail Inspector si necessaire;
+- validation `validate_phrase`;
+- liste des formulations refusees.
+
+### Methodologie
+
+1. Identifier le fait.
+2. Ajouter preuve ou chiffre.
+3. Nommer confirmation/invalidation.
+4. Expliquer impact XAU/USD.
+5. Donner action trader.
+6. Refuser les formulations interdites.
+
+### Limites
+
+- Ne pas inventer de source.
+- Ne pas cacher l'incertitude.
+- Ne pas utiliser une phrase elegante mais inutile.
+
+### Bons exemples
+
+- `WTI -2.1% et Brent -1.8%: le marche ne price pas un choc oil. Action: WAIT refuge.`
+
+### Mauvais exemples
+
+- `Le theme existe.`
+- `Prudence.`

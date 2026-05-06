@@ -69,3 +69,48 @@ Les titres Hormuz sont confirmes par une hausse rapide WTI/Brent et un DXY ferme
 - headlines Iran + oil up + DXY up -> liquidity pressure;
 - official de-escalation + oil down -> risk premium fades;
 - source weak -> lower confidence.
+
+## Phase 23 Contract
+
+### Role
+
+Evaluer si geopolitique/oil cree refuge gold, pression liquidite, ou aucun signal exploitable.
+
+### Inputs
+
+- NewsFact geopolitique;
+- WTI/Brent;
+- DXY;
+- taux reels;
+- VIX/GVZ;
+- source tier.
+
+### Outputs
+
+- regime geopolitique;
+- oil shock status;
+- impact XAU/USD;
+- action `WAIT`, `WATCH_BUY`, `WATCH_SELL` ou `NO_TRADE`.
+
+### Methodologie
+
+1. Identifier le fait politique.
+2. Classer la source.
+3. Verifier WTI/Brent.
+4. Verifier DXY/taux.
+5. Expliquer la transmission marche.
+6. Donner action avec seuils.
+
+### Limites
+
+- Geopolitique ne veut pas dire BUY automatique.
+- Pas de shock sans validation oil.
+- Pas de declaration politique non sourcee comme trigger trade.
+
+### Bons exemples
+
+- `Hormuz cite par Reuters, WTI +2.4%, DXY +0.6%: risque oil/dollar, WATCH_SELL gold si support casse.`
+
+### Mauvais exemples
+
+- `Risque geopolitique actif donc gold bullish.`

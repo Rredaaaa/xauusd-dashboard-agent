@@ -82,3 +82,47 @@ Afficher:
 - OHLC incomplet;
 - fallback source;
 - Elliott refuse si moins de bougies minimales.
+
+## Phase 23 Contract
+
+### Role
+
+Fournir une charte OHLC multi-timeframe fiable pour Technical et Elliott.
+
+### Inputs
+
+- Bougies source M1/M5/M15/H1/H4/D1;
+- metadata source, timezone, fetched_at;
+- seuils freshness et historique minimum.
+
+### Outputs
+
+- ChartStore par timeframe;
+- quality flags;
+- dernier timestamp fiable;
+- statut `READY`, `STALE`, `INSUFFICIENT_HISTORY` ou `OFFLINE`.
+
+### Methodologie
+
+1. Charger les bougies.
+2. Normaliser timezone et timestamps.
+3. Dedoublonner.
+4. Detecter gaps et stale.
+5. Resampler si necessaire.
+6. Exposer seulement les timeframes valides aux agents.
+
+### Limites
+
+- Ne pas inventer de bougies manquantes.
+- Ne pas mentionner de broker dans l'UI principale.
+- Ne pas autoriser Elliott si l'historique minimum manque.
+
+### Bons exemples
+
+- `M15 READY: 480 bougies, dernier update 45s, aucun gap critique.`
+- `H1 INSUFFICIENT_HISTORY: 42 bougies, Elliott non scorant.`
+
+### Mauvais exemples
+
+- `Charte OK` sans timeframe ni freshness.
+- Compter Elliott sur 20 closes recentes.

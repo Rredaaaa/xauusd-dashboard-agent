@@ -966,6 +966,18 @@ SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
 }
 
 
+HARD_TRADE_BLOCKING_SOURCE_IDS = {"investing_xauusd"}
+DECISION_AGENT_NAMES = {
+    "PriceAgent",
+    "TechnicalAgent",
+    "MacroAgent",
+    "GeopoliticalOilShockAgent",
+    "SentimentNewsAgent",
+    "CorrelationAgent",
+    "FlowPositioningAgent",
+}
+
+
 def source_registry_entries() -> list[SourceRegistryEntry]:
     return list(SOURCE_REGISTRY.values())
 
@@ -1049,15 +1061,16 @@ class DataRouter:
 
 
 def preflight_route_state(snapshot: SourceSnapshot) -> tuple[str, str, str]:
+    hard_required = snapshot.source_id in HARD_TRADE_BLOCKING_SOURCE_IDS
     if snapshot.status == "ok":
         return "READY", "READY", f"{snapshot.name}: source exploitable pour {', '.join(snapshot.allowed_agents[:2])}."
     if snapshot.status == "stale":
-        status = "SOURCE_STALE" if snapshot.critical else "DEGRADED"
-        mode = "BLOCKING" if snapshot.critical else "WARNING"
+        status = "SOURCE_STALE" if hard_required else "DEGRADED"
+        mode = "BLOCKING" if hard_required else "WARNING"
         return status, mode, f"{snapshot.name}: donnees trop anciennes ({snapshot.age_minutes or 'n/a'} min)."
     if snapshot.status == "missing":
-        status = "NO_TRADE_DATA" if snapshot.critical else "DEGRADED"
-        mode = "BLOCKING" if snapshot.critical else "WARNING"
+        status = "NO_TRADE_DATA" if hard_required else "DEGRADED"
+        mode = "BLOCKING" if hard_required else "WARNING"
         return status, mode, f"{snapshot.name}: source absente."
     return "DEGRADED", "WARNING", f"{snapshot.name}: source faible ou a confirmer."
 
@@ -1068,28 +1081,27 @@ def build_preflight_check(
     generated_at: str,
 ) -> PreflightCheck:
     routes = DataRouter(snapshots).build_routes()
-    critical_routes = [route for route in routes if route.required]
+    hard_routes = [route for route in routes if route.source_id in HARD_TRADE_BLOCKING_SOURCE_IDS]
     blockers = [route.message for route in routes if route.mode == "BLOCKING"]
     warnings = [route.message for route in routes if route.mode == "WARNING"]
-    critical_ready = [route for route in critical_routes if route.status == "READY"]
 
     price_route = next((route for route in routes if route.source_id == "investing_xauusd"), None)
     if price_route and price_route.status == "SOURCE_STALE":
         status = "SOURCE_STALE"
     elif price_route and price_route.status == "NO_TRADE_DATA":
         status = "NO_TRADE_DATA"
-    elif any(route.status == "NO_TRADE_DATA" for route in routes if route.required):
+    elif any(route.status == "NO_TRADE_DATA" for route in hard_routes):
         status = "NO_TRADE_DATA"
-    elif any(route.status == "SOURCE_STALE" for route in routes if route.required):
+    elif any(route.status == "SOURCE_STALE" for route in hard_routes):
         status = "SOURCE_STALE"
-    elif critical_routes and not critical_ready:
+    elif hard_routes and not any(route.status == "READY" for route in hard_routes):
         status = "OFFLINE"
-    elif data_quality_score < 70 or warnings:
+    elif data_quality_score < 55 or warnings:
         status = "DEGRADED"
     else:
         status = "READY"
 
-    trade_blocked = status in {"OFFLINE", "NO_TRADE_DATA", "SOURCE_STALE"} or data_quality_score < 70
+    trade_blocked = status in {"OFFLINE", "NO_TRADE_DATA", "SOURCE_STALE"} or data_quality_score < 45
     if status == "READY":
         summary = "Preflight READY: sources critiques exploitables, trade gate autorise cote data."
     elif status == "DEGRADED":
@@ -1281,34 +1293,38 @@ def build_trade_quality_gate(
     agent_results: list[AgentResult],
     market_regime: MarketRegimeAnalysis | None,
 ) -> tuple[bool, list[str], list[str], list[str]]:
-    reasons: list[str] = []
+    hard_reasons: list[str] = []
+    advisory_reasons: list[str] = []
     if global_recommendation.verdict not in {"BUY", "SELL"}:
-        reasons.append(f"Verdict {global_recommendation.verdict}: aucun trade verrouille sans direction BUY/SELL.")
+        hard_reasons.append(f"Verdict {global_recommendation.verdict}: aucun trade verrouille sans direction BUY/SELL.")
+    decision_agents = [agent for agent in agent_results if agent.name in DECISION_AGENT_NAMES]
     validating = [
         agent.name
-        for agent in agent_results
+        for agent in decision_agents
         if agent.bias == global_recommendation.verdict and agent.confidence >= 50
     ]
     contradicting = [
         agent.name
-        for agent in agent_results
+        for agent in decision_agents
         if agent.bias in {"BUY", "SELL"} and agent.bias != global_recommendation.verdict
     ]
 
-    if global_recommendation.score < 60:
-        reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 60.")
+    if global_recommendation.score < 58:
+        hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 58.")
     if data_quality is None:
-        reasons.append("Data quality indisponible.")
+        hard_reasons.append("Data quality indisponible.")
+    elif data_quality.preflight and data_quality.preflight.trade_blocked:
+        hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
+    elif data_quality.score < 55:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 55.")
     elif data_quality.score < 70:
-        reasons.append(f"Data quality insuffisante: {data_quality.score}/100 < 70.")
-    elif data_quality.missing_sources or data_quality.stale_sources:
-        reasons.append("Source critique absente ou stale.")
+        advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; taille et confiance a reduire.")
     if len(validating) < 2:
-        reasons.append("Moins de deux agents valident la direction.")
+        hard_reasons.append("Moins de deux agents decisionnels valident la direction.")
     if len(contradicting) >= 3:
-        reasons.append("Trop de contradictions entre agents.")
-    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
-        reasons.append("Regime Hormuz/Oil Shock: trade locking suspendu sans validation manuelle.")
+        hard_reasons.append("Trop de contradictions entre agents decisionnels.")
+    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock" and market_regime.score >= 75:
+        hard_reasons.append("Regime Hormuz/Oil Shock fort: trade locking suspendu sans validation manuelle.")
     rr1 = compute_risk_reward(
         global_recommendation.verdict,
         gold.price,
@@ -1316,13 +1332,14 @@ def build_trade_quality_gate(
         global_recommendation.take_profit_1,
     )
     if rr1 < 0.8:
-        reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.80R.")
+        hard_reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.80R.")
     if global_recommendation.stop_loss == global_recommendation.take_profit_1:
-        reasons.append("SL/TP non exploitables.")
+        hard_reasons.append("SL/TP non exploitables.")
 
-    allowed = not reasons
+    allowed = not hard_reasons
+    reasons = [*hard_reasons, *advisory_reasons]
     if allowed:
-        reasons.append("Quality Gate valide: score, data quality, agents et regime permettent un Trade Snapshot.")
+        reasons.append("Quality Gate valide: score, data quality exploitable, agents decisionnels et regime permettent un Trade Snapshot.")
     return allowed, reasons, validating, contradicting
 
 
@@ -5199,29 +5216,43 @@ def build_orchestrator_quality_gate(
     event_mode: EventModeAnalysis | None,
     market_regime: MarketRegimeAnalysis | None,
 ) -> tuple[str, list[str]]:
-    reasons: list[str] = []
+    hard_reasons: list[str] = []
+    advisory_reasons: list[str] = []
     directional_components = [component for component in components if component.key != "data_quality" and component.weight > 0]
     strong_buy = [component.label for component in directional_components if component.score >= 62]
     strong_sell = [component.label for component in directional_components if component.score <= 38]
     if strong_buy and strong_sell:
-        reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
-    if len(contradictions) >= 2:
-        reasons.append("Contradictions agents multiples: WAIT force avant trade.")
+        hard_reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
+    directional_contradictions = [item for item in contradictions if item.startswith("BUY vs SELL")]
+    if directional_contradictions:
+        advisory_reasons.extend(directional_contradictions[:2])
+    if len(directional_contradictions) >= 2:
+        hard_reasons.append("Contradictions directionnelles multiples: WAIT force avant trade.")
     if data_quality is None:
-        reasons.append("Data quality indisponible: WAIT.")
+        hard_reasons.append("Data quality indisponible: WAIT.")
+    elif data_quality.preflight and data_quality.preflight.trade_blocked:
+        hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
+    elif data_quality.score < 55:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 55.")
     elif data_quality.score < 70:
-        reasons.append(f"Data quality insuffisante: {data_quality.score}/100 < 70.")
+        advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; signal autorise mais confiance reduite.")
     if event_mode is not None and event_mode.active:
-        reasons.append(f"Mode event actif ({event_mode.score}/100): WAIT execution.")
+        if event_mode.score >= 75:
+            hard_reasons.append(f"Mode event extreme ({event_mode.score}/100): WAIT execution.")
+        else:
+            advisory_reasons.append(f"Mode event surveille ({event_mode.score}/100): confirmation d'entree exigee.")
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
-        reasons.append("Regime Hormuz/Oil Shock: WAIT sans validation manuelle.")
-    if verdict in {"BUY", "SELL"} and score < 60:
-        reasons.append(f"Score orchestrateur insuffisant: {score}/100 < 60.")
+        if market_regime.score >= 75:
+            hard_reasons.append("Regime Hormuz/Oil Shock fort: WAIT sans validation manuelle.")
+        else:
+            advisory_reasons.append("Regime Hormuz/Oil Shock surveille: reduire confiance et taille.")
+    if verdict in {"BUY", "SELL"} and score < 58:
+        hard_reasons.append(f"Score orchestrateur insuffisant: {score}/100 < 58.")
     if verdict == "WAIT":
-        reasons.append("Zone centrale: aucune direction n'a assez d'avantage.")
-    if reasons:
-        return "WAIT", reasons[:6]
-    return "VALIDATED", ["Quality Gate v2 valide: score, sources et contradictions autorisent la decision."]
+        hard_reasons.append("Zone centrale: aucune direction n'a assez d'avantage.")
+    if hard_reasons:
+        return "WAIT", [*hard_reasons, *advisory_reasons][:6]
+    return "VALIDATED", [*advisory_reasons, "Quality Gate v2 valide: score, sources et contradictions autorisent la decision."][:6]
 
 
 def build_orchestrator_decision(
@@ -5261,10 +5292,10 @@ def build_orchestrator_decision(
     ]
     total_weight = sum(component.weight for component in components)
     bullish_score = round(sum(component.contribution for component in components) / total_weight, 2)
-    if bullish_score >= 55:
+    if bullish_score >= 54:
         verdict = "BUY"
         conviction = bullish_score
-    elif bullish_score <= 45:
+    elif bullish_score <= 46:
         verdict = "SELL"
         conviction = 100 - bullish_score
     else:

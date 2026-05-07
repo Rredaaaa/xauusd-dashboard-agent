@@ -63,6 +63,8 @@ Le signal live peut changer a chaque refresh car le prix, les sources et les age
 
 Un `TradePlan` est different: quand le Quality Gate valide un trade exploitable, le terminal fige l'entree, le SL, les TP, les sources, les agents et la raison de creation dans `reports/trade_ledger.jsonl`. Ce trade historise n'est pas modifie retroactivement par le signal live.
 
+Le scoring distingue maintenant les blocages durs et les warnings. Une source secondaire stale ou une data quality `DEGRADED` reduit la confiance, mais ne doit plus forcer `WAIT` si le prix principal, le risk/reward et les confirmations decisionnelles restent exploitables.
+
 ## Fichiers generes
 
 Les fichiers dans `reports/` restent locaux et sont ignores par Git:

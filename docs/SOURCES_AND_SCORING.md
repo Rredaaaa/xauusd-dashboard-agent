@@ -11,7 +11,12 @@ Les sources sont classees par tiers:
 - Tier 3: source specialisee a confirmer.
 - Tier 4: agregateur, headline ou source faible.
 
-Une source critique absente ou stale degrade la `Data Quality`. Un signal directionnel fort doit etre degrade si les sources critiques ne sont pas fiables.
+Une source absente, stale ou faible degrade la `Data Quality`, mais tout warning ne doit pas forcer `WAIT`. Depuis la mise a jour scoring du 07/05/2026, le moteur separe:
+
+- blocage dur: prix XAU/USD principal absent/stale, data quality tres faible, direction absente, RR inexploitable ou contradiction directionnelle majeure;
+- warning: source secondaire stale, news faible, data quality degradee mais utilisable, mode event modere;
+- validation avec confiance reduite: signal `BUY`/`SELL` autorise, mais raisons de prudence affichees;
+- TradePlan verrouille: uniquement si le Trade Quality Gate valide le signal et fige entry/SL/TP.
 
 ## Sources prix
 
@@ -102,10 +107,21 @@ Decision v3.0:
 Preflight v3:
 
 - `READY`: sources critiques exploitables;
-- `DEGRADED`: dashboard consultable, confiance reduite;
-- `SOURCE_STALE`: source critique trop ancienne, nouveau trade bloque;
-- `NO_TRADE_DATA`: source critique absente, nouveau trade bloque;
+- `DEGRADED`: dashboard consultable, confiance reduite; ne bloque pas automatiquement un trade si le prix principal est exploitable;
+- `SOURCE_STALE`: source bloquante trop ancienne, nouveau trade bloque;
+- `NO_TRADE_DATA`: source bloquante absente, nouveau trade bloque;
 - `OFFLINE`: sources critiques insuffisantes pour analyser un setup.
+
+Source bloquante actuelle:
+
+- `Investing.com XAU/USD`: prix principal et reference de TradePlan.
+
+Sources importantes mais non bloquantes seules:
+
+- WGC ETF flows stale;
+- Google News RSS weak;
+- COT/ETF/faits politiques partiels;
+- Chart Store absent tant que le TechnicalDecisionEngine n'est pas encore actif.
 
 Il produit:
 
@@ -118,10 +134,17 @@ Il produit:
 Le verdict `WAIT` est force si:
 
 - score trop faible;
-- data quality insuffisante;
-- contradictions fortes;
-- regime event dangereux;
+- data quality trop faible ou Preflight bloquant;
+- contradictions directionnelles fortes entre composants decisionnels;
+- regime event extreme;
 - aucun avantage directionnel propre.
+
+Le verdict `WAIT` ne doit pas etre force uniquement parce que:
+
+- data quality est `DEGRADED` mais prix principal, macro et cross-assets restent exploitables;
+- une source secondaire est stale;
+- le mode event est modere;
+- un agent d'audit ou archive contredit le signal.
 
 ## Technical Decision Engine cible v3
 
@@ -153,13 +176,30 @@ Un Trade Plan n'est cree que si:
 
 - verdict `BUY` ou `SELL`;
 - score global suffisant ou statut v3 `TRADE_BUY` / `TRADE_SELL`;
-- data quality suffisante;
-- confirmations suffisantes entre technique, macro, regime, flows et cross-assets;
-- contradictions limitees;
+- Preflight non bloquant;
+- data quality exploitable, meme degradee si elle n'est pas bloquante;
+- au moins deux agents decisionnels valident la direction;
+- contradictions directionnelles limitees;
 - risk/reward exploitable;
 - pas de regime special bloquant.
 
 Sinon, le Trade Tracker affiche `WAIT` et explique pourquoi.
+
+Agents decisionnels utilises pour compter confirmations/contradictions de TradePlan:
+
+- PriceAgent;
+- TechnicalAgent;
+- MacroAgent;
+- GeopoliticalOilShockAgent;
+- SentimentNewsAgent;
+- CorrelationAgent;
+- FlowPositioningAgent.
+
+Agents exclus du comptage decisionnel:
+
+- ElliottWaveAgent, archive et poids 0;
+- RiskManagerAgent, role de prudence;
+- OrchestratorAgent, role d'audit/synthese.
 
 ## Data Quality
 
@@ -175,7 +215,7 @@ Statuts:
 
 - `HIGH`: qualite forte.
 - `USABLE`: exploitable.
-- `DEGRADED`: prudence.
+- `DEGRADED`: exploitable avec confiance/taille reduite si aucun blocage dur n'est actif.
 - `WEAK`: signal a degrader fortement.
 
 ## Avertissement

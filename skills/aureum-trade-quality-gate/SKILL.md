@@ -32,7 +32,8 @@ Empecher le terminal de creer un trade faible tout en evitant de cacher les setu
 ## Conditions minimales TradePlan
 
 - direction `BUY` ou `SELL`;
-- data quality suffisante;
+- Preflight non bloquant;
+- data quality exploitable, meme degradee si le prix principal est frais;
 - source prix fraiche;
 - invalidation claire;
 - SL/TP calculables;
@@ -42,12 +43,19 @@ Empecher le terminal de creer un trade faible tout en evitant de cacher les setu
 - regime non bloquant;
 - pas de news faible seule comme declencheur.
 
+Un warning ne suffit pas a refuser un TradePlan. Le gate doit separer:
+
+- hard block: pas de direction, prix principal absent/stale, data quality trop faible, RR insuffisant, regime extreme, contradiction directionnelle majeure;
+- advisory: source secondaire stale, data quality degradee, news weak, mode event modere.
+
+Si seuls des advisory sont presents, le TradePlan peut etre cree avec confiance reduite et raisons visibles.
+
 ## Raisons de refus
 
 Le terminal doit afficher ce qui manque:
 
 - score insuffisant;
-- source stale;
+- source bloquante stale;
 - contradiction agents;
 - trigger pas confirme;
 - structure technique unclear;
@@ -75,7 +83,8 @@ Trade refuse. Biais SELL surveille, mais pas de cassure M15 et DXY ne confirme p
 - SL touche -> loss;
 - TP touche -> win/partial;
 - duplicate trade cooldown;
-- source stale bloque trade.
+- source prix stale bloque trade;
+- source secondaire stale degrade confidence sans bloquer seule.
 
 ## Phase 23 Contract
 
@@ -105,7 +114,7 @@ Separar biais, setup surveille et TradePlan fige pour eviter les faux signaux ex
 1. Verifier direction BUY/SELL.
 2. Verifier SL/TP et RR.
 3. Verifier confirmations.
-4. Verifier source quality.
+4. Verifier source quality en separant blockers et warnings.
 5. Bloquer duplicate/cooldown.
 6. Ecrire ledger append-only seulement si TRADE.
 
@@ -114,10 +123,12 @@ Separar biais, setup surveille et TradePlan fige pour eviter les faux signaux ex
 - WATCH ne cree pas trade actif.
 - TradePlan ne se modifie pas apres creation.
 - Une headline seule ne suffit jamais.
+- ElliottWaveAgent, RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un trade.
 
 ### Bons exemples
 
 - `Trade refuse: WATCH_SELL valide, mais entry non touchee et DXY sous seuil.`
+- `Trade valide avec warning: SELL 63/100, prix frais, deux agents decisionnels alignes, WGC ETF stale donc confidence reduite.`
 
 ### Mauvais exemples
 

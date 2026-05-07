@@ -26,6 +26,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Agents passifs: Price, Technical, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
 - Orchestrateur v2: pondération multi-agents, contre-signaux et Quality Gate.
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
+- Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
 - Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
 - Charte principale cible v3: TradingView dans Market/Technical, pas la charte interne.
 - Trade Ledger: signal locking append-only.
@@ -49,6 +50,12 @@ Note de passation v3.0:
 - `AgentResult`: sortie d'un agent.
 - `OrchestratorDecision`: decision globale multi-agents.
 - `TradePlan` / `TradeLedgerSummary`: trades historises.
+
+Regle de decision actuelle:
+- source prix XAU/USD principale absente/stale = blocage dur;
+- data quality tres faible = blocage dur;
+- WGC ETF stale, Google News weak ou mode event modere = warning;
+- ElliottWaveAgent, RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan.
 - `TradeRecommendation`: signal live.
 
 ## Fichiers generes

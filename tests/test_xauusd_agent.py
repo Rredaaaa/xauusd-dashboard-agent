@@ -1183,6 +1183,96 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(decision.status, "WAIT")
         self.assertTrue(any("Contradiction" in reason for reason in decision.quality_gate_reasons))
 
+    def test_orchestrator_allows_degraded_quality_and_soft_event_when_direction_clear(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="SELL",
+            score=61,
+            summary="Ancien moteur baissier.",
+            reasons=["legacy"],
+            stop_loss=2415.0,
+            take_profit_1=2375.0,
+            take_profit_2=2355.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "SELL", 62, 70, "Technique baissiere."),
+            AgentResult("MacroAgent", "Macro", "SELL", 64, 76, "Macro defavorable."),
+            AgentResult("CorrelationAgent", "Market", "SELL", 35, 70, "Cross-assets defavorables.", status="PASSIVE"),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "NEUTRAL", 46, 75, "Flux mixtes."),
+            AgentResult("RiskManagerAgent", "Decision", "CAUTION", 58, 72, "Risque surveille."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=66,
+            status="DEGRADED",
+            summary="Sources secondaires degradees.",
+            missing_sources=[],
+            stale_sources=["World Gold Council ETF flows"],
+            weak_sources=["Google News RSS / fallback feeds"],
+            contradictions=[],
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(True, 35, "ACTIF", "surveillance", 1.5, ["volume eleve"]),
+        )
+        self.assertEqual(recommendation.verdict, "SELL")
+        self.assertEqual(decision.status, "VALIDATED")
+        self.assertTrue(any("Data quality degradee" in reason for reason in decision.quality_gate_reasons))
+        self.assertTrue(any("Mode event surveille" in reason for reason in decision.quality_gate_reasons))
+
+    def test_trade_gate_ignores_elliott_and_audit_agents_for_locking(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=61,
+            summary="Signal verrouillable avec warnings.",
+            reasons=["Score exploitable"],
+            stop_loss=2385.0,
+            take_profit_1=2420.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=66,
+            status="DEGRADED",
+            summary="Sources secondaires degradees.",
+            missing_sources=[],
+            stale_sources=["World Gold Council ETF flows"],
+            weak_sources=["Google News RSS / fallback feeds"],
+            contradictions=[],
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 64, 70, "Technique valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 62, 76, "Macro valide."),
+            AgentResult("ElliottWaveAgent", "Technical", "SELL", 10, 90, "Archive Elliott opposee."),
+            AgentResult("RiskManagerAgent", "Decision", "CAUTION", 55, 72, "Risque surveille."),
+            AgentResult("OrchestratorAgent", "Decision", "CAUTION", 55, 64, "Audit."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+            )
+            self.assertEqual(summary.quality_gate_status, "VALIDATED")
+            self.assertEqual(len(summary.active_trades), 1)
+            self.assertEqual(summary.active_trades[0].agents_contradicting, [])
+
     def test_elliott_quarantine_cannot_change_orchestrator_decision(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         legacy = TradeRecommendation(

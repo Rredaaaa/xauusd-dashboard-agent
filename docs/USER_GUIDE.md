@@ -144,6 +144,12 @@ Vue exports:
 
 Le signal live est calcule a chaque refresh. Il depend du prix, des sources, du regime, des agents et de l'Orchestrateur v2. Il peut passer de `BUY` a `WAIT`, ou de `SELL` a `WAIT`, si le contexte change.
 
+Depuis la mise a jour scoring du 07/05/2026, un warning ne force plus automatiquement `WAIT`. Le terminal distingue:
+
+- blocage dur: prix XAU/USD principal absent/stale, data quality trop faible, contradiction directionnelle majeure, RR insuffisant ou regime extreme;
+- warning: source secondaire stale, news weak, data quality degradee mais exploitable, mode event modere;
+- signal valide avec confiance reduite: `BUY` ou `SELL` reste possible, mais les warnings sont visibles dans Decision/Inspector.
+
 ### Trade Plan
 
 Un Trade Plan est cree uniquement quand le Trade Quality Gate valide le signal. Il fige:
@@ -168,6 +174,18 @@ reports/trade_ledger.jsonl
 ```
 
 Il n'est pas modifie retroactivement par le signal live. Si le prix atteint SL ou TP, une nouvelle ligne append-only met a jour son outcome.
+
+Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou contredire une direction:
+
+- PriceAgent;
+- TechnicalAgent;
+- MacroAgent;
+- GeopoliticalOilShockAgent;
+- SentimentNewsAgent;
+- CorrelationAgent;
+- FlowPositioningAgent.
+
+ElliottWaveAgent est archive. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
 
 ## Outcomes possibles
 
@@ -200,6 +218,7 @@ Ce fichier trace:
 
 - `BUY` ou `SELL` ne veut pas dire entrer au marche sans verification.
 - `WAIT` veut dire que le terminal refuse de valider une direction exploitable.
+- `DEGRADED` ne veut pas toujours dire trade impossible: cela peut vouloir dire trade possible avec confiance reduite si le prix principal et le RR sont exploitables.
 - La v3.0 ajoutera des statuts intermediaires `WATCH_BUY` et `WATCH_SELL` pour afficher les setups a surveiller sans forcer un trade.
 - Elliott ne doit pas etre utilise comme argument de trade tant qu'il n'est pas refonde et revalide explicitement.
 - Un regime Hormuz/Oil Shock peut inverser la lecture classique geopolitique -> gold.

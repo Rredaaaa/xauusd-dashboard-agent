@@ -30,6 +30,7 @@ Il repond:
 - TradeLedger cooldown;
 - contradictions agents.
 - TechnicalDecisionEngine status;
+- blockers et warnings Preflight.
 
 ## Outputs
 
@@ -53,8 +54,14 @@ Bloquer trade exploitable si:
 - Chart Store insuffisant pour decision technique;
 - news non confirmee seule;
 - contradiction majeure;
-- volatilite/event mode impose prudence;
+- volatilite/event mode extreme impose prudence;
 - trade similaire recent encore actif.
+
+Ne pas bloquer automatiquement si:
+- data quality est `DEGRADED` mais le prix principal est exploitable;
+- une source secondaire est stale;
+- event mode est modere;
+- l'alerte vient seulement d'un agent d'audit.
 
 ## Regles de WATCH
 
@@ -75,6 +82,7 @@ WATCH_SELL. Le biais technique et correlations pointent vers la baisse, mais mac
 - Ne pas forcer `TRADE_*` pour eviter trop de WAIT.
 - Ne pas transformer une headline faible en trade.
 - Ne pas ignorer data quality.
+- Ne pas confondre warning et blocker.
 - Ne pas recalculer retroactivement un TradePlan.
 - Ne pas accepter Elliott comme justification de risque.
 
@@ -118,7 +126,8 @@ Decider si un signal devient trade exploitable, setup surveille ou refus.
 3. Verifier contradictions.
 4. Verifier regime/event mode.
 5. Appliquer cooldown ledger.
-6. Retourner TRADE, WATCH ou NO_TRADE.
+6. Separar hard blockers et warnings.
+7. Retourner TRADE, WATCH ou NO_TRADE.
 
 ### Limites
 
@@ -129,6 +138,7 @@ Decider si un signal devient trade exploitable, setup surveille ou refus.
 ### Bons exemples
 
 - `WATCH_BUY: trigger absent, RR potentiel 2.1, sources OK.`
+- `TRADE_SELL: prix frais, RR 1.15R, technique+macro alignes; WGC ETF stale donc confidence reduite.`
 
 ### Mauvais exemples
 

@@ -401,13 +401,17 @@ Actions:
    - `NO_TRADE_DATA`;
    - `OFFLINE`.
 5. Ne pas bloquer tout le dashboard si une source non critique est absente.
+6. Separer blockers et warnings:
+   - blocker: prix XAU/USD principal absent/stale, data quality tres faible, source bloquante indisponible;
+   - warning: source secondaire stale, news weak, data quality degradee mais exploitable.
 
 Livrables:
 - preflight visible dans Inspector;
 - status global plus fiable.
 
 Definition de termine:
-- le dashboard sait expliquer pourquoi une source degrade le signal.
+- le dashboard sait expliquer pourquoi une source degrade le signal;
+- une source secondaire stale ne force plus `WAIT` seule si le prix principal reste exploitable.
 
 ### Phase 25 - Chart Store OHLC multi-timeframe
 
@@ -675,10 +679,16 @@ Actions:
    - contradiction max;
    - risk/reward minimum.
 4. Ne jamais creer `TRADE_*` si:
-   - source critique stale;
+   - prix XAU/USD principal stale ou absent;
+   - data quality trop faible;
    - setup sans invalidation;
-   - structure technique contradictoire;
+   - contradiction directionnelle majeure entre composants decisionnels;
    - news non confirmee seule.
+5. Ne pas forcer `WAIT` seulement pour:
+   - source secondaire stale;
+   - data quality degradee mais non bloquante;
+   - mode event modere;
+   - agent archive ou agent d'audit contradictoire.
 
 Livrables:
 - `OrchestratorV3`;

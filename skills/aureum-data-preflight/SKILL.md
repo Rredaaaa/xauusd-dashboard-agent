@@ -10,7 +10,7 @@ category: data
 
 Verifier les sources avant que les agents et l'orchestrateur produisent une decision.
 
-Le terminal ne doit pas afficher une conclusion forte si une source critique est absente, stale ou contradictoire.
+Le terminal ne doit pas afficher une conclusion forte si la source bloquante de prix est absente/stale ou si la qualite globale devient trop faible. Une source secondaire stale doit degrader la confiance, pas forcer `WAIT` a elle seule.
 
 ## Sources a verifier
 
@@ -32,7 +32,7 @@ Le terminal ne doit pas afficher une conclusion forte si une source critique est
 
 - `READY`: tout est exploitable.
 - `USABLE`: quelques sources secondaires manquent.
-- `DEGRADED`: source importante stale ou weak.
+- `DEGRADED`: source importante stale ou weak; dashboard consultable et trade encore possible si aucun blocage dur.
 - `NO_TRADE_DATA`: le dashboard peut afficher, mais ne doit pas creer de trade.
 - `OFFLINE`: sources critiques absentes.
 
@@ -62,15 +62,14 @@ message_for_inspector
 
 ```text
 Status: DEGRADED.
-Cause: FRED OK, prix XAU stale, Google News weak.
-Impact: trade bloque, mais lecture macro/market reste consultable.
+Cause: prix XAU exploitable, WGC ETF stale, Google News weak.
+Impact: signal possible avec confiance reduite; Inspector affiche les warnings.
 ```
 
 ## Tests
 
-- source critique missing -> `NO_TRADE_DATA`;
-- source secondaire missing -> `USABLE`;
-- stale price -> bloque trade;
+- prix principal missing/stale -> `NO_TRADE_DATA` ou `SOURCE_STALE`;
+- source secondaire missing/stale -> `DEGRADED` ou `USABLE`;
 - OHLC absent -> TechnicalDecisionEngine `WAIT` ou `NO_TRADE`;
 - news weak -> degrade NewsFact confidence.
 
@@ -101,7 +100,7 @@ Verifier les donnees avant tout scoring, affichage decisionnel ou creation de Tr
 2. Verifier freshness.
 3. Verifier coherence simple entre sources.
 4. Degrader confidence si une source est faible.
-5. Bloquer trade si une source critique manque.
+5. Bloquer trade seulement si une source bloquante manque/stale ou si le score data devient trop faible.
 
 ### Limites
 
@@ -112,7 +111,7 @@ Verifier les donnees avant tout scoring, affichage decisionnel ou creation de Tr
 ### Bons exemples
 
 - `NO_TRADE_DATA: prix XAU stale 11 min, trade bloque.`
-- `USABLE: COT absent, decision intraday disponible avec confidence reduite.`
+- `DEGRADED: WGC ETF stale, decision intraday disponible avec confidence reduite.`
 
 ### Mauvais exemples
 

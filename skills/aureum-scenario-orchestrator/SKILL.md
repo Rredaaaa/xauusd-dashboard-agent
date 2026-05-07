@@ -45,7 +45,7 @@ Poids changent selon regime:
 - geopolitique: oil/geopolitics plus forts;
 - structure technique claire: poids technique augmente;
 - structure technique contradictoire: poids technique reduit;
-- source degradee: poids reduit;
+- source degradee: poids reduit, pas `WAIT` automatique si ce n'est pas un blocker;
 - news non confirmee seule: pas de trade.
 
 ## Exemple
@@ -68,7 +68,8 @@ Il ne doit pas aller dans le Trade Ledger comme trade actif, mais peut aller dan
 - contradiction forte -> WAIT avec raison;
 - biais clair mais trigger absent -> WATCH;
 - trigger + quality gate OK -> TRADE;
-- source stale critique -> NO_TRADE ou WAIT;
+- prix XAU/USD principal stale -> NO_TRADE ou WAIT;
+- source secondaire stale -> warning et confidence reduite;
 - structure technique contradictoire -> WAIT ou poids reduit.
 
 ## Phase 23 Contract
@@ -102,6 +103,7 @@ Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou ref
 3. Identifier contradictions.
 4. Generer trigger/invalidation.
 5. Deleguer la validation trade au Risk Manager.
+6. Separar blockers et warnings avant de forcer `WAIT`.
 
 ### Limites
 
@@ -109,6 +111,7 @@ Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou ref
 - Ne pas forcer un trade pour reduire WAIT.
 - Ne pas utiliser Elliott comme structure de decision.
 - Un score technique sans trigger/invalidation ne vaut pas trade.
+- Ne pas transformer chaque warning source en `WAIT`.
 
 ### Bons exemples
 
@@ -118,3 +121,4 @@ Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou ref
 
 - `SELL car score global 55/100` sans trigger.
 - `BUY car Elliott dit vague 3` sans moteur valide.
+- `WAIT car WGC ETF stale` alors que prix, macro, technique et RR sont exploitables.

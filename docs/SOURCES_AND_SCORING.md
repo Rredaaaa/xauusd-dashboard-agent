@@ -93,8 +93,18 @@ L'Orchestrateur v2 combine les composants suivants:
 
 Note v3.0:
 - `ElliottWaveAgent` existe dans la v2, mais son moteur actuel est experimental;
-- il ne doit pas etre considere comme un vrai comptage Elliott multi-timeframe tant que le Chart Store OHLC et l'Elliott Engine v3 ne sont pas livres;
+- depuis la Phase 26, son poids orchestrateur est `0.00`: il reste visible pour audit, mais il ne peut pas changer `BUY`, `SELL` ou `WAIT`;
+- depuis la Phase 25, le Chart Store OHLC expose M5/M15/H1/H4/D1 dans l'Inspector et sert de precondition au futur Elliott Engine v3;
+- il ne doit pas etre considere comme un vrai comptage Elliott multi-timeframe tant que l'Elliott Engine v3 n'est pas livre;
 - la v3.0 doit ajouter les statuts `WATCH_BUY` et `WATCH_SELL` pour eviter que `WAIT` masque les setups en preparation.
+
+Preflight v3:
+
+- `READY`: sources critiques exploitables;
+- `DEGRADED`: dashboard consultable, confiance reduite;
+- `SOURCE_STALE`: source critique trop ancienne, nouveau trade bloque;
+- `NO_TRADE_DATA`: source critique absente, nouveau trade bloque;
+- `OFFLINE`: sources critiques insuffisantes pour analyser un setup.
 
 Il produit:
 

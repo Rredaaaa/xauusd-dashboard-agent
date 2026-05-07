@@ -51,10 +51,10 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 - `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
 - `Market`: spot, IG Weekend Gold, chandelles, correlations, regime petrole/politique, COT et ETF flows.
 - `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
-- `Technical`: EMA, RSI, MACD, volume, Elliott Wave passif (experimental, mis en quarantaine du scoring a partir de la v3.0 tant que le Chart Store OHLC et l'Elliott Engine v3 ne sont pas livres).
+- `Technical`: EMA, RSI, MACD, volume, Chart Store OHLC M5/M15/H1/H4/D1, Elliott Wave passif (experimental, poids 0 dans le scoring depuis Phase 26).
 - `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
 - `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
-- `Inspector`: audit des sources, agents, gates, trades et qualite data.
+- `Inspector`: audit des sources, Preflight, Chart Store, agents, gates, trades et qualite data.
 - `Reports`: exports Markdown/JSON et recapitulatif complet.
 
 ## Signal live vs Trade Plan

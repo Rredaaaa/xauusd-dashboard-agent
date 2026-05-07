@@ -103,6 +103,7 @@ CME_FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fed
 CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-api/fedwatch-api.html"
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
 AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
+CHART_STORE_CACHE_PATH = Path("reports") / "chart_store_cache.json"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -611,6 +612,63 @@ class SourceSnapshot:
 
 
 @dataclass
+class DataRoute:
+    source_id: str
+    source_name: str
+    category: str
+    target_agents: list[str]
+    required: bool
+    status: str
+    mode: str
+    message: str
+
+
+@dataclass
+class PreflightCheck:
+    generated_at: str
+    status: str
+    summary: str
+    trade_blocked: bool
+    blockers: list[str]
+    warnings: list[str]
+    routes: list[DataRoute] = field(default_factory=list)
+
+
+@dataclass
+class OHLCCandle:
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int | None
+    source: str
+    timeframe: str
+    fetched_at: str
+
+
+@dataclass
+class ChartTimeframe:
+    timeframe: str
+    status: str
+    candles: list[OHLCCandle] = field(default_factory=list)
+    quality_flags: list[str] = field(default_factory=list)
+    last_timestamp: int | None = None
+    freshness_minutes: int | None = None
+    gap_count: int = 0
+
+
+@dataclass
+class ChartStore:
+    generated_at: str
+    symbol: str
+    source: str
+    status: str
+    summary: str
+    timeframes: list[ChartTimeframe] = field(default_factory=list)
+
+
+@dataclass
 class DataQualitySnapshot:
     generated_at: str
     score: int
@@ -621,6 +679,7 @@ class DataQualitySnapshot:
     weak_sources: list[str]
     contradictions: list[str]
     snapshots: list[SourceSnapshot] = field(default_factory=list)
+    preflight: PreflightCheck | None = None
 
 
 @dataclass
@@ -763,6 +822,7 @@ class BriefingBundle:
     agent_results: list[AgentResult] = field(default_factory=list)
     trade_ledger: TradeLedgerSummary | None = None
     orchestrator_decision: OrchestratorDecision | None = None
+    chart_store: ChartStore | None = None
 
 
 @dataclass
@@ -902,6 +962,7 @@ SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
     "white_house_feed": SourceRegistryEntry("white_house_feed", "White House News feed", "political_statements", 1, 10080, False, WHITE_HOUSE_NEWS_FEED_URL, ["TrumpPoliticalStatementsAgent"]),
     "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceAgent"]),
     "oil_context": SourceRegistryEntry("oil_context", "WTI/Brent oil context", "oil", 2, 240, False, "https://finance.yahoo.com/", ["GeopoliticalOilShockAgent", "RiskManagerAgent"]),
+    "chart_store_ohlc": SourceRegistryEntry("chart_store_ohlc", "Chart Store OHLC", "chart", 2, 240, False, "https://finance.yahoo.com/quote/GC=F/", ["TechnicalAgent", "ElliottWaveAgent"]),
 }
 
 
@@ -962,6 +1023,93 @@ def data_quality_status(score: int) -> str:
     if score >= 55:
         return "DEGRADED"
     return "WEAK"
+
+
+class DataRouter:
+    def __init__(self, snapshots: list[SourceSnapshot]) -> None:
+        self.snapshots = snapshots
+
+    def build_routes(self) -> list[DataRoute]:
+        routes: list[DataRoute] = []
+        for snapshot in self.snapshots:
+            status, mode, message = preflight_route_state(snapshot)
+            routes.append(
+                DataRoute(
+                    source_id=snapshot.source_id,
+                    source_name=snapshot.name,
+                    category=snapshot.category,
+                    target_agents=snapshot.allowed_agents,
+                    required=snapshot.critical,
+                    status=status,
+                    mode=mode,
+                    message=message,
+                )
+            )
+        return routes
+
+
+def preflight_route_state(snapshot: SourceSnapshot) -> tuple[str, str, str]:
+    if snapshot.status == "ok":
+        return "READY", "READY", f"{snapshot.name}: source exploitable pour {', '.join(snapshot.allowed_agents[:2])}."
+    if snapshot.status == "stale":
+        status = "SOURCE_STALE" if snapshot.critical else "DEGRADED"
+        mode = "BLOCKING" if snapshot.critical else "WARNING"
+        return status, mode, f"{snapshot.name}: donnees trop anciennes ({snapshot.age_minutes or 'n/a'} min)."
+    if snapshot.status == "missing":
+        status = "NO_TRADE_DATA" if snapshot.critical else "DEGRADED"
+        mode = "BLOCKING" if snapshot.critical else "WARNING"
+        return status, mode, f"{snapshot.name}: source absente."
+    return "DEGRADED", "WARNING", f"{snapshot.name}: source faible ou a confirmer."
+
+
+def build_preflight_check(
+    snapshots: list[SourceSnapshot],
+    data_quality_score: int,
+    generated_at: str,
+) -> PreflightCheck:
+    routes = DataRouter(snapshots).build_routes()
+    critical_routes = [route for route in routes if route.required]
+    blockers = [route.message for route in routes if route.mode == "BLOCKING"]
+    warnings = [route.message for route in routes if route.mode == "WARNING"]
+    critical_ready = [route for route in critical_routes if route.status == "READY"]
+
+    price_route = next((route for route in routes if route.source_id == "investing_xauusd"), None)
+    if price_route and price_route.status == "SOURCE_STALE":
+        status = "SOURCE_STALE"
+    elif price_route and price_route.status == "NO_TRADE_DATA":
+        status = "NO_TRADE_DATA"
+    elif any(route.status == "NO_TRADE_DATA" for route in routes if route.required):
+        status = "NO_TRADE_DATA"
+    elif any(route.status == "SOURCE_STALE" for route in routes if route.required):
+        status = "SOURCE_STALE"
+    elif critical_routes and not critical_ready:
+        status = "OFFLINE"
+    elif data_quality_score < 70 or warnings:
+        status = "DEGRADED"
+    else:
+        status = "READY"
+
+    trade_blocked = status in {"OFFLINE", "NO_TRADE_DATA", "SOURCE_STALE"} or data_quality_score < 70
+    if status == "READY":
+        summary = "Preflight READY: sources critiques exploitables, trade gate autorise cote data."
+    elif status == "DEGRADED":
+        summary = "Preflight DEGRADED: dashboard consultable, confiance reduite sur les sources secondaires."
+    elif status == "SOURCE_STALE":
+        summary = "Preflight SOURCE_STALE: au moins une source critique est trop ancienne, trade bloque."
+    elif status == "NO_TRADE_DATA":
+        summary = "Preflight NO_TRADE_DATA: une source critique manque, aucun nouveau trade ne doit etre cree."
+    else:
+        summary = "Preflight OFFLINE: les sources critiques ne suffisent pas pour analyser un setup."
+
+    return PreflightCheck(
+        generated_at=generated_at,
+        status=status,
+        summary=summary,
+        trade_blocked=trade_blocked,
+        blockers=blockers[:8],
+        warnings=warnings[:8],
+        routes=routes,
+    )
 
 
 def parse_trade_plan(data: dict[str, Any]) -> TradePlan:
@@ -1342,6 +1490,7 @@ def build_monitoring_inspector_payload(
     orchestrator_decision: OrchestratorDecision | None,
     global_recommendation: TradeRecommendation | None,
     market_regime: MarketRegimeAnalysis | None,
+    chart_store: ChartStore | None = None,
 ) -> dict[str, Any]:
     snapshots = data_quality.snapshots if data_quality else []
     source_issues = [snapshot for snapshot in snapshots if snapshot.status != "ok"]
@@ -1383,6 +1532,9 @@ def build_monitoring_inspector_payload(
                 }
             )
 
+    preflight = data_quality.preflight if data_quality else None
+    chart_timeframes = chart_store.timeframes if chart_store else []
+
     return {
         "generated_at": generated_at,
         "last_refresh": data_quality.generated_at if data_quality else generated_at,
@@ -1409,6 +1561,30 @@ def build_monitoring_inspector_payload(
             }
             for snapshot in source_issues
         ],
+        "preflight": {
+            "status": preflight.status if preflight else "UNAVAILABLE",
+            "summary": preflight.summary if preflight else "Preflight indisponible.",
+            "trade_blocked": preflight.trade_blocked if preflight else True,
+            "blockers": preflight.blockers if preflight else [],
+            "warnings": preflight.warnings if preflight else [],
+            "route_count": len(preflight.routes) if preflight else 0,
+        },
+        "chart_store": {
+            "status": chart_store.status if chart_store else "UNAVAILABLE",
+            "summary": chart_store.summary if chart_store else "Chart Store indisponible.",
+            "timeframes": [
+                {
+                    "timeframe": item.timeframe,
+                    "status": item.status,
+                    "candles": len(item.candles),
+                    "last_timestamp": item.last_timestamp,
+                    "freshness_minutes": item.freshness_minutes,
+                    "gap_count": item.gap_count,
+                    "quality_flags": item.quality_flags,
+                }
+                for item in chart_timeframes
+            ],
+        },
         "agents": {
             "total": len(agent_results),
             "active": len(active_agents),
@@ -1453,6 +1629,7 @@ def build_audit_log_snapshot(bundle: BriefingBundle) -> dict[str, Any]:
         bundle.orchestrator_decision,
         bundle.global_recommendation,
         bundle.market_regime,
+        bundle.chart_store,
     )
     return {
         "generated_at": generated_at,
@@ -1465,7 +1642,9 @@ def build_audit_log_snapshot(bundle: BriefingBundle) -> dict[str, Any]:
             "status": inspector["data_quality_status"],
             "sources": inspector["source_counts"],
             "issues": inspector["source_issues"][:8],
+            "preflight": inspector["preflight"],
         },
+        "chart_store": inspector["chart_store"],
         "agents": inspector["agents"]["outputs"],
         "trades": inspector["trades"],
     }
@@ -1511,6 +1690,7 @@ def build_data_quality_snapshot(
     weekend_gold: WeekendGoldSnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     political_statements: list[PoliticalStatement] | None = None,
+    chart_store: ChartStore | None = None,
     now: datetime | None = None,
 ) -> DataQualitySnapshot:
     reference = now or datetime.now(timezone.utc)
@@ -1550,6 +1730,13 @@ def build_data_quality_snapshot(
         make_source_snapshot("white_house_feed", bool(political_statements), latest_political, f"{len(political_statements or [])} statements", now=reference),
         make_source_snapshot("cross_asset_yahoo", cross_asset_analysis is not None, gold.fetched_at, cross_asset_analysis.summary if cross_asset_analysis else "", now=reference),
         make_source_snapshot("oil_context", market_regime is not None, gold.fetched_at, market_regime.summary if market_regime else "", now=reference),
+        make_source_snapshot(
+            "chart_store_ohlc",
+            chart_store is not None and chart_store.status != "OFFLINE",
+            chart_store.generated_at if chart_store else None,
+            chart_store.summary if chart_store else "Chart Store indisponible",
+            now=reference,
+        ),
     ]
 
     missing = [snap.name for snap in snapshots if snap.status == "missing" and snap.critical]
@@ -1575,8 +1762,10 @@ def build_data_quality_snapshot(
         f"{len(missing)} critique(s) absente(s), {len(stale)} critique(s) stale, "
         f"{len(weak)} source(s) faible(s), {len(contradictions)} contradiction(s)."
     )
+    generated_at = reference.replace(microsecond=0).isoformat()
+    preflight = build_preflight_check(snapshots, score, generated_at)
     return DataQualitySnapshot(
-        generated_at=reference.replace(microsecond=0).isoformat(),
+        generated_at=generated_at,
         score=score,
         status=status,
         summary=summary,
@@ -1585,6 +1774,7 @@ def build_data_quality_snapshot(
         weak_sources=weak,
         contradictions=contradictions,
         snapshots=snapshots,
+        preflight=preflight,
     )
 
 
@@ -2821,6 +3011,188 @@ def aggregate_points(points: list[PricePoint], bucket_seconds: int) -> list[Pric
     return [buckets[key] for key in sorted(buckets.keys())]
 
 
+CHART_TIMEFRAME_SECONDS = {
+    "M1": 60,
+    "M5": 5 * 60,
+    "M15": 15 * 60,
+    "H1": 60 * 60,
+    "H4": 4 * 60 * 60,
+    "D1": 24 * 60 * 60,
+}
+
+CHART_MIN_CANDLES = {
+    "M5": 50,
+    "M15": 50,
+    "H1": 80,
+    "H4": 50,
+    "D1": 120,
+}
+
+CHART_MAX_AGE_MINUTES = {
+    "M5": 60,
+    "M15": 90,
+    "H1": 240,
+    "H4": 720,
+    "D1": 4320,
+}
+
+
+def price_points_to_candles(
+    points: list[PricePoint],
+    timeframe: str,
+    source: str,
+    fetched_at: str,
+) -> list[OHLCCandle]:
+    candles_by_timestamp: dict[int, OHLCCandle] = {}
+    for point in sorted(points, key=lambda item: item.timestamp):
+        open_price = point.open if point.open is not None else point.close
+        high_price = point.high if point.high is not None else point.close
+        low_price = point.low if point.low is not None else point.close
+        candles_by_timestamp[point.timestamp] = OHLCCandle(
+            timestamp=point.timestamp,
+            open=float(open_price),
+            high=float(high_price),
+            low=float(low_price),
+            close=float(point.close),
+            volume=point.volume,
+            source=source,
+            timeframe=timeframe,
+            fetched_at=fetched_at,
+        )
+    return [candles_by_timestamp[key] for key in sorted(candles_by_timestamp.keys())]
+
+
+def detect_chart_gaps(candles: list[OHLCCandle], timeframe: str) -> int:
+    expected = CHART_TIMEFRAME_SECONDS.get(timeframe)
+    if not expected or len(candles) < 2:
+        return 0
+    gap_count = 0
+    previous = candles[0]
+    for candle in candles[1:]:
+        if candle.timestamp - previous.timestamp > expected * 2.5:
+            gap_count += 1
+        previous = candle
+    return gap_count
+
+
+def resample_candles(candles: list[OHLCCandle], target_timeframe: str) -> list[OHLCCandle]:
+    bucket_seconds = CHART_TIMEFRAME_SECONDS[target_timeframe]
+    buckets: dict[int, list[OHLCCandle]] = {}
+    for candle in sorted(candles, key=lambda item: item.timestamp):
+        bucket_key = candle.timestamp - (candle.timestamp % bucket_seconds)
+        buckets.setdefault(bucket_key, []).append(candle)
+
+    resampled: list[OHLCCandle] = []
+    for timestamp in sorted(buckets.keys()):
+        bucket = buckets[timestamp]
+        first = bucket[0]
+        last = bucket[-1]
+        volumes = [item.volume for item in bucket if item.volume is not None]
+        resampled.append(
+            OHLCCandle(
+                timestamp=timestamp,
+                open=first.open,
+                high=max(item.high for item in bucket),
+                low=min(item.low for item in bucket),
+                close=last.close,
+                volume=sum(volumes) if volumes else None,
+                source=first.source,
+                timeframe=target_timeframe,
+                fetched_at=last.fetched_at,
+            )
+        )
+    return resampled
+
+
+def build_chart_timeframe(
+    timeframe: str,
+    points: list[PricePoint],
+    source: str,
+    fetched_at: str,
+    now: datetime | None = None,
+) -> ChartTimeframe:
+    candles = price_points_to_candles(points, timeframe, source, fetched_at)
+    freshness = age_minutes_from_iso(fetched_at, now=now)
+    gap_count = detect_chart_gaps(candles, timeframe)
+    quality_flags: list[str] = []
+    min_candles = CHART_MIN_CANDLES.get(timeframe, 20)
+    max_age = CHART_MAX_AGE_MINUTES.get(timeframe, 240)
+
+    if not candles:
+        return ChartTimeframe(timeframe=timeframe, status="OFFLINE", quality_flags=["source indisponible"])
+    if len(candles) < min_candles:
+        quality_flags.append(f"historique insuffisant: {len(candles)}/{min_candles} bougies")
+    if freshness is not None and freshness > max_age:
+        quality_flags.append(f"stale: {freshness} min > {max_age} min")
+    if gap_count:
+        quality_flags.append(f"{gap_count} gap(s) detecte(s)")
+
+    if any(flag.startswith("stale") for flag in quality_flags):
+        status = "STALE"
+    elif len(candles) < min_candles:
+        status = "INSUFFICIENT_HISTORY"
+    else:
+        status = "READY"
+
+    return ChartTimeframe(
+        timeframe=timeframe,
+        status=status,
+        candles=candles,
+        quality_flags=quality_flags,
+        last_timestamp=candles[-1].timestamp,
+        freshness_minutes=freshness,
+        gap_count=gap_count,
+    )
+
+
+def build_chart_store(
+    points_by_timeframe: dict[str, list[PricePoint]],
+    source: str,
+    fetched_at: str,
+    now: datetime | None = None,
+) -> ChartStore:
+    generated_at = (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
+    timeframe_order = ["M5", "M15", "H1", "H4", "D1"]
+    timeframes = [
+        build_chart_timeframe(timeframe, points_by_timeframe.get(timeframe, []), source, fetched_at, now=now)
+        for timeframe in timeframe_order
+    ]
+    ready = [item for item in timeframes if item.status == "READY"]
+    insufficient = [item for item in timeframes if item.status == "INSUFFICIENT_HISTORY"]
+    stale = [item for item in timeframes if item.status == "STALE"]
+    offline = [item for item in timeframes if item.status == "OFFLINE"]
+    if len(offline) == len(timeframes):
+        status = "OFFLINE"
+    elif stale:
+        status = "STALE"
+    elif insufficient:
+        status = "INSUFFICIENT_HISTORY"
+    elif len(ready) == len(timeframes):
+        status = "READY"
+    else:
+        status = "DEGRADED"
+    summary = (
+        f"Chart Store {status}: {len(ready)}/{len(timeframes)} timeframe(s) READY; "
+        f"{sum(item.gap_count for item in timeframes)} gap(s) detecte(s)."
+    )
+    return ChartStore(
+        generated_at=generated_at,
+        symbol="XAU/USD",
+        source=source,
+        status=status,
+        summary=summary,
+        timeframes=timeframes,
+    )
+
+
+def persist_chart_store_cache_safely(chart_store: ChartStore, path: Path = CHART_STORE_CACHE_PATH) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asdict(chart_store), ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
 def ema_series(values: list[float], period: int) -> list[float | None]:
     if len(values) < period:
         return [None] * len(values)
@@ -3032,12 +3404,25 @@ def build_technical_reading(timeframe: str, points: list[PricePoint]) -> Technic
     )
 
 
-def fetch_technical_timeframes() -> tuple[list[TechnicalReading], float, list[PricePoint]]:
+def fetch_technical_timeframes() -> tuple[list[TechnicalReading], float, list[PricePoint], ChartStore]:
     points_5m = fetch_symbol_snapshot("GC=F", "Gold futures 5m", interval="5m", data_range="5d").points
     points_15m = fetch_symbol_snapshot("GC=F", "Gold futures 15m", interval="15m", data_range="10d").points
     points_1h = fetch_symbol_snapshot("GC=F", "Gold futures 1h", interval="60m", data_range="6mo").points
     points_1d = fetch_symbol_snapshot("GC=F", "Gold futures 1d", interval="1d", data_range="2y").points
     points_4h = aggregate_points(points_1h, bucket_seconds=4 * 60 * 60)
+    fetched_at = iso_now()
+    chart_store = build_chart_store(
+        {
+            "M5": points_5m,
+            "M15": points_15m,
+            "H1": points_1h,
+            "H4": points_4h,
+            "D1": points_1d,
+        },
+        source="Yahoo Finance GC=F proxy",
+        fetched_at=fetched_at,
+    )
+    persist_chart_store_cache_safely(chart_store)
 
     timeframe_map = [
         ("1D", points_1d),
@@ -3048,7 +3433,7 @@ def fetch_technical_timeframes() -> tuple[list[TechnicalReading], float, list[Pr
     ]
     readings = [build_technical_reading(timeframe, points) for timeframe, points in timeframe_map]
     proxy_current_price = points_15m[-1].close
-    return readings, proxy_current_price, points_5m
+    return readings, proxy_current_price, points_5m, chart_store
 
 
 def adjust_proxy_level_to_spot(level: float, spot_price: float, proxy_price: float) -> float:
@@ -4680,15 +5065,16 @@ def build_passive_agent_results(
 
 
 def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
-    buy_agents = [agent.name for agent in agent_results if agent.bias == "BUY"]
-    sell_agents = [agent.name for agent in agent_results if agent.bias == "SELL"]
-    caution_agents = [agent.name for agent in agent_results if agent.bias == "CAUTION"]
+    scorant_agents = [agent for agent in agent_results if agent.name != "ElliottWaveAgent"]
+    buy_agents = [agent.name for agent in scorant_agents if agent.bias == "BUY"]
+    sell_agents = [agent.name for agent in scorant_agents if agent.bias == "SELL"]
+    caution_agents = [agent.name for agent in scorant_agents if agent.bias == "CAUTION"]
     contradictions: list[str] = []
     if buy_agents and sell_agents:
         contradictions.append(f"BUY vs SELL: {', '.join(buy_agents[:3])} contre {', '.join(sell_agents[:3])}.")
     if caution_agents:
         contradictions.append(f"Vigilance active: {', '.join(caution_agents[:4])}.")
-    weak_confidence = [agent.name for agent in agent_results if agent.confidence < 45]
+    weak_confidence = [agent.name for agent in scorant_agents if agent.confidence < 45]
     if weak_confidence:
         contradictions.append(f"Confiance faible: {', '.join(weak_confidence[:4])}.")
     return contradictions
@@ -4814,7 +5200,7 @@ def build_orchestrator_quality_gate(
     market_regime: MarketRegimeAnalysis | None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
-    directional_components = [component for component in components if component.key != "data_quality"]
+    directional_components = [component for component in components if component.key != "data_quality" and component.weight > 0]
     strong_buy = [component.label for component in directional_components if component.score >= 62]
     strong_sell = [component.label for component in directional_components if component.score <= 38]
     if strong_buy and strong_sell:
@@ -4848,7 +5234,7 @@ def build_orchestrator_decision(
 ) -> tuple[TradeRecommendation, OrchestratorDecision]:
     weights = {
         "technical": 0.18,
-        "elliott": 0.10,
+        "elliott": 0.00,
         "macro": 0.18,
         "geopolitical_oil": 0.14,
         "cross_assets": 0.12,
@@ -4904,13 +5290,13 @@ def build_orchestrator_decision(
     supportive = [
         component
         for component in components
-        if component.key != "data_quality"
+        if component.key != "data_quality" and component.weight > 0
         if (component.score >= 55 if direction_is_buy else component.score <= 45)
     ]
     counter = [
         component
         for component in components
-        if component.key != "data_quality"
+        if component.key != "data_quality" and component.weight > 0
         if (component.score <= 45 if direction_is_buy else component.score >= 55)
     ]
     supportive.sort(key=lambda component: abs(component.score - 50), reverse=True)
@@ -6133,6 +6519,7 @@ def build_payload(
     agent_results: list[AgentResult] | None = None,
     trade_ledger: TradeLedgerSummary | None = None,
     orchestrator_decision: OrchestratorDecision | None = None,
+    chart_store: ChartStore | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -6244,6 +6631,8 @@ def build_payload(
         payload["macro_catalysts"] = asdict(macro_catalysts)
     if data_quality:
         payload["data_quality"] = asdict(data_quality)
+    if chart_store:
+        payload["chart_store"] = asdict(chart_store)
     if cross_asset_analysis:
         payload["cross_asset_analysis"] = asdict(cross_asset_analysis)
     if event_mode:
@@ -6268,6 +6657,7 @@ def build_payload(
         orchestrator_decision,
         global_recommendation,
         market_regime,
+        chart_store,
     )
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
@@ -7810,6 +8200,22 @@ def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
         return '<div class="empty-state">Data quality indisponible: SourceRegistry non calcule sur ce snapshot.</div>'
 
     status_class = "bullish" if data_quality.score >= 80 else "neutral" if data_quality.score >= 60 else "bearish"
+    preflight = data_quality.preflight
+    preflight_class = (
+        "bullish"
+        if preflight and preflight.status == "READY"
+        else "bearish"
+        if preflight and preflight.trade_blocked
+        else "neutral"
+    )
+    preflight_html = (
+        f"""
+        <div class="trade-verdict {preflight_class}">Preflight {html.escape(preflight.status)} · {'trade bloque' if preflight.trade_blocked else 'trade autorise cote data'}</div>
+        <p class="footer-note">{html.escape(preflight.summary)}</p>
+        """
+        if preflight
+        else '<div class="trade-verdict neutral">Preflight indisponible</div>'
+    )
     rows = []
     for snapshot in data_quality.snapshots:
         row_class = "bullish" if snapshot.status == "ok" else "bearish" if snapshot.status in {"missing", "stale"} else "neutral"
@@ -7830,6 +8236,7 @@ def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
     return f"""
     <div class="trade-verdict {status_class}">Data quality {html.escape(data_quality.status)} · {data_quality.score}/100</div>
     <p class="trade-summary">{html.escape(data_quality.summary)}</p>
+    {preflight_html}
     <div class="geo-grid">
       <div class="geo-stat"><strong>Missing</strong><span>{len(data_quality.missing_sources)}</span></div>
       <div class="geo-stat"><strong>Stale</strong><span>{len(data_quality.stale_sources)}</span></div>
@@ -7849,6 +8256,44 @@ def render_data_quality_panel(data_quality: DataQualitySnapshot | None) -> str:
     """.strip()
 
 
+def render_chart_store_panel(chart_store: ChartStore | None) -> str:
+    if chart_store is None:
+        return '<div class="empty-state">Chart Store indisponible: aucune charte OHLC multi-timeframe chargee.</div>'
+    status_class = "bullish" if chart_store.status == "READY" else "bearish" if chart_store.status in {"OFFLINE", "STALE"} else "neutral"
+    rows = []
+    for item in chart_store.timeframes:
+        row_class = "bullish" if item.status == "READY" else "bearish" if item.status in {"OFFLINE", "STALE"} else "neutral"
+        flags = "; ".join(item.quality_flags) if item.quality_flags else "aucune alerte"
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(item.timeframe)}</strong></td>
+              <td class="{row_class}">{html.escape(item.status)}</td>
+              <td>{len(item.candles)}</td>
+              <td>{html.escape(str(item.last_timestamp if item.last_timestamp is not None else 'n/a'))}</td>
+              <td>{html.escape(str(item.freshness_minutes if item.freshness_minutes is not None else 'n/a'))} min</td>
+              <td>{item.gap_count}</td>
+              <td>{html.escape(flags)}</td>
+            </tr>
+            """.strip()
+        )
+    return f"""
+    <div class="trade-verdict {status_class}">Chart Store {html.escape(chart_store.status)}</div>
+    <p class="trade-summary">{html.escape(chart_store.summary)}</p>
+    <div class="geo-grid">
+      <div class="geo-stat"><strong>Source</strong><span>{html.escape(chart_store.source)}</span></div>
+      <div class="geo-stat"><strong>Timeframes</strong><span>{len(chart_store.timeframes)}</span></div>
+      <div class="geo-stat"><strong>Cache local</strong><span>{html.escape(str(CHART_STORE_CACHE_PATH))}</span></div>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>TF</th><th>Status</th><th>Bougies</th><th>Derniere bougie</th><th>Freshness</th><th>Gaps</th><th>Qualite</th></tr></thead>
+        <tbody>{''.join(rows) or '<tr><td colspan="7">Aucun timeframe disponible.</td></tr>'}</tbody>
+      </table>
+    </div>
+    """.strip()
+
+
 def render_monitoring_inspector_panel(
     generated_at: str,
     data_quality: DataQualitySnapshot | None,
@@ -7857,6 +8302,7 @@ def render_monitoring_inspector_panel(
     orchestrator_decision: OrchestratorDecision | None,
     global_recommendation: TradeRecommendation | None,
     market_regime: MarketRegimeAnalysis | None,
+    chart_store: ChartStore | None = None,
 ) -> str:
     inspector = build_monitoring_inspector_payload(
         generated_at,
@@ -7866,6 +8312,7 @@ def render_monitoring_inspector_panel(
         orchestrator_decision,
         global_recommendation,
         market_regime,
+        chart_store,
     )
     source_rows = []
     for snapshot in (data_quality.snapshots if data_quality else []):
@@ -7921,12 +8368,28 @@ def render_monitoring_inspector_panel(
     source_counts = inspector["source_counts"]
     trades = inspector["trades"]
     decision = inspector["decision"]
+    preflight = inspector["preflight"]
+    chart_payload = inspector["chart_store"]
     gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision["quality_gate_reasons"][:6]) or "<li>Aucun blocage decisionnel signale.</li>"
     trade_gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in trades["quality_gate_reasons"][:6]) or "<li>Aucune raison Trade Gate disponible.</li>"
+    preflight_items = "".join(f"<li>{html.escape(item)}</li>" for item in [*preflight["blockers"], *preflight["warnings"]][:8]) or "<li>Aucun blocage preflight.</li>"
     source_issues = "".join(
         f"<li>{html.escape(issue['name'])}: {html.escape(issue['status'])} · {html.escape(issue['value_summary'])}</li>"
         for issue in inspector["source_issues"][:8]
     ) or "<li>Aucune source missing/stale/weak detectee.</li>"
+    chart_rows = "".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(item['timeframe'])}</strong></td>
+          <td>{html.escape(item['status'])}</td>
+          <td>{item['candles']}</td>
+          <td>{html.escape(str(item['freshness_minutes'] if item['freshness_minutes'] is not None else 'n/a'))} min</td>
+          <td>{item['gap_count']}</td>
+          <td>{html.escape('; '.join(item['quality_flags']) if item['quality_flags'] else 'aucune alerte')}</td>
+        </tr>
+        """.strip()
+        for item in chart_payload["timeframes"]
+    )
 
     return f"""
     <div class="trade-verdict {state_tone_class(decision['gate_status'])}">Inspector · {html.escape(decision['verdict'])} {decision['score']}/100 · Data quality {inspector['data_quality_score']}/100</div>
@@ -7937,9 +8400,16 @@ def render_monitoring_inspector_panel(
       <div class="geo-stat"><strong>Sources en alerte</strong><span>{source_counts['issues']}</span><small>missing {source_counts['missing']} · stale {source_counts['stale']} · weak {source_counts['weak']}</small></div>
       <div class="geo-stat"><strong>Agents actifs</strong><span>{inspector['agents']['active']} / {inspector['agents']['total']}</span></div>
       <div class="geo-stat"><strong>Trades crees</strong><span>{trades['total']}</span><small>actifs {trades['active']} · wins {trades['wins']} · losses {trades['losses']}</small></div>
+      <div class="geo-stat"><strong>Preflight</strong><span>{html.escape(preflight['status'])}</span><small>{'trade bloque' if preflight['trade_blocked'] else 'data OK trade'}</small></div>
+      <div class="geo-stat"><strong>Chart Store</strong><span>{html.escape(chart_payload['status'])}</span><small>{len(chart_payload['timeframes'])} TF</small></div>
       <div class="geo-stat"><strong>Audit log</strong><span>{html.escape(str(AUDIT_LOG_PATH))}</span><small>append-only JSONL</small></div>
     </div>
     <div class="geo-columns">
+      <div class="module-block">
+        <div class="section-kicker">Preflight</div>
+        <p class="footer-note">{html.escape(preflight['summary'])}</p>
+        <ul class="reason-list">{preflight_items}</ul>
+      </div>
       <div class="module-block">
         <div class="section-kicker">Erreurs / sources stale</div>
         <ul class="reason-list">{source_issues}</ul>
@@ -7957,6 +8427,12 @@ def render_monitoring_inspector_panel(
       <table class="technical-table">
         <thead><tr><th>Source</th><th>Status</th><th>Categorie</th><th>Dernier refresh</th><th>Valeur</th><th>Agents</th></tr></thead>
         <tbody>{''.join(source_rows) or '<tr><td colspan="6">Aucune source auditable sur ce snapshot.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Chart TF</th><th>Status</th><th>Bougies</th><th>Freshness</th><th>Gaps</th><th>Qualite</th></tr></thead>
+        <tbody>{chart_rows or '<tr><td colspan="6">Chart Store indisponible.</td></tr>'}</tbody>
       </table>
     </div>
     <div class="table-wrap">
@@ -9544,6 +10020,7 @@ def render_dashboard_clarity(
     political_statements = bundle.political_statements
     trade_ledger = bundle.trade_ledger
     orchestrator_decision = bundle.orchestrator_decision
+    chart_store = bundle.chart_store
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -10814,6 +11291,7 @@ def render_dashboard_clarity_v2(
     political_statements = bundle.political_statements
     trade_ledger = bundle.trade_ledger
     orchestrator_decision = bundle.orchestrator_decision
+    chart_store = bundle.chart_store
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
@@ -11753,6 +12231,7 @@ def render_dashboard_clarity_v2(
           <section class="layout-technical">
             <article class="panel span-8"><div class="section-kicker">Technique multi-timeframe</div><h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>{technical_matrix}</article>
             <article class="panel span-4"><div class="section-kicker">Plan d'execution intraday</div><h2>Hausse | baisse | attente</h2><div class="scenario-grid scenario-stack"><div class="scenario positive"><h3>Scenario hausse</h3><p>{html.escape(bullish_case)}</p></div><div class="scenario negative"><h3>Scenario baisse</h3><p>{html.escape(bearish_case)}</p></div><div class="scenario neutral"><h3>Scenario attente</h3><p>{html.escape(wait_case)}</p></div></div></article>
+            <article class="panel span-12"><div class="section-kicker">Chart Store OHLC</div><h2>Charte multi-timeframe pour Technical et Elliott</h2>{render_chart_store_panel(chart_store)}</article>
             <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Technical agents</h2>{render_agent_department_panel(agent_results, "Technical")}</article>
           </section>
         </section>
@@ -11785,7 +12264,7 @@ def render_dashboard_clarity_v2(
 
         <section class="tab-view" id="inspector" data-tab-view="inspector">
           <div class="view-header"><div><div class="section-kicker">Inspector</div><h2>Audit sources, agents, gates et trades</h2><p>Tout ce qui explique pourquoi une decision ou un trade existe.</p></div></div>
-          <section class="layout-inspector"><article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}</article></section>
+          <section class="layout-inspector"><article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article></section>
         </section>
 
         <section class="tab-view" id="reports" data-tab-view="reports">
@@ -11797,7 +12276,7 @@ def render_dashboard_clarity_v2(
             <article class="panel span-12"><div class="section-kicker">Fondation multi-agents passive</div><h2>Inventaire agents Phase 5</h2>{render_agent_department_panel(agent_results, "Market")}{render_agent_department_panel(agent_results, "Decision")}{render_agent_department_panel(agent_results, "Technical")}{render_agent_department_panel(agent_results, "Macro")}{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
             <article class="panel span-12"><div class="section-kicker">Source Registry</div><h2>Gouvernance des flux d'information</h2>{render_data_quality_panel(data_quality)}</article>
             <article class="panel span-12"><div class="section-kicker">Trade Ledger</div><h2>Historique des TradePlan verrouilles</h2>{render_trade_tracker_panel(trade_ledger)}</article>
-            <article class="panel span-12"><div class="section-kicker">Monitoring Inspector</div><h2>Audit sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime)}</article>
+            <article class="panel span-12"><div class="section-kicker">Monitoring Inspector</div><h2>Audit sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article>
           </section>
         </section>
       </div>
@@ -11825,7 +12304,15 @@ def fetch_local_free_context(
     us10y: SymbolSnapshot,
     news: list[NewsItem],
     technical_readings: list[TechnicalReading],
-) -> tuple[SymbolSnapshot | None, OfficialMacroRates, CrossAssetAnalysis, EventModeAnalysis, MarketRegimeAnalysis]:
+) -> tuple[
+    SymbolSnapshot | None,
+    OfficialMacroRates,
+    CrossAssetAnalysis,
+    EventModeAnalysis,
+    MarketRegimeAnalysis,
+    SymbolSnapshot | None,
+    SymbolSnapshot | None,
+]:
     def cached_snapshot(key: str, loader: Any) -> SymbolSnapshot | None:
         now = time.time()
         cached = LOCAL_CONTEXT_SNAPSHOT_CACHE.get(key)
@@ -11915,7 +12402,7 @@ def fetch_local_free_context(
     )
     event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
     market_regime = build_market_regime_analysis(gold, dxy, us10y, news, wti=wti, brent=brent, event_mode=event_mode)
-    return real_yield, official_macro_rates, cross_asset, event_mode, market_regime
+    return real_yield, official_macro_rates, cross_asset, event_mode, market_regime, wti, brent
 
 
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
@@ -11924,9 +12411,9 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     weekend_gold = fetch_ig_weekend_gold_snapshot()
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
     us10y = fetch_symbol_snapshot("^TNX", "US 10Y", interval="1d", data_range="1mo")
-    technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
+    technical_readings, proxy_price, points_5m, chart_store = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime, wti, brent = fetch_local_free_context(
         gold,
         dxy,
         us10y,
@@ -11964,6 +12451,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         political_statements=political_statements,
+        chart_store=chart_store,
     )
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
@@ -12065,6 +12553,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         agent_results=agent_results,
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
+        chart_store=chart_store,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -12096,6 +12585,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.agent_results = agent_results
     live_bundle.trade_ledger = trade_ledger
     live_bundle.orchestrator_decision = orchestrator_decision
+    live_bundle.chart_store = chart_store
     return live_bundle
 
 
@@ -12110,9 +12600,9 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
     cftc_positioning = fetch_cftc_gold_positioning()
     etf_flows_analysis = fetch_etf_flows_analysis()
     macro_catalysts = build_macro_catalyst_calendar()
-    technical_readings, proxy_price, points_5m = fetch_technical_timeframes()
+    technical_readings, proxy_price, points_5m, chart_store = fetch_technical_timeframes()
     gold.intraday_points = align_proxy_points_to_spot(points_5m, gold.price)
-    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime = fetch_local_free_context(
+    real_yield, official_macro_rates, cross_asset_analysis, event_mode, market_regime, wti, brent = fetch_local_free_context(
         gold,
         dxy,
         us10y,
@@ -12132,7 +12622,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         etf_flows_analysis=etf_flows_analysis,
     )
     geopolitical_analysis = analysis.geopolitical
-    event_facts = build_event_facts(news, dxy=dxy, us10y=us10y, gold=gold)
+    event_facts = build_event_facts(news, wti=wti, brent=brent, dxy=dxy, us10y=us10y, gold=gold)
     political_statements = build_political_statements(news)
     data_quality = build_data_quality_snapshot(
         gold,
@@ -12148,6 +12638,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         weekend_gold=weekend_gold,
         market_regime=market_regime,
         political_statements=political_statements,
+        chart_store=chart_store,
     )
     atr_15m = next(reading.atr14 for reading in technical_readings if reading.timeframe == "15m")
     fundamental_recommendation = build_fundamental_recommendation(
@@ -12249,6 +12740,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         agent_results=agent_results,
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
+        chart_store=chart_store,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -12285,6 +12777,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         agent_results=agent_results,
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
+        chart_store=chart_store,
     )
 
 

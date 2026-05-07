@@ -8,6 +8,7 @@ from xauusd_agent import (
     AgentResult,
     BriefingBundle,
     CFTCPositioning,
+    ChartStore,
     DataQualitySnapshot,
     ETFFlowsAnalysis,
     ETFHoldingRecord,
@@ -40,15 +41,18 @@ from xauusd_agent import (
     build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
+    build_chart_store,
     parse_bea_release_schedule,
     parse_fed_rss_events,
     parse_fomc_calendar_events,
     classify_bias,
     build_passive_agent_results,
     build_orchestrator_decision,
+    price_points_to_candles,
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
     render_dashboard,
+    resample_candles,
     score_headline,
     update_orchestrator_agent,
 )
@@ -845,6 +849,60 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Investing.com XAU/USD", quality.stale_sources)
         self.assertIn("FRED DGS10", quality.missing_sources)
         self.assertIn("World Gold Council ETF flows", quality.missing_sources)
+        self.assertIsNotNone(quality.preflight)
+        self.assertEqual(quality.preflight.status, "SOURCE_STALE")
+        self.assertTrue(quality.preflight.trade_blocked)
+
+    def test_preflight_keeps_dashboard_usable_when_secondary_source_missing(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        dxy = self.snapshot("DXY", 99.0, 98.5)
+        us10y = self.snapshot("^TNX", 4.2, 4.1)
+        dgs10 = self.snapshot("DGS10", 4.2, 4.1)
+        dfii10 = self.snapshot("DFII10", 1.8, 1.9)
+        official = build_official_macro_rates(dgs10, None, None, dfii10, us10y)
+        quality = build_data_quality_snapshot(
+            gold,
+            dxy,
+            us10y,
+            [],
+            real_yield=dfii10,
+            official_macro_rates=official,
+            now=datetime(2026, 4, 24, tzinfo=timezone.utc),
+        )
+        self.assertIsNotNone(quality.preflight)
+        self.assertNotEqual(quality.preflight.status, "OFFLINE")
+        self.assertTrue(any(route.source_id == "chart_store_ohlc" for route in quality.preflight.routes))
+
+    def test_chart_store_resamples_and_flags_history_quality(self) -> None:
+        fetched_at = "2026-04-24T00:00:00+00:00"
+        m1_points = [
+            PricePoint(timestamp=index * 60, open=100 + index, high=101 + index, low=99 + index, close=100.5 + index, volume=10)
+            for index in range(10)
+        ]
+        m1_candles = price_points_to_candles(m1_points, "M1", "fixture", fetched_at)
+        m5_candles = resample_candles(m1_candles, "M5")
+        self.assertEqual(len(m5_candles), 2)
+        self.assertEqual(m5_candles[0].open, m1_candles[0].open)
+        self.assertEqual(m5_candles[0].close, m1_candles[4].close)
+        self.assertEqual(m5_candles[0].volume, 50)
+
+        points_by_tf = {
+            "M5": [PricePoint(timestamp=index * 300, close=100 + index) for index in range(60)],
+            "M15": [PricePoint(timestamp=index * 900, close=100 + index) for index in range(60)],
+            "H1": [PricePoint(timestamp=index * 3600, close=100 + index) for index in range(20)],
+            "H4": [PricePoint(timestamp=index * 14400, close=100 + index) for index in range(60)],
+            "D1": [PricePoint(timestamp=index * 86400, close=100 + index) for index in range(130)],
+        }
+        store = build_chart_store(
+            points_by_tf,
+            source="fixture",
+            fetched_at=fetched_at,
+            now=datetime(2026, 4, 24, tzinfo=timezone.utc),
+        )
+        self.assertIsInstance(store, ChartStore)
+        self.assertEqual(store.status, "INSUFFICIENT_HISTORY")
+        h1 = next(item for item in store.timeframes if item.timeframe == "H1")
+        self.assertEqual(h1.status, "INSUFFICIENT_HISTORY")
 
     def test_event_fact_deduplication_keeps_single_fact_per_headline(self) -> None:
         item = NewsItem(
@@ -1124,6 +1182,67 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(recommendation.verdict, "WAIT")
         self.assertEqual(decision.status, "WAIT")
         self.assertTrue(any("Contradiction" in reason for reason in decision.quality_gate_reasons))
+
+    def test_elliott_quarantine_cannot_change_orchestrator_decision(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=66,
+            summary="Ancien moteur haussier.",
+            reasons=["legacy"],
+            stop_loss=2385.0,
+            take_profit_1=2420.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        base_agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 72, 70, "Technique constructive."),
+            AgentResult("MacroAgent", "Macro", "BUY", 74, 76, "Macro favorable."),
+            AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
+            AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
+            AgentResult("OrchestratorAgent", "Decision", "BUY", 66, 74, "Ancien orchestrateur passif."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=90,
+            status="HIGH",
+            summary="Sources critiques ok.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+        )
+        bullish_agents = [
+            *base_agents,
+            AgentResult("ElliottWaveAgent", "Technical", "BUY", 95, 80, "Elliott tres haussier."),
+        ]
+        bearish_agents = [
+            *base_agents,
+            AgentResult("ElliottWaveAgent", "Technical", "SELL", 5, 80, "Elliott tres baissier."),
+        ]
+        recommendation_buy, decision_buy = build_orchestrator_decision(
+            gold,
+            legacy,
+            bullish_agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+        )
+        recommendation_sell, decision_sell = build_orchestrator_decision(
+            gold,
+            legacy,
+            bearish_agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+        )
+        elliott_component = next(component for component in decision_buy.components if component.key == "elliott")
+        self.assertEqual(elliott_component.weight, 0.0)
+        self.assertEqual(recommendation_buy.verdict, recommendation_sell.verdict)
+        self.assertEqual(decision_buy.status, decision_sell.status)
+        self.assertEqual(decision_buy.bullish_score, decision_sell.bullish_score)
 
     def test_official_macro_rates_compare_yahoo_tnx_to_fred(self) -> None:
         dgs10 = self.snapshot("DGS10", 4.50, 4.45)

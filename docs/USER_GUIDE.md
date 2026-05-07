@@ -63,7 +63,7 @@ Vue technique:
 - scenarios hausse/baisse/attente;
 - agents techniques, dont Elliott Wave Agent.
 
-Note: dans la v2, Elliott Wave est un agent passif experimental. Il ne doit pas etre lu comme un vrai comptage de vagues multi-timeframe tant que la v3.0 n'a pas livre le Chart Store OHLC et l'Elliott Engine v3.
+Note: Elliott Wave est encore un agent passif experimental. Depuis la Phase 26, son poids est `0.00` dans l'orchestrateur: il ne peut pas changer la decision `BUY`, `SELL` ou `WAIT`. Le Chart Store OHLC livre en Phase 25 sert seulement de base technique au futur Elliott Engine v3.
 
 ### Macro
 

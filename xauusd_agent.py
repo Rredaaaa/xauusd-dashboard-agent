@@ -804,6 +804,7 @@ class BriefingBundle:
     geopolitical_analysis: GeopoliticalAnalysis | None = None
     fundamental_recommendation: "TradeRecommendation | None" = None
     technical_recommendation: "TradeRecommendation | None" = None
+    technical_decision: "TechnicalDecision | None" = None
     global_recommendation: "TradeRecommendation | None" = None
     technical_timeframes: list["TechnicalReading"] | None = None
     executive_summary: str = ""
@@ -836,6 +837,25 @@ class TradeRecommendation:
     take_profit_1: float
     take_profit_2: float
     source_note: str
+
+
+@dataclass
+class TechnicalDecision:
+    status: str
+    direction: str
+    structure: str
+    score: int
+    confidence: int
+    trigger: str
+    invalidation: str
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    reasons: list[str]
+    contradictions: list[str]
 
 
 @dataclass
@@ -962,7 +982,7 @@ SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
     "white_house_feed": SourceRegistryEntry("white_house_feed", "White House News feed", "political_statements", 1, 10080, False, WHITE_HOUSE_NEWS_FEED_URL, ["TrumpPoliticalStatementsAgent"]),
     "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceAgent"]),
     "oil_context": SourceRegistryEntry("oil_context", "WTI/Brent oil context", "oil", 2, 240, False, "https://finance.yahoo.com/", ["GeopoliticalOilShockAgent", "RiskManagerAgent"]),
-    "chart_store_ohlc": SourceRegistryEntry("chart_store_ohlc", "Chart Store OHLC", "chart", 2, 240, False, "https://finance.yahoo.com/quote/GC=F/", ["TechnicalAgent", "ElliottWaveAgent"]),
+    "chart_store_ohlc": SourceRegistryEntry("chart_store_ohlc", "Chart Store OHLC", "chart", 2, 240, False, "https://finance.yahoo.com/quote/GC=F/", ["TechnicalAgent"]),
 }
 
 
@@ -1179,6 +1199,19 @@ def load_trade_ledger(path: Path = TRADE_LEDGER_PATH) -> list[TradePlan]:
     return sorted(latest_by_id.values(), key=lambda item: item.created_at, reverse=True)
 
 
+def trade_plan_public_dict(plan: TradePlan) -> dict[str, Any]:
+    payload = asdict(plan)
+    payload.pop("elliott_wave_snapshot", None)
+    return payload
+
+
+def trade_ledger_public_dict(ledger: TradeLedgerSummary) -> dict[str, Any]:
+    payload = asdict(ledger)
+    payload["active_trades"] = [trade_plan_public_dict(plan) for plan in ledger.active_trades]
+    payload["recent_trades"] = [trade_plan_public_dict(plan) for plan in ledger.recent_trades]
+    return payload
+
+
 def append_trade_plan_snapshot(plan: TradePlan, path: Path = TRADE_LEDGER_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -1374,7 +1407,6 @@ def build_trade_plan_from_signal(
         entry_low, entry_high = entry - zone_padding, entry + zone_padding
         tp3 = entry - abs(global_recommendation.take_profit_2 - entry) * 1.618
     signal_id = trade_signal_id(direction, market_regime.name if market_regime else "Normal Macro", entry, global_recommendation.score)
-    elliott = next((agent for agent in agent_results if agent.name == "ElliottWaveAgent"), None)
     technical_snapshot = "; ".join(
         f"{reading.timeframe}:{reading.verdict}/{reading.score:+.1f}"
         for reading in technical_readings[:5]
@@ -1416,7 +1448,7 @@ def build_trade_plan_from_signal(
         technical_snapshot=technical_snapshot,
         macro_snapshot=next((agent.summary for agent in agent_results if agent.name == "MacroAgent"), ""),
         geopolitical_snapshot=next((agent.summary for agent in agent_results if agent.name == "GeopoliticalOilShockAgent"), ""),
-        elliott_wave_snapshot=elliott.summary if elliott else "Elliott Wave indisponible.",
+        elliott_wave_snapshot="",
         invalidation_rules=[
             f"Invalidation principale si prix touche SL {global_recommendation.stop_loss:.2f}.",
             "Invalidation contextuelle si Data Quality passe sous 55/100 ou si un fait Tier 1 contredit le scenario.",
@@ -3701,6 +3733,146 @@ def build_technical_recommendation(
     )
 
 
+def classify_technical_structure(readings: list[TechnicalReading], direction: str, weighted_score: float) -> str:
+    higher = [reading for reading in readings if reading.timeframe in {"1D", "4H", "1H"}]
+    lower = [reading for reading in readings if reading.timeframe in {"15m", "5m"}]
+    higher_aligned = sum(1 for reading in higher if reading.verdict == direction)
+    lower_aligned = sum(1 for reading in lower if reading.verdict == direction)
+
+    if abs(weighted_score) < 0.14:
+        return "range"
+    if higher and higher_aligned == len(higher) and lower and lower_aligned == len(lower):
+        return "trend"
+    if higher and higher_aligned >= 2 and lower and lower_aligned == 0:
+        return "pullback"
+    if higher and higher_aligned <= 1 and lower and lower_aligned == len(lower):
+        return "reversal"
+    if abs(weighted_score) >= 0.38:
+        return "breakout"
+    return "trend"
+
+
+def build_technical_decision(
+    spot: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    proxy_price: float,
+    cross_asset: CrossAssetAnalysis | None = None,
+    event_mode: EventModeAnalysis | None = None,
+    data_quality: DataQualitySnapshot | None = None,
+) -> TechnicalDecision:
+    if not readings:
+        price = spot.price
+        return TechnicalDecision(
+            status="WAIT",
+            direction="WAIT",
+            structure="no_data",
+            score=0,
+            confidence=0,
+            trigger="Aucune entree: matrice technique multi-timeframe indisponible.",
+            invalidation="Reprendre seulement quand les donnees OHLC sont disponibles.",
+            entry_zone_low=price,
+            entry_zone_high=price,
+            stop_loss=price,
+            tp1=price,
+            tp2=price,
+            tp3=price,
+            reasons=[],
+            contradictions=["Aucune lecture EMA/RSI/MACD/ATR exploitable."],
+        )
+
+    weights = {"1D": 0.28, "4H": 0.24, "1H": 0.20, "15m": 0.18, "5m": 0.10}
+    weighted_score = sum(
+        clamp(reading.score / 8.0, -1.0, 1.0) * weights.get(reading.timeframe, 0.0)
+        for reading in readings
+    )
+    raw_direction = "BUY" if weighted_score >= 0 else "SELL"
+    alignment_score, alignment_note = build_mtf_alignment_note(readings, raw_direction)
+    structure = classify_technical_structure(readings, raw_direction, weighted_score)
+    atr_15m = next((reading.atr14 for reading in readings if reading.timeframe == "15m"), readings[-1].atr14)
+    event_multiplier = event_mode.stop_multiplier if event_mode is not None else 1.0
+    atr_for_levels = max(atr_15m, 6.0) * event_multiplier
+    stop_loss, tp1, tp2 = build_trade_levels(
+        spot.price,
+        atr=atr_for_levels,
+        verdict=raw_direction,
+        stop_multiplier=1.0,
+        tp1_multiplier=1.1,
+        tp2_multiplier=2.1,
+    )
+    if raw_direction == "BUY":
+        tp3 = spot.price + (atr_for_levels * 3.2)
+        entry_zone_low = spot.price - (atr_for_levels * 0.18)
+        entry_zone_high = spot.price + (atr_for_levels * 0.10)
+        trigger_level = max(spot.resistance or spot.price, spot.price + atr_for_levels * 0.35)
+        invalidation_level = min(spot.support or stop_loss, stop_loss)
+        trigger = f"BUY seulement si cloture M15 au-dessus de {trigger_level:.2f} avec RSI > 50 et MACD histogramme positif."
+        invalidation = f"Invalidation BUY si cloture M15 sous {invalidation_level:.2f} ou si DXY/10Y reprennent fortement."
+    else:
+        tp3 = spot.price - (atr_for_levels * 3.2)
+        entry_zone_low = spot.price - (atr_for_levels * 0.10)
+        entry_zone_high = spot.price + (atr_for_levels * 0.18)
+        trigger_level = min(spot.support or spot.price, spot.price - atr_for_levels * 0.35)
+        invalidation_level = max(spot.resistance or stop_loss, stop_loss)
+        trigger = f"SELL seulement si cloture M15 sous {trigger_level:.2f} avec RSI < 50 et MACD histogramme negatif."
+        invalidation = f"Invalidation SELL si cloture M15 au-dessus de {invalidation_level:.2f} ou si l'or repasse en refuge confirme."
+
+    strength = abs(weighted_score)
+    score = clamp_score(50 + strength * 35 + (alignment_score - 50) * 0.22)
+    confidence = clamp_score(48 + alignment_score * 0.30 + min(strength * 45, 22))
+    contradictions: list[str] = []
+    reasons = [
+        alignment_note,
+        f"Structure detectee: {structure}. Score technique brut {weighted_score:+.2f}.",
+    ]
+
+    for reading in readings:
+        reasons.append(
+            f"{reading.timeframe}: {reading.verdict}, RSI7 {reading.rsi7:.1f}, MACD hist {reading.macd_histogram:+.2f}, ATR14 {reading.atr14:.2f}."
+        )
+
+    if alignment_score < 67:
+        contradictions.append("Alignement multi-timeframe incomplet: pas de trade direct sans cassure confirmee.")
+    if cross_asset is not None:
+        if raw_direction == "BUY" and cross_asset.verdict == "SELL":
+            contradictions.append("Cross-assets contre le BUY gold: attendre une confirmation prix plus forte.")
+        elif raw_direction == "SELL" and cross_asset.verdict == "BUY":
+            contradictions.append("Cross-assets contre le SELL gold: attendre une confirmation prix plus forte.")
+        else:
+            reasons.append(f"Cross-assets: {cross_asset.verdict} / {cross_asset.score}/100.")
+    if event_mode is not None and event_mode.active:
+        contradictions.append(f"Regime volatil actif {event_mode.score}/100: entree directe degradee en watch.")
+    if data_quality is not None and data_quality.preflight and data_quality.preflight.trade_blocked:
+        contradictions.append("Preflight sources bloque le trade: donnees critiques insuffisantes.")
+
+    if score < 58 or strength < 0.12:
+        direction = "WAIT"
+        status = "WAIT"
+    elif contradictions:
+        direction = f"WATCH_{raw_direction}"
+        status = "WATCH"
+    else:
+        direction = raw_direction
+        status = "TRADE_READY"
+
+    return TechnicalDecision(
+        status=status,
+        direction=direction,
+        structure=structure,
+        score=score,
+        confidence=confidence,
+        trigger=trigger,
+        invalidation=invalidation,
+        entry_zone_low=round(entry_zone_low, 2),
+        entry_zone_high=round(entry_zone_high, 2),
+        stop_loss=round(stop_loss, 2),
+        tp1=round(tp1, 2),
+        tp2=round(tp2, 2),
+        tp3=round(tp3, 2),
+        reasons=reasons[:7],
+        contradictions=contradictions[:5],
+    )
+
+
 def recommendation_bullish_score(recommendation: TradeRecommendation) -> float:
     if recommendation.verdict.upper() == "BUY":
         return float(recommendation.score)
@@ -4707,6 +4879,7 @@ def build_passive_agent_results(
     geopolitical_analysis: GeopoliticalAnalysis | None = None,
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
+    technical_decision: TechnicalDecision | None = None,
     global_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
@@ -4764,23 +4937,37 @@ def build_passive_agent_results(
         )
     )
 
-    technical_score = technical_recommendation.score if technical_recommendation else 50
+    technical_score = technical_decision.score if technical_decision else (technical_recommendation.score if technical_recommendation else 50)
+    technical_bias = (
+        technical_decision.direction
+        if technical_decision and technical_decision.direction in {"BUY", "SELL", "WATCH_BUY", "WATCH_SELL", "WAIT"}
+        else (technical_recommendation.verdict if technical_recommendation else "NEUTRAL")
+    )
+    technical_summary = (
+        f"TechnicalDecisionEngine: {technical_decision.direction} / {technical_decision.structure}. {technical_decision.trigger}"
+        if technical_decision
+        else (technical_recommendation.summary if technical_recommendation else "Lecture technique passive indisponible.")
+    )
     agents.append(
         AgentResult(
             name="TechnicalAgent",
             department="Technical",
-            bias=normalize_agent_bias(technical_recommendation.verdict if technical_recommendation else "NEUTRAL"),
+            bias=normalize_agent_bias(technical_bias),
             score=technical_score,
-            confidence=70 if readings else 45,
-            summary=(technical_recommendation.summary if technical_recommendation else "Lecture technique passive indisponible."),
+            confidence=technical_decision.confidence if technical_decision else (70 if readings else 45),
+            summary=technical_summary,
             evidence=[
                 AgentEvidence("Timeframes", f"{len(readings)} lectures EMA/RSI/MACD/volume", "GC=F proxy + spot XAU/USD"),
-                AgentEvidence("Raisons", "; ".join((technical_recommendation.reasons if technical_recommendation else [])[:3]) or "aucune raison technique"),
+                AgentEvidence("Decision", technical_decision.direction if technical_decision else "n/a", "TechnicalDecisionEngine"),
+                AgentEvidence("Raisons", "; ".join((technical_decision.reasons if technical_decision else (technical_recommendation.reasons if technical_recommendation else []))[:3]) or "aucune raison technique"),
             ],
-            risks=[] if readings else [AgentRisk("Technique", "Aucune matrice multi-timeframe disponible.", "high")],
+            risks=(
+                [AgentRisk("Contradictions", "; ".join(technical_decision.contradictions[:2]), "medium")]
+                if technical_decision and technical_decision.contradictions
+                else ([] if readings else [AgentRisk("Technique", "Aucune matrice multi-timeframe disponible.", "high")])
+            ),
         )
     )
-    agents.append(build_elliott_wave_agent(gold))
 
     official_10y = official_macro_rates.dgs10 if official_macro_rates and official_macro_rates.dgs10 else us10y
     macro_score = fundamental_recommendation.score if fundamental_recommendation else clamp_score(50 - dxy.change_pct * 18 - official_10y.change_abs * 600)
@@ -5082,7 +5269,7 @@ def build_passive_agent_results(
 
 
 def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
-    scorant_agents = [agent for agent in agent_results if agent.name != "ElliottWaveAgent"]
+    scorant_agents = list(agent_results)
     buy_agents = [agent.name for agent in scorant_agents if agent.bias == "BUY"]
     sell_agents = [agent.name for agent in scorant_agents if agent.bias == "SELL"]
     caution_agents = [agent.name for agent in scorant_agents if agent.bias == "CAUTION"]
@@ -5265,7 +5452,6 @@ def build_orchestrator_decision(
 ) -> tuple[TradeRecommendation, OrchestratorDecision]:
     weights = {
         "technical": 0.18,
-        "elliott": 0.00,
         "macro": 0.18,
         "geopolitical_oil": 0.14,
         "cross_assets": 0.12,
@@ -5274,7 +5460,6 @@ def build_orchestrator_decision(
         "data_quality": 0.08,
     }
     technical = agent_by_name(agent_results, "TechnicalAgent")
-    elliott = agent_by_name(agent_results, "ElliottWaveAgent")
     macro = agent_by_name(agent_results, "MacroAgent")
     geopolitical = agent_by_name(agent_results, "GeopoliticalOilShockAgent")
     cross_assets = agent_by_name(agent_results, "CorrelationAgent")
@@ -5282,7 +5467,6 @@ def build_orchestrator_decision(
 
     components = [
         build_agent_component("technical", "Technique", technical, weights["technical"]),
-        build_agent_component("elliott", "Elliott", elliott, weights["elliott"], direct_score=True),
         build_agent_component("macro", "Macro", macro, weights["macro"]),
         build_agent_component("geopolitical_oil", "Geopolitique/Oil", geopolitical, weights["geopolitical_oil"]),
         build_agent_component("cross_assets", "Cross-assets", cross_assets, weights["cross_assets"], direct_score=True),
@@ -6533,6 +6717,7 @@ def build_payload(
     geopolitical_analysis: GeopoliticalAnalysis | None = None,
     fundamental_recommendation: TradeRecommendation | None = None,
     technical_recommendation: TradeRecommendation | None = None,
+    technical_decision: TechnicalDecision | None = None,
     global_recommendation: TradeRecommendation | None = None,
     technical_timeframes: list[TechnicalReading] | None = None,
     real_yield: SymbolSnapshot | None = None,
@@ -6626,6 +6811,8 @@ def build_payload(
         payload["fundamental_recommendation"] = asdict(fundamental_recommendation)
     if technical_recommendation:
         payload["technical_recommendation"] = asdict(technical_recommendation)
+    if technical_decision:
+        payload["technical_decision"] = asdict(technical_decision)
     if global_recommendation:
         payload["global_recommendation"] = asdict(global_recommendation)
     if geopolitical_analysis:
@@ -6677,7 +6864,7 @@ def build_payload(
     if agent_results:
         payload["agent_results"] = [asdict(agent) for agent in agent_results]
     if trade_ledger:
-        payload["trade_ledger"] = asdict(trade_ledger)
+        payload["trade_ledger"] = trade_ledger_public_dict(trade_ledger)
     if orchestrator_decision:
         payload["orchestrator_decision"] = asdict(orchestrator_decision)
     payload["monitoring_inspector"] = build_monitoring_inspector_payload(
@@ -7198,6 +7385,28 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         if isinstance(technical_payload, dict)
         else None
     )
+    technical_decision_payload = payload.get("technical_decision")
+    technical_decision = (
+        TechnicalDecision(
+            status=str(technical_decision_payload.get("status", "WAIT")),
+            direction=str(technical_decision_payload.get("direction", "WAIT")),
+            structure=str(technical_decision_payload.get("structure", "range")),
+            score=int(technical_decision_payload.get("score", 0) or 0),
+            confidence=int(technical_decision_payload.get("confidence", 0) or 0),
+            trigger=str(technical_decision_payload.get("trigger", "")),
+            invalidation=str(technical_decision_payload.get("invalidation", "")),
+            entry_zone_low=float(technical_decision_payload.get("entry_zone_low", gold_price) or gold_price),
+            entry_zone_high=float(technical_decision_payload.get("entry_zone_high", gold_price) or gold_price),
+            stop_loss=float(technical_decision_payload.get("stop_loss", gold_price) or gold_price),
+            tp1=float(technical_decision_payload.get("tp1", gold_price) or gold_price),
+            tp2=float(technical_decision_payload.get("tp2", gold_price) or gold_price),
+            tp3=float(technical_decision_payload.get("tp3", gold_price) or gold_price),
+            reasons=list(technical_decision_payload.get("reasons", [])),
+            contradictions=list(technical_decision_payload.get("contradictions", [])),
+        )
+        if isinstance(technical_decision_payload, dict)
+        else None
+    )
     global_payload = payload.get("global_recommendation")
     global_recommendation = (
         TradeRecommendation(
@@ -7257,6 +7466,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_timeframes,
         executive_summary=str(payload.get("executive_summary", "")),
@@ -7945,9 +8155,9 @@ def render_reasons_list(reasons: list[str]) -> str:
 
 def recommendation_css_class(verdict: str) -> str:
     upper = verdict.upper()
-    if upper == "BUY":
+    if upper == "BUY" or upper.endswith("_BUY"):
         return "bullish"
-    if upper == "SELL":
+    if upper == "SELL" or upper.endswith("_SELL"):
         return "bearish"
     return "neutral"
 
@@ -8012,6 +8222,72 @@ def render_trade_card(recommendation: TradeRecommendation) -> str:
         <span>{html.escape(recommendation.source_note)}</span>
       </div>
     </article>
+    """.strip()
+
+
+def render_technical_decision_panel(decision: TechnicalDecision | None) -> str:
+    if decision is None:
+        return '<div class="empty-state">TechnicalDecisionEngine indisponible.</div>'
+    tone = recommendation_css_class(decision.direction)
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision.reasons[:5])
+    contradictions = "".join(f"<li>{html.escape(item)}</li>" for item in decision.contradictions[:5])
+    contradictions_html = (
+        f'<div class="technical-decision-block"><strong>Contradictions</strong><ul>{contradictions}</ul></div>'
+        if contradictions
+        else '<div class="technical-decision-block"><strong>Contradictions</strong><p>Aucune contradiction technique bloquante.</p></div>'
+    )
+    return f"""
+    <div class="technical-decision-card {tone}">
+      <div class="technical-decision-head">
+        <div>
+          <div class="section-kicker">TechnicalDecisionEngine</div>
+          <h3>{html.escape(decision.direction)} · {html.escape(decision.structure)}</h3>
+        </div>
+        <div class="global-score">{decision.score}<small>/100</small></div>
+      </div>
+      <div class="trade-levels">
+        <div><span>Zone entree</span><strong>{decision.entry_zone_low:.2f} / {decision.entry_zone_high:.2f}</strong></div>
+        <div><span>SL</span><strong>{decision.stop_loss:.2f}</strong></div>
+        <div><span>TP1</span><strong>{decision.tp1:.2f}</strong></div>
+        <div><span>TP2</span><strong>{decision.tp2:.2f}</strong></div>
+        <div><span>TP3</span><strong>{decision.tp3:.2f}</strong></div>
+      </div>
+      <div class="technical-decision-block"><strong>Trigger</strong><p>{html.escape(decision.trigger)}</p></div>
+      <div class="technical-decision-block"><strong>Invalidation</strong><p>{html.escape(decision.invalidation)}</p></div>
+      <div class="technical-decision-block"><strong>Raisons</strong><ul>{reasons}</ul></div>
+      {contradictions_html}
+    </div>
+    """.strip()
+
+
+def render_tradingview_chart(symbol: str = "OANDA:XAUUSD", interval: str = "15") -> str:
+    query = urllib.parse.urlencode(
+        {
+            "symbol": symbol,
+            "interval": interval,
+            "theme": "dark",
+            "style": "1",
+            "timezone": "Etc/UTC",
+            "withdateranges": "1",
+            "hide_side_toolbar": "0",
+            "allow_symbol_change": "1",
+            "save_image": "0",
+            "locale": "en",
+        }
+    )
+    src = f"https://www.tradingview.com/widgetembed/?{query}"
+    return f"""
+    <div class="tradingview-panel" data-provider="TradingView" data-symbol="{html.escape(symbol)}">
+      <iframe
+        title="TradingView XAU/USD live chart"
+        src="{html.escape(src)}"
+        loading="lazy"
+        referrerpolicy="origin"
+        allowtransparency="true"
+        scrolling="no">
+      </iframe>
+      <div class="footer-note">Charte live TradingView. Les niveaux internes restent calcules par Aureum Flux et ne remplacent pas la lecture graphique utilisateur.</div>
+    </div>
     """.strip()
 
 
@@ -10052,7 +10328,10 @@ def render_dashboard_clarity(
     trade_ledger = bundle.trade_ledger
     orchestrator_decision = bundle.orchestrator_decision
     chart_store = bundle.chart_store
+    technical_decision = bundle.technical_decision
     chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
+    tradingview_chart = render_tradingview_chart(interval="15")
+    tradingview_technical_chart = render_tradingview_chart(interval="60")
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
     generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
@@ -10079,6 +10358,15 @@ def render_dashboard_clarity(
         take_profit_2=gold.price + 20,
         source_note="Mode de secours du dashboard.",
     )
+    if technical_decision is None:
+        technical_decision = build_technical_decision(
+            gold,
+            technical_readings,
+            gold.price,
+            cross_asset=cross_asset_analysis,
+            event_mode=event_mode,
+            data_quality=data_quality,
+        )
     global_recommendation = bundle.global_recommendation or build_global_recommendation(
         gold,
         analysis,
@@ -10097,6 +10385,7 @@ def render_dashboard_clarity(
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental,
         technical_recommendation=technical,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -11323,7 +11612,9 @@ def render_dashboard_clarity_v2(
     trade_ledger = bundle.trade_ledger
     orchestrator_decision = bundle.orchestrator_decision
     chart_store = bundle.chart_store
-    chart_svg = candlestick_svg(gold.intraday_points or gold.points, gold.price)
+    technical_decision = bundle.technical_decision
+    tradingview_chart = render_tradingview_chart(interval="15")
+    tradingview_technical_chart = render_tradingview_chart(interval="60")
     confidence_width = max(8, min(100, analysis.confidence))
     bullish_case, bearish_case, wait_case = build_scenarios(gold, dxy, us10y)
     generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
@@ -11350,6 +11641,15 @@ def render_dashboard_clarity_v2(
         take_profit_2=gold.price + 20,
         source_note="Mode de secours du dashboard.",
     )
+    if technical_decision is None:
+        technical_decision = build_technical_decision(
+            gold,
+            technical_readings,
+            gold.price,
+            cross_asset=cross_asset_analysis,
+            event_mode=event_mode,
+            data_quality=data_quality,
+        )
     global_recommendation = bundle.global_recommendation or build_global_recommendation(
         gold,
         analysis,
@@ -11368,6 +11668,7 @@ def render_dashboard_clarity_v2(
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental,
         technical_recommendation=technical,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -11991,6 +12292,20 @@ def render_dashboard_clarity_v2(
     .confidence-bar span {{ display: block; width: {confidence_width}%; height: 100%; background: linear-gradient(90deg, var(--amber), var(--bull)); }}
     .chart-wrap {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #060e20; }}
     .chart-wrap svg {{ display: block; width: 100%; height: auto; }}
+    .tradingview-panel {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #060e20; min-height: 560px; }}
+    .tradingview-panel iframe {{ display: block; width: 100%; height: 520px; border: 0; }}
+    .tradingview-panel .footer-note {{ padding: 10px 12px; border-top: 1px solid var(--line); }}
+    .technical-decision-card {{ border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 7px; padding: 14px; background: var(--panel-2); }}
+    .technical-decision-card.bullish {{ border-left-color: rgba(78, 222, 163, 0.72); }}
+    .technical-decision-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.72); }}
+    .technical-decision-card.neutral {{ border-left-color: rgba(138, 180, 255, 0.72); }}
+    .technical-decision-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 10px; }}
+    .technical-decision-head h3 {{ margin-top: 2px; font-size: 20px; }}
+    .technical-decision-block {{ margin-top: 12px; color: var(--text); }}
+    .technical-decision-block strong {{ display: block; color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }}
+    .technical-decision-block p,
+    .technical-decision-block li {{ color: var(--soft); font-size: 13px; line-height: 1.5; }}
+    .technical-decision-block ul {{ padding-left: 18px; }}
     .headline-brief {{ padding: 13px; border-left: 5px solid var(--line); }}
     .headline-brief.bullish {{ border-left-color: rgba(78, 222, 163, 0.65); }}
     .headline-brief.bearish {{ border-left-color: rgba(255, 180, 171, 0.65); }}
@@ -12198,8 +12513,8 @@ def render_dashboard_clarity_v2(
             </article>
             <article class="panel span-6">
               <div class="section-kicker">Technique</div>
-              <h2>Timing intraday</h2>
-              {render_trade_card(technical)}
+              <h2>TechnicalDecisionEngine</h2>
+              {render_technical_decision_panel(technical_decision)}
             </article>
           </section>
         </section>
@@ -12214,10 +12529,9 @@ def render_dashboard_clarity_v2(
               {render_weekend_gold_proxy(weekend_gold, gold)}
             </article>
             <article class="panel span-8">
-              <div class="section-kicker">Prix & niveaux</div>
-              <h2>Chandelles 5m + ligne de prix live</h2>
-              <div class="chart-wrap">{chart_svg}</div>
-              <div class="footer-note" style="margin-top:10px;">Bougies 5 minutes calculees sur le proxy GC=F puis alignees sur le spot XAU/USD. La ligne ambre montre le prix spot en temps reel.</div>
+              <div class="section-kicker">Charte live TradingView</div>
+              <h2>XAU/USD TradingView + niveaux Aureum</h2>
+              {tradingview_chart}
               <div class="key-levels"><div class="level-chip"><strong>Support</strong><span>{format_number(gold.support)}</span></div><div class="level-chip"><strong>Resistance</strong><span>{format_number(gold.resistance)}</span></div><div class="level-chip"><strong>Dernier prix</strong><span>{format_number(gold.price)}</span></div></div>
             </article>
             <article class="panel span-4">
@@ -12245,7 +12559,7 @@ def render_dashboard_clarity_v2(
               <div class="decision-grid">
                 <div class="decision-item"><strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong><span>{html.escape(global_recommendation.summary)}</span></div>
                 <div class="decision-item"><strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong><span>{html.escape(fundamental.summary)}</span></div>
-                <div class="decision-item"><strong class="{recommendation_css_class(technical.verdict)}">Technique: {html.escape(technical.verdict)} / {technical.score}/100</strong><span>{html.escape(technical.summary)}</span></div>
+                <div class="decision-item"><strong class="{recommendation_css_class(technical_decision.direction)}">Technique: {html.escape(technical_decision.direction)} / {technical_decision.score}/100</strong><span>{html.escape(technical_decision.trigger)}</span></div>
                 <div class="decision-item"><strong class="{geo_class}">Geopolitics & Flows: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong><span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span></div>
                 <div class="decision-item"><strong>Ce que cela veut dire pour vous</strong><span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span></div>
               </div>
@@ -12258,11 +12572,13 @@ def render_dashboard_clarity_v2(
         </section>
 
         <section class="tab-view" id="technical" data-tab-view="technical">
-          <div class="view-header"><div><div class="section-kicker">Technical</div><h2>Timing, invalidation et Elliott Wave</h2><p>La vue technique doit rester lisible: matrice en pleine largeur, scenarios separes, agents sous la preuve.</p></div></div>
+          <div class="view-header"><div><div class="section-kicker">Technical</div><h2>Timing, trigger et invalidation</h2><p>La vue technique combine charte TradingView, structure, indicateurs, niveaux et confirmations.</p></div></div>
           <section class="layout-technical">
-            <article class="panel span-8"><div class="section-kicker">Technique multi-timeframe</div><h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>{technical_matrix}</article>
-            <article class="panel span-4"><div class="section-kicker">Plan d'execution intraday</div><h2>Hausse | baisse | attente</h2><div class="scenario-grid scenario-stack"><div class="scenario positive"><h3>Scenario hausse</h3><p>{html.escape(bullish_case)}</p></div><div class="scenario negative"><h3>Scenario baisse</h3><p>{html.escape(bearish_case)}</p></div><div class="scenario neutral"><h3>Scenario attente</h3><p>{html.escape(wait_case)}</p></div></div></article>
-            <article class="panel span-12"><div class="section-kicker">Chart Store OHLC</div><h2>Charte multi-timeframe pour Technical et Elliott</h2>{render_chart_store_panel(chart_store)}</article>
+            <article class="panel span-12"><div class="section-kicker">Charte live TradingView</div><h2>XAU/USD TradingView</h2>{tradingview_technical_chart}</article>
+            <article class="panel span-5"><div class="section-kicker">Decision technique</div><h2>Direction, trigger, SL et TP</h2>{render_technical_decision_panel(technical_decision)}</article>
+            <article class="panel span-7"><div class="section-kicker">Technique multi-timeframe</div><h2>EMA 20/50/100/200 | RSI7 | MACD 5/34/5 | Volume</h2>{technical_matrix}</article>
+            <article class="panel span-12"><div class="section-kicker">Plan d'execution intraday</div><h2>Hausse | baisse | attente</h2><div class="scenario-grid"><div class="scenario positive"><h3>Scenario hausse</h3><p>{html.escape(bullish_case)}</p></div><div class="scenario negative"><h3>Scenario baisse</h3><p>{html.escape(bearish_case)}</p></div><div class="scenario neutral"><h3>Scenario attente</h3><p>{html.escape(wait_case)}</p></div></div></article>
+            <article class="panel span-12"><div class="section-kicker">Chart Store OHLC</div><h2>Diagnostic donnees OHLC internes</h2>{render_chart_store_panel(chart_store)}</article>
             <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Technical agents</h2>{render_agent_department_panel(agent_results, "Technical")}</article>
           </section>
         </section>
@@ -12501,6 +12817,14 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         proxy_price,
         event_mode=event_mode,
     )
+    technical_decision = build_technical_decision(
+        gold,
+        technical_readings,
+        proxy_price,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+        data_quality=data_quality,
+    )
     global_recommendation = build_global_recommendation(
         gold,
         analysis,
@@ -12524,6 +12848,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -12567,6 +12892,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -12598,6 +12924,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.geopolitical_analysis = geopolitical_analysis
     live_bundle.fundamental_recommendation = fundamental_recommendation
     live_bundle.technical_recommendation = technical_recommendation
+    live_bundle.technical_decision = technical_decision
     live_bundle.global_recommendation = global_recommendation
     live_bundle.technical_timeframes = technical_readings
     live_bundle.executive_summary = executive_summary
@@ -12688,6 +13015,14 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         proxy_price,
         event_mode=event_mode,
     )
+    technical_decision = build_technical_decision(
+        gold,
+        technical_readings,
+        proxy_price,
+        cross_asset=cross_asset_analysis,
+        event_mode=event_mode,
+        data_quality=data_quality,
+    )
     global_recommendation = build_global_recommendation(
         gold,
         analysis,
@@ -12711,6 +13046,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -12754,6 +13090,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         real_yield=real_yield,
@@ -12790,6 +13127,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         geopolitical_analysis=geopolitical_analysis,
         fundamental_recommendation=fundamental_recommendation,
         technical_recommendation=technical_recommendation,
+        technical_decision=technical_decision,
         global_recommendation=global_recommendation,
         technical_timeframes=technical_readings,
         executive_summary=executive_summary,

@@ -34,7 +34,7 @@ Regle de reprise:
 Decision v3.0 active:
 
 - ne pas commencer par Elliott;
-- Phase 27A retire Elliott du dashboard, payload, Inspector, rapports et orchestrateur;
-- Phase 27A remplace la charte interne principale par TradingView;
-- Phase 27B cree `TechnicalDecisionEngine`;
+- Phase 27A a retire Elliott du dashboard, payload public, Inspector et orchestrateur;
+- Phase 27A a remplace la charte interne principale par TradingView;
+- Phase 27B a cree `TechnicalDecisionEngine` v1;
 - `aureum-elliott-wave` est archive et ne doit pas guider l'implementation sans validation utilisateur explicite.

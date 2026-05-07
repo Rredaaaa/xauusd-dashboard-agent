@@ -36,8 +36,8 @@ La suite est v3.0:
 - Phase 24: Data Routing / Preflight;
 - Phase 25: Chart Store OHLC;
 - Phase 26: Elliott quarantine;
-- Phase 27A: Elliott Removal + TradingView Chart;
-- Phase 27B: Technical Decision Engine;
+- Phase 27A: Elliott Removal + TradingView Chart, livree;
+- Phase 27B: Technical Decision Engine v1, livree;
 - Phase 28-34: Scenario, Orchestrator, Trade Tracker, Replay, Settings, Reports, QA.
 
 ## Regles non negociables
@@ -105,9 +105,9 @@ A ne pas reprendre:
 ## Decision produit Phase 27
 
 Elliott est archive pour la v3.0 active:
-- Phase 27A le retire du dashboard, payload, Inspector, rapports et orchestrateur;
+- Phase 27A l'a retire du dashboard, payload public, Inspector et orchestrateur;
 - il ne doit plus etre affiche comme agent, preuve, contradiction ou raison de decision;
-- la charte principale doit devenir une vraie charte TradingView;
+- la charte principale est une vraie charte TradingView;
 - le Chart Store reste en Inspector pour l'audit des donnees OHLC;
 - Phase 27B cree un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
 

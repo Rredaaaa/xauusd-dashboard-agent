@@ -24,6 +24,7 @@ from xauusd_agent import (
     PricePoint,
     SourceSnapshot,
     SymbolSnapshot,
+    TechnicalDecision,
     TechnicalReading,
     TradeLedgerSummary,
     TradePlan,
@@ -47,7 +48,9 @@ from xauusd_agent import (
     parse_fomc_calendar_events,
     classify_bias,
     build_passive_agent_results,
+    build_payload,
     build_orchestrator_decision,
+    build_technical_decision,
     price_points_to_candles,
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
@@ -589,7 +592,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Scenario hausse", dashboard)
         self.assertIn("Resume executif test.", dashboard)
         self.assertIn("Verdict: BUY", dashboard)
-        self.assertIn("Verdict: SELL", dashboard)
+        self.assertIn("TechnicalDecisionEngine", dashboard)
         self.assertIn("Investing.com XAU/USD", dashboard)
         self.assertIn("Proxy week-end IG", dashboard)
         self.assertIn("IG Weekend Gold", dashboard)
@@ -601,7 +604,9 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("WTI/Brent + Hormuz/Oil Shock", dashboard)
         self.assertIn("Agents passifs experimentaux", dashboard)
         self.assertIn("PriceAgent", dashboard)
-        self.assertIn("ElliottWaveAgent", dashboard)
+        self.assertIn("TradingView", dashboard)
+        self.assertIn("TechnicalDecisionEngine", dashboard)
+        self.assertNotIn("ElliottWaveAgent", dashboard)
         self.assertIn("OrchestratorAgent", dashboard)
         self.assertIn("Contradictions entre agents", dashboard)
         self.assertIn("Synthese prioritaire", dashboard)
@@ -1087,9 +1092,9 @@ class AnalysisShapeTests(unittest.TestCase):
             analysis,
             global_recommendation=official,
         )
-        self.assertEqual(len(agents), 12)
+        self.assertEqual(len(agents), 11)
         self.assertTrue(all(agent.experimental for agent in agents))
-        self.assertTrue(any(agent.name == "ElliottWaveAgent" for agent in agents))
+        self.assertFalse(any(agent.name == "ElliottWaveAgent" for agent in agents))
         self.assertEqual(official.verdict, "BUY")
 
     def test_orchestrator_v2_validates_aligned_buy(self) -> None:
@@ -1107,7 +1112,6 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         agents = [
             AgentResult("TechnicalAgent", "Technical", "BUY", 72, 70, "Technique constructive."),
-            AgentResult("ElliottWaveAgent", "Technical", "BUY", 64, 58, "Sequence haussiere."),
             AgentResult("MacroAgent", "Macro", "BUY", 74, 76, "Macro favorable."),
             AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
             AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
@@ -1155,7 +1159,6 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         agents = [
             AgentResult("TechnicalAgent", "Technical", "BUY", 82, 72, "Technique haussiere."),
-            AgentResult("ElliottWaveAgent", "Technical", "SELL", 30, 60, "Structure baissiere."),
             AgentResult("MacroAgent", "Macro", "SELL", 80, 76, "Macro defavorable."),
             AgentResult("CorrelationAgent", "Market", "BUY", 70, 70, "Cross-assets favorables."),
             AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "SELL", 35, 75, "Flux defavorables."),
@@ -1226,7 +1229,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertTrue(any("Data quality degradee" in reason for reason in decision.quality_gate_reasons))
         self.assertTrue(any("Mode event surveille" in reason for reason in decision.quality_gate_reasons))
 
-    def test_trade_gate_ignores_elliott_and_audit_agents_for_locking(self) -> None:
+    def test_trade_gate_ignores_audit_agents_for_locking(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         recommendation = TradeRecommendation(
             mode="Global",
@@ -1252,7 +1255,6 @@ class AnalysisShapeTests(unittest.TestCase):
         agents = [
             AgentResult("TechnicalAgent", "Technical", "BUY", 64, 70, "Technique valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 62, 76, "Macro valide."),
-            AgentResult("ElliottWaveAgent", "Technical", "SELL", 10, 90, "Archive Elliott opposee."),
             AgentResult("RiskManagerAgent", "Decision", "CAUTION", 55, 72, "Risque surveille."),
             AgentResult("OrchestratorAgent", "Decision", "CAUTION", 55, 64, "Audit."),
         ]
@@ -1273,7 +1275,7 @@ class AnalysisShapeTests(unittest.TestCase):
             self.assertEqual(len(summary.active_trades), 1)
             self.assertEqual(summary.active_trades[0].agents_contradicting, [])
 
-    def test_elliott_quarantine_cannot_change_orchestrator_decision(self) -> None:
+    def test_orchestrator_has_no_elliott_component(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         legacy = TradeRecommendation(
             mode="Global",
@@ -1286,7 +1288,7 @@ class AnalysisShapeTests(unittest.TestCase):
             take_profit_2=2440.0,
             source_note="Test.",
         )
-        base_agents = [
+        agents = [
             AgentResult("TechnicalAgent", "Technical", "BUY", 72, 70, "Technique constructive."),
             AgentResult("MacroAgent", "Macro", "BUY", 74, 76, "Macro favorable."),
             AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
@@ -1304,35 +1306,16 @@ class AnalysisShapeTests(unittest.TestCase):
             weak_sources=[],
             contradictions=[],
         )
-        bullish_agents = [
-            *base_agents,
-            AgentResult("ElliottWaveAgent", "Technical", "BUY", 95, 80, "Elliott tres haussier."),
-        ]
-        bearish_agents = [
-            *base_agents,
-            AgentResult("ElliottWaveAgent", "Technical", "SELL", 5, 80, "Elliott tres baissier."),
-        ]
-        recommendation_buy, decision_buy = build_orchestrator_decision(
+        recommendation, decision = build_orchestrator_decision(
             gold,
             legacy,
-            bullish_agents,
+            agents,
             data_quality=quality,
             market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
             event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
         )
-        recommendation_sell, decision_sell = build_orchestrator_decision(
-            gold,
-            legacy,
-            bearish_agents,
-            data_quality=quality,
-            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
-            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
-        )
-        elliott_component = next(component for component in decision_buy.components if component.key == "elliott")
-        self.assertEqual(elliott_component.weight, 0.0)
-        self.assertEqual(recommendation_buy.verdict, recommendation_sell.verdict)
-        self.assertEqual(decision_buy.status, decision_sell.status)
-        self.assertEqual(decision_buy.bullish_score, decision_sell.bullish_score)
+        self.assertEqual(recommendation.verdict, "BUY")
+        self.assertFalse(any(component.key == "elliott" for component in decision.components))
 
     def test_official_macro_rates_compare_yahoo_tnx_to_fred(self) -> None:
         dgs10 = self.snapshot("DGS10", 4.50, 4.45)
@@ -1656,6 +1639,95 @@ class LocalFreeContextTests(unittest.TestCase):
         self.assertIsInstance(event, EventModeAnalysis)
         self.assertTrue(event.active)
         self.assertEqual(event.stop_multiplier, 1.5)
+
+    def test_technical_decision_engine_builds_watch_or_trade_direction(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        readings = [
+            TechnicalReading(tf, 2400.0, 2398.0, 2392.0, 2386.0, 2375.0, 61.0, 1.0, 0.4, 0.6, 1.3, 7.0, 5.0, "BUY", ["trend"])
+            for tf in ["1D", "4H", "1H", "15m", "5m"]
+        ]
+        decision = build_technical_decision(gold, readings, 2400.0)
+        self.assertIn(decision.direction, {"BUY", "WATCH_BUY"})
+        self.assertEqual(decision.structure, "trend")
+        self.assertIn("cloture M15", decision.trigger)
+        self.assertGreater(decision.tp3, decision.tp2)
+
+    def test_phase27_payload_excludes_elliott_and_keeps_technical_decision(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        dxy = self.snapshot("DXY", 99.0, 100.0)
+        us10y = self.snapshot("^TNX", 4.1, 4.2)
+        analysis = AnalysisResult("bullish", 4, 66, ["Dollar faible"], [], [], [])
+        technical_decision = TechnicalDecision(
+            status="TRADE_READY",
+            direction="BUY",
+            structure="trend",
+            score=72,
+            confidence=74,
+            trigger="BUY seulement si cloture M15 au-dessus de 2405.00.",
+            invalidation="Invalidation BUY sous 2388.00.",
+            entry_zone_low=2398.0,
+            entry_zone_high=2401.0,
+            stop_loss=2388.0,
+            tp1=2412.0,
+            tp2=2424.0,
+            tp3=2440.0,
+            reasons=["Alignement multi-timeframe valide."],
+            contradictions=[],
+        )
+        trade = TradePlan(
+            trade_id="test",
+            created_at="2026-04-24T10:00:00+00:00",
+            updated_at="2026-04-24T10:00:00+00:00",
+            status="active",
+            direction="BUY",
+            entry_type="market_reference",
+            reference_price=2400.0,
+            entry_zone_low=2398.0,
+            entry_zone_high=2401.0,
+            stop_loss=2388.0,
+            tp1=2412.0,
+            tp2=2424.0,
+            tp3=2440.0,
+            risk_reward_tp1=1.0,
+            risk_reward_tp2=2.0,
+            risk_reward_tp3=3.0,
+            max_valid_until="2026-04-24T16:00:00+00:00",
+            source_signal_id="phase27",
+            global_score_at_creation=72,
+            data_quality_score=80,
+            confidence_score=74,
+            market_regime="Normal Macro",
+            agents_validating=["TechnicalAgent"],
+            agents_contradicting=[],
+            evidence_sources=["TechnicalDecisionEngine"],
+            event_facts_snapshot=[],
+            technical_snapshot="1D:BUY/+5.0",
+            macro_snapshot="",
+            geopolitical_snapshot="",
+            elliott_wave_snapshot="legacy text must stay private",
+            invalidation_rules=["SL"],
+            outcome="open",
+            outcome_reason="test",
+        )
+        payload = build_payload(
+            gold,
+            dxy,
+            us10y,
+            [],
+            analysis,
+            technical_decision=technical_decision,
+            agent_results=[AgentResult("TechnicalAgent", "Technical", "BUY", 72, 74, "Decision technique.")],
+            trade_ledger=TradeLedgerSummary(
+                ledger_path="reports/trade_ledger.jsonl",
+                generated_at="2026-04-24T10:00:00+00:00",
+                quality_gate_status="VALIDATED",
+                quality_gate_reasons=[],
+                active_trades=[trade],
+            ),
+        )
+        self.assertIn("technical_decision", payload)
+        self.assertNotIn("ElliottWaveAgent", str(payload))
+        self.assertNotIn("elliott_wave_snapshot", str(payload))
 
 
 if __name__ == "__main__":

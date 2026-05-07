@@ -12,7 +12,7 @@ Elliott est archive dans la roadmap v3.0 active.
 
 Regles:
 
-- Phase 27A doit retirer `ElliottWaveAgent` du dashboard, payload, Inspector, rapports et orchestrateur.
+- Phase 27A a retire `ElliottWaveAgent` du dashboard, payload public, Inspector et orchestrateur.
 - Elliott ne doit plus etre utilise comme agent, preuve, contradiction ou raison de decision.
 - Ce skill est conserve uniquement comme archive de recherche.
 - Toute reintroduction d'Elliott exige une validation utilisateur explicite et une nouvelle phase de conception.

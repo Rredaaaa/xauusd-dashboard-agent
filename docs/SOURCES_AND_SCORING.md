@@ -99,8 +99,8 @@ L'Orchestrateur v2 combine les composants suivants:
 
 Decision v3.0:
 - `ElliottWaveAgent` est archive. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
-- Phase 27A doit retirer Elliott du dashboard, payload JSON, rapports, Inspector et orchestrateur.
-- Phase 27B remplace Elliott par un `TechnicalDecisionEngine` auditable.
+- Phase 27A a retire Elliott du dashboard, payload JSON public, Inspector et orchestrateur.
+- Phase 27B a introduit `TechnicalDecisionEngine` comme moteur technique actif v1.
 - Le Chart Store OHLC expose M5/M15/H1/H4/D1 dans l'Inspector pour verifier la qualite des donnees techniques.
 - TradingView devient la charte utilisateur principale, tandis que Chart Store reste la source auditable des calculs internes.
 
@@ -121,7 +121,7 @@ Sources importantes mais non bloquantes seules:
 - WGC ETF flows stale;
 - Google News RSS weak;
 - COT/ETF/faits politiques partiels;
-- Chart Store absent tant que le TechnicalDecisionEngine n'est pas encore actif.
+- Chart Store absent ou degrade: le `TechnicalDecisionEngine` passe en `WAIT` ou `WATCH` selon la qualite exploitable.
 
 Il produit:
 
@@ -197,7 +197,7 @@ Agents decisionnels utilises pour compter confirmations/contradictions de TradeP
 
 Agents exclus du comptage decisionnel:
 
-- ElliottWaveAgent, archive et poids 0;
+- ElliottWaveAgent, archive et absent du produit actif;
 - RiskManagerAgent, role de prudence;
 - OrchestratorAgent, role d'audit/synthese.
 

@@ -49,9 +49,9 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 ## Ce que le dashboard affiche
 
 - `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
-- `Market`: spot, IG Weekend Gold, vraie charte TradingView cible v3, correlations, regime petrole/politique, COT et ETF flows.
+- `Market`: spot, IG Weekend Gold, vraie charte TradingView, correlations, regime petrole/politique, COT et ETF flows.
 - `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
-- `Technical`: EMA, RSI, MACD, volume, Chart Store OHLC M5/M15/H1/H4/D1, puis Technical Decision Engine v3. Elliott doit etre retire du dashboard en Phase 27A.
+- `Technical`: vraie charte TradingView, Technical Decision Engine, EMA, RSI, MACD, volume et Chart Store OHLC M5/M15/H1/H4/D1 en diagnostic.
 - `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
 - `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
 - `Inspector`: audit des sources, Preflight, Chart Store, agents, gates, trades et qualite data.
@@ -97,6 +97,6 @@ python3 -m unittest discover -s tests -v
 - Les scores sont des aides a la decision, pas une certitude de marche.
 - Une source peut etre absente, stale ou contradictoire.
 - IG Weekend Gold est un proxy week-end, distinct du spot classique.
-- Les bougies intraday internes utilisent un proxy futures COMEX aligne sur le spot; la v3.0 doit afficher une vraie charte TradingView dans le dashboard principal.
-- Elliott est archive dans la roadmap v3.0 tant qu'il n'existe pas de moteur robuste; il ne doit plus etre presente comme preuve de decision.
+- La charte principale utilisateur est TradingView; les bougies internes Chart Store restent un diagnostic de donnees.
+- Elliott est archive dans la roadmap v3.0 tant qu'il n'existe pas de moteur robuste; il n'est plus presente comme preuve de decision.
 - Aucun trade ne doit etre pris sans controle humain du contexte, du spread, de l'heure et du risque.

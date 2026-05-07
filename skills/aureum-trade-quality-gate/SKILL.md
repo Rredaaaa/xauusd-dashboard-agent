@@ -123,7 +123,8 @@ Separar biais, setup surveille et TradePlan fige pour eviter les faux signaux ex
 - WATCH ne cree pas trade actif.
 - TradePlan ne se modifie pas apres creation.
 - Une headline seule ne suffit jamais.
-- ElliottWaveAgent, RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un trade.
+- ElliottWaveAgent est archive et absent du produit actif.
+- RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un trade.
 
 ### Bons exemples
 

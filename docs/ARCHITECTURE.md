@@ -20,7 +20,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Collecte macro: FRED, Fed, BEA, CME FedWatch link.
 - Collecte flux: CFTC COT, WGC ETF, BlackRock IAU.
 - Collecte news: RSS, Google News/fallback, White House.
-- Analyse technique: EMA, RSI, MACD, volume, Chart Store OHLC, puis cible v3 `TechnicalDecisionEngine`.
+- Analyse technique: `TechnicalDecisionEngine`, EMA, RSI, MACD, volume, Chart Store OHLC.
 - Analyse fondamentale: dollar, taux, macro, real yield.
 - Analyse geopolitique: risk-off, Hormuz/Oil Shock, politique, oil/dollar liquidity.
 - Agents passifs: Price, Technical, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
@@ -28,16 +28,16 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
 - Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
 - Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
-- Charte principale cible v3: TradingView dans Market/Technical, pas la charte interne.
+- Charte principale v3: TradingView dans Market/Technical, pas la charte interne.
 - Trade Ledger: signal locking append-only.
 - Inspector: audit sources/agents/trades.
 
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
-- la v3.0 a livre l'audit editorial, News Facts, Preflight et Chart Store; la suite active est Phase 27A puis 27B;
-- `ElliottWaveAgent` est archive dans la roadmap v3.0: Phase 27A doit le retirer du dashboard, payload, Inspector, rapports et orchestrateur;
-- Phase 27B remplace Elliott par un `TechnicalDecisionEngine` auditable;
-- la charte interne ne doit plus etre la charte principale: Phase 27A doit integrer TradingView;
+- la v3.0 a livre l'audit editorial, News Facts, Preflight, Chart Store, Phase 27A et Phase 27B;
+- `ElliottWaveAgent` est archive dans la roadmap v3.0 et n'apparait plus dans les surfaces actives;
+- Phase 27B a remplace Elliott par un `TechnicalDecisionEngine` auditable v1;
+- la charte principale est TradingView dans Market/Technical;
 - la decision v3 ajoutera les statuts `WATCH_BUY` et `WATCH_SELL` aux cotes de `BUY`, `SELL` et `WAIT` pour exposer les setups en surveillance sans forcer un trade;
 - la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
@@ -55,7 +55,7 @@ Regle de decision actuelle:
 - source prix XAU/USD principale absente/stale = blocage dur;
 - data quality tres faible = blocage dur;
 - WGC ETF stale, Google News weak ou mode event modere = warning;
-- ElliottWaveAgent, RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan.
+- RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan; ElliottWaveAgent est absent du produit actif.
 - `TradeRecommendation`: signal live.
 
 ## Fichiers generes

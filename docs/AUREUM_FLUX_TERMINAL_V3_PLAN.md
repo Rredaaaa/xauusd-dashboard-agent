@@ -480,6 +480,8 @@ Definition de termine:
 
 ### Phase 27A - Elliott Removal + TradingView Chart
 
+Statut 2026-05-07: LIVREE.
+
 Objectif:
 Retirer Elliott du terminal utilisateur et remplacer la charte interne principale par une vraie charte TradingView.
 
@@ -525,6 +527,9 @@ Definition de termine:
 - le dashboard affiche une vraie charte TradingView au lieu de la charte interne principale.
 
 ### Phase 27B - Technical Decision Engine
+
+Statut 2026-05-07: LIVREE v1.
+La v1 remplace Elliott dans les surfaces actives par `TechnicalDecisionEngine`, affiche `TradingView` dans Market/Technical et expose direction, structure, trigger, invalidation, entry zone, SL, TP1/TP2/TP3, raisons et contradictions. Les indicateurs avances listés ci-dessous restent la cible d'enrichissement progressif des phases suivantes.
 
 Objectif:
 Remplacer Elliott par un moteur technique auditable base sur structure, indicateurs, niveaux, volatilite et confirmations inter-marches.

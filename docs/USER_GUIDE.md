@@ -63,13 +63,13 @@ Vue technique:
 - volume;
 - Chart Store OHLC M5/M15/H1/H4/D1 en diagnostic;
 - scenarios hausse/baisse/attente;
-- cible Phase 27B: Technical Decision Engine.
+- Technical Decision Engine: direction, structure, trigger, invalidation, SL et TP.
 
-Note: Elliott Wave est archive dans la roadmap v3.0. Depuis la Phase 26, son poids est `0.00`; en Phase 27A il doit disparaitre du dashboard, du payload, de l'Inspector et des rapports. Il ne doit pas etre lu comme une preuve de decision.
+Note: Elliott Wave est archive dans la roadmap v3.0. Depuis la Phase 27, il n'apparait plus dans le dashboard, le payload public, l'Inspector ou l'orchestrateur. Il ne doit pas etre lu comme une preuve de decision.
 
-### Technical Decision Engine cible v3
+### Technical Decision Engine v3
 
-Le moteur technique cible remplace Elliott par des regles auditables:
+Le moteur technique remplace Elliott par des regles auditables:
 
 - `Market Structure`: swing highs/lows, HH/HL, LH/LL, BOS, CHoCH, retest, range high/low.
 - `Trend`: EMA 20/50/100/200, pente des EMA, alignement M15/H1/H4/D1.
@@ -185,7 +185,7 @@ Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou
 - CorrelationAgent;
 - FlowPositioningAgent.
 
-ElliottWaveAgent est archive. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
+ElliottWaveAgent est archive et absent du produit actif. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
 
 ## Outcomes possibles
 

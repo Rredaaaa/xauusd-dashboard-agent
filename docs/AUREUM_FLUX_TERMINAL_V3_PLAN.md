@@ -1,7 +1,7 @@
 # Aureum Flux Terminal 3.0 - Plan d'implementation detaille
 
-Version du document: 1.0
-Date: 2026-05-02
+Version du document: 1.1
+Date: 2026-05-07
 Statut: document de passation pour implementation v3.0
 Responsable execution prevu: Claude
 Base de depart: Aureum Flux Terminal 2.0 apres Phase 18 terminee
@@ -16,8 +16,9 @@ Problemes observes apres v2.0:
 - la partie news repete parfois des phrases generiques au lieu de resumer le fait detecte;
 - certaines alertes ne repondent pas clairement a "quoi, pourquoi, impact, action";
 - `WAIT` bloque souvent toute exploitation sans fournir de setup surveille;
-- `ElliottWaveAgent` actuel est trop faible et ne doit pas influencer le scoring;
-- il manque une vraie charte OHLC multi-timeframe pour analyser les vagues;
+- `ElliottWaveAgent` actuel est trop faible et doit etre retire de l'analyse visible;
+- la charte interne actuelle n'est pas acceptable pour un trader: le dashboard doit afficher une vraie charte TradingView;
+- il manque un moteur technique clair base sur structure, indicateurs, niveaux et confirmations;
 - il manque une couche d'explication centralisee;
 - il manque une memoire d'apprentissage des signaux et erreurs.
 
@@ -25,7 +26,9 @@ Objectif v3.0:
 - transformer Aureum Flux en terminal qui explique clairement le marche;
 - produire des faits news structurés, pas seulement des headlines;
 - afficher des signaux en trois niveaux: biais, setup surveille, trade exploitable;
-- refondre Elliott en moteur structurel multi-timeframe ou le sortir du scoring;
+- supprimer Elliott du parcours utilisateur tant qu'un vrai moteur robuste n'existe pas;
+- remplacer Elliott par un `TechnicalDecisionEngine` auditable;
+- afficher une vraie charte TradingView dans le dashboard principal;
 - ajouter une architecture inspiree de Vibe-Trading: skills, data routing, preflight, replay, shadow account;
 - conserver une interface trader simple: resultat utile d'abord, details dans Inspector.
 
@@ -37,7 +40,7 @@ Objectif v3.0:
 4. Ne pas lancer de trading automatique.
 5. Ne pas mentionner de broker specifique dans l'interface utilisateur.
 6. Ne pas afficher de phrase vague sans fait concret.
-7. Ne pas laisser Elliott influencer le score tant qu'il n'est pas robuste.
+7. Ne plus inclure Elliott dans le raisonnement utilisateur tant qu'il n'est pas robuste.
 8. Ne pas forcer un trade pour reduire le nombre de `WAIT`.
 9. Conserver `WAIT`, mais ajouter `WATCH_BUY` / `WATCH_SELL`.
 10. Les details techniques de sources restent dans Inspector, pas dans la decision principale.
@@ -59,13 +62,13 @@ Elements a reprendre:
 Elements a ne pas reprendre:
 - UI React/FastAPI complete;
 - couverture multi-marches generaliste;
-- Elliott Wave tel quel, car trop simple;
+- Elliott Wave tel quel, car trop simple et trompeur;
 - strategy generator universel;
 - perimetre actions/crypto/futures complet.
 
 Adaptation Aureum:
 - tout reste centre sur XAU/USD;
-- les skills sont orientees gold, macro, geopolitique, news, Elliott, risque;
+- les skills sont orientees gold, macro, geopolitique, news, technique, risque;
 - les agents produisent des sorties structurees;
 - l'orchestrateur transforme les sorties en decision exploitable.
 
@@ -147,7 +150,7 @@ La couche `ExplanationLayer` transforme:
 - faits;
 - scores;
 - contradictions;
-- structure Elliott;
+- structure technique;
 - source quality;
 - risk gate;
 
@@ -408,7 +411,7 @@ Definition de termine:
 ### Phase 25 - Chart Store OHLC multi-timeframe
 
 Objectif:
-Donner une vraie charte aux agents techniques et Elliott.
+Donner une base OHLC propre aux agents techniques et au futur `TechnicalDecisionEngine`.
 
 Actions:
 1. Creer un `ChartStore`.
@@ -444,12 +447,13 @@ Livrables:
 - inspector chart quality.
 
 Definition de termine:
-- Elliott peut refuser proprement si l'historique est insuffisant.
+- le terminal connait la qualite OHLC par timeframe et peut refuser une lecture technique si l'historique est insuffisant.
 
 ### Phase 26 - Elliott Quarantine
 
 Objectif:
-Retirer Elliott du scoring tant que le moteur n'est pas fiable.
+Retirer Elliott du scoring tant que le moteur n'est pas fiable.  
+Cette phase est une securisation intermediaire; la Phase 27A retire ensuite Elliott du produit visible.
 
 Actions:
 1. Mettre poids Elliott a 0 dans l'orchestrateur.
@@ -469,52 +473,151 @@ Livrables:
 Definition de termine:
 - un faux comptage Elliott ne peut plus influencer un trade.
 
-### Phase 27 - Elliott Engine v3
+### Phase 27A - Elliott Removal + TradingView Chart
 
 Objectif:
-Construire un vrai moteur Elliott prudent.
+Retirer Elliott du terminal utilisateur et remplacer la charte interne principale par une vraie charte TradingView.
 
-Scope minimum:
-- impulsions 1-2-3-4-5;
-- zigzag ABC 5-3-5;
-- flat 3-3-5;
-- triangle A-B-C-D-E;
-- W-X-Y;
-- W-X-Y-X-Z;
-- sous-vagues;
-- Fibonacci retracement/extension;
-- scenario principal et alternatif.
+Decision produit:
+Elliott est retire de la v3.0 tant qu'il n'existe pas de moteur robuste.  
+Il ne doit plus etre affiche comme agent, preuve, contradiction, scenario ou raison de decision.
 
 Actions:
-1. Detecter pivots/swing highs/lows par timeframe.
-2. Construire structures candidates.
-3. Appliquer regles Elliott:
-   - vague 2 ne retrace pas 100% de vague 1;
-   - vague 3 n'est pas la plus courte;
-   - vague 4 ne chevauche pas vague 1 sauf cas valide;
-   - correction respecte sa structure.
-4. Gerer:
-   - impulsion;
-   - correction simple;
-   - correction complexe;
-   - nested waves.
-5. Calculer:
-   - invalidation;
-   - confirmation;
-   - TP Fibonacci.
-6. Produire `WaveScenario`.
-7. Si doute:
-   - retourner `UNCLEAR`;
-   - confiance faible;
-   - non scorant.
+1. Supprimer `ElliottWaveAgent` des agents affiches.
+2. Supprimer Elliott du payload JSON, rapports, Inspector et dashboard.
+3. Supprimer le composant Elliott de l'orchestrateur, pas seulement son poids.
+4. Garder une note de documentation:
+   - Elliott archive;
+   - non utilise;
+   - ne participe a aucune decision.
+5. Remplacer la charte interne principale par un widget TradingView:
+   - theme sombre;
+   - symbole configurable;
+   - `OANDA:XAUUSD` par defaut ou autre symbole public disponible;
+   - timeframes TradingView;
+   - plein panneau dans Market/Technical.
+6. Conserver le Chart Store OHLC en Inspector uniquement:
+   - qualite data;
+   - timeframes disponibles;
+   - cache;
+   - gaps.
+7. Tests:
+   - `ElliottWaveAgent` absent du dashboard;
+   - Elliott absent du payload;
+   - Elliott absent de l'orchestrateur;
+   - TradingView present dans le HTML;
+   - dashboard charge sans erreur.
 
 Livrables:
-- moteur Elliott v3;
-- tests sur fixtures synthetiques;
-- affichage Technical clair.
+- terminal sans Elliott visible;
+- vraie charte TradingView;
+- fallback Chart Store conserve en diagnostic;
+- tests anti-regression.
 
 Definition de termine:
-- Elliott dit ce qu'il sait, ce qu'il ne sait pas, et pourquoi.
+- aucun utilisateur ne voit Elliott;
+- aucune decision ne depend d'Elliott;
+- le dashboard affiche une vraie charte TradingView au lieu de la charte interne principale.
+
+### Phase 27B - Technical Decision Engine
+
+Objectif:
+Remplacer Elliott par un moteur technique auditable base sur structure, indicateurs, niveaux, volatilite et confirmations inter-marches.
+
+Sorties attendues:
+- direction technique:
+  - `BUY`;
+  - `SELL`;
+  - `WAIT`;
+  - `WATCH_BUY`;
+  - `WATCH_SELL`;
+- structure:
+  - `trend`;
+  - `breakout`;
+  - `range`;
+  - `pullback`;
+  - `reversal`;
+- trigger;
+- invalidation;
+- zone d'entree;
+- SL logique;
+- TP1/TP2/TP3;
+- raisons concretes;
+- contradictions.
+
+Indicateurs a ajouter ou renforcer:
+1. Market Structure:
+   - swing highs / swing lows;
+   - higher high / higher low;
+   - lower high / lower low;
+   - Break of Structure `BOS`;
+   - Change of Character `CHoCH`;
+   - retest apres cassure;
+   - range high / range low;
+   - premium / discount zone.
+2. Trend:
+   - EMA 20;
+   - EMA 50;
+   - EMA 100;
+   - EMA 200;
+   - pente des EMA;
+   - alignement M15/H1/H4/D1;
+   - prix au-dessus/sous EMA 50/200.
+3. Momentum:
+   - RSI 14;
+   - RSI 7;
+   - MACD ligne/signal/histogramme;
+   - divergence RSI/prix;
+   - acceleration/deceleration du momentum.
+4. Volatility:
+   - ATR 14;
+   - ATR percentile;
+   - range du jour vs ATR;
+   - compression / expansion;
+   - distance prix au SL logique;
+   - volume spike proxy futures.
+5. Levels:
+   - support/resistance intraday;
+   - high/low du jour;
+   - high/low veille;
+   - open price;
+   - Asia high/low;
+   - London high/low;
+   - New York high/low;
+   - VWAP si disponible;
+   - pivots classiques `P`, `R1`, `R2`, `S1`, `S2`.
+6. Liquidity / Execution:
+   - sweep de high/low recent;
+   - stop hunt probable;
+   - retour dans range apres sweep;
+   - vraie cassure vs fausse cassure;
+   - distance au prochain niveau de liquidite.
+7. Cross Confirmation:
+   - DXY;
+   - US10Y;
+   - 10Y real yield;
+   - WTI / Brent;
+   - Silver;
+   - GDX / GDXJ;
+   - VIX / GVZ.
+
+Regles de statut:
+- `WATCH_BUY`: tendance/support/momentum preparent un achat, mais trigger non valide.
+- `BUY`: `WATCH_BUY` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WATCH_SELL`: tendance/resistance/momentum preparent une vente, mais trigger non valide.
+- `SELL`: `WATCH_SELL` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WAIT`: range sale, contradiction forte, volatilite anormale, source bloquante ou prix trop loin du niveau d'entree.
+
+Livrables:
+- `TechnicalDecisionEngine`;
+- structure technique affichee clairement;
+- indicateurs calcules et testes;
+- integration dans Decision et Technical;
+- tests de `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`.
+
+Definition de termine:
+- chaque mot technique affiche dans le dashboard vient d'une regle testee;
+- le terminal peut expliquer pourquoi un setup est surveille mais pas encore exploitable.
 
 ### Phase 28 - Scenario Engine
 
@@ -529,7 +632,7 @@ Actions:
    - invalidation;
    - declencheur;
    - confirmation requise.
-3. Integrer Elliott comme structure si fiable.
+3. Integrer `TechnicalDecisionEngine` comme structure technique principale.
 4. Integrer news comme declencheur ou contradiction.
 5. Integrer macro/correlation comme validation.
 
@@ -556,8 +659,8 @@ Actions:
    - regime normal: macro + technical plus forts;
    - regime geopolitique: oil/geopolitics plus forts;
    - source degradee: poids reduits;
-   - Elliott incertain: poids 0;
-   - Elliott fiable: poids structurel.
+   - structure technique confirmee: poids technique augmente;
+   - structure technique contradictoire: poids technique reduit.
 2. Ajouter decision:
    - `NO_TRADE`;
    - `WATCH_BUY`;
@@ -573,7 +676,7 @@ Actions:
 4. Ne jamais creer `TRADE_*` si:
    - source critique stale;
    - setup sans invalidation;
-   - Elliott contradictoire et scorant;
+   - structure technique contradictoire;
    - news non confirmee seule.
 
 Livrables:
@@ -601,7 +704,7 @@ Actions:
    - scenario;
    - agents;
    - news fact;
-   - Elliott scenario;
+   - structure technique;
    - source quality;
    - resultat.
 4. Ajouter post-mortem:
@@ -735,6 +838,7 @@ Definition de termine:
 ## 5. Ordre recommande
 
 Ne pas commencer par Elliott.
+Decision mise a jour v1.1: Elliott n'est plus une phase prioritaire de v3.0. La prochaine etape est de le retirer du produit visible, puis de construire un moteur technique plus fiable.
 
 Ordre recommande:
 1. Phase 19 - documentation;
@@ -744,18 +848,20 @@ Ordre recommande:
 5. Phase 24 - preflight/data routing;
 6. Phase 25 - chart store;
 7. Phase 26 - Elliott quarantine;
-8. Phase 27 - Elliott engine;
-9. Phase 28 - scenario engine;
-10. Phase 29 - orchestrator v3;
-11. Phase 30 - trade tracker v3;
-12. Phase 31 - replay;
-13. Phase 32 - settings;
-14. Phase 33 - reports;
-15. Phase 34 - QA finale.
+8. Phase 27A - Elliott removal + TradingView chart;
+9. Phase 27B - Technical Decision Engine;
+10. Phase 28 - scenario engine;
+11. Phase 29 - orchestrator v3;
+12. Phase 30 - trade tracker v3;
+13. Phase 31 - replay;
+14. Phase 32 - settings;
+15. Phase 33 - reports;
+16. Phase 34 - QA finale.
 
 Raison:
 - le langage utilisateur doit etre corrige avant d'ajouter plus d'intelligence;
-- Elliott a besoin du Chart Store;
+- Elliott n'est plus fiable pour la v3.0 et doit etre retire du raisonnement utilisateur;
+- le Technical Decision Engine a besoin du Chart Store et de TradingView pour l'experience utilisateur;
 - l'orchestrateur v3 a besoin de News Facts + Scenario Engine;
 - Trade Tracker v3 a besoin des statuts `WATCH` et `TRADE`.
 
@@ -765,8 +871,9 @@ La v3.0 est reussie si:
 - un utilisateur comprend la premiere page sans explication externe;
 - les news sont resumees en faits et impacts concrets;
 - le dashboard ne repete pas des phrases generiques;
-- Elliott ne score pas s'il n'est pas fiable;
-- Elliott explique scenario, invalidation et confidence quand il est actif;
+- Elliott n'apparait plus dans le dashboard, le payload, l'Inspector ou les rapports tant qu'il n'est pas refonde;
+- une vraie charte TradingView remplace la charte interne principale;
+- le Technical Decision Engine explique structure, trigger, invalidation, niveaux et confirmations;
 - le terminal affiche `WATCH_BUY` / `WATCH_SELL` quand un trade n'est pas encore exploitable;
 - `NO_TRADE` explique ce qui manque;
 - les trades exploitables restent rares mais justifies;
@@ -784,8 +891,9 @@ Claude doit commencer par:
 5. confirmer avec l'utilisateur avant Phase 19.
 
 Claude ne doit pas:
-- modifier le scoring Elliott avant Phase 26;
+- reintroduire Elliott dans le raisonnement utilisateur sans validation explicite;
 - ajouter une source OHLC sans Chart Store;
+- remplacer TradingView par une charte interne principale;
 - changer toute l'UI avant l'audit editorial;
 - supprimer les protections `WAIT`;
 - creer de trade automatique;

@@ -1,6 +1,6 @@
 ---
 name: aureum-chart-store
-description: Specification Chart Store OHLC multi-timeframe pour alimenter Technical et Elliott sans dependre d'un broker.
+description: Specification Chart Store OHLC multi-timeframe pour alimenter Technical Decision Engine et Inspector sans dependre d'un broker.
 category: data
 ---
 
@@ -8,16 +8,17 @@ category: data
 
 ## But
 
-Donner une vraie charte aux agents techniques, surtout Elliott.
+Fournir une base OHLC multi-timeframe auditable aux agents techniques.
 
-Elliott ne doit pas compter des vagues sur quelques closes. Il a besoin de OHLC multi-timeframe.
+Le Chart Store n'est pas la charte utilisateur principale.
+La v3.0 doit afficher TradingView dans le dashboard principal et garder Chart Store en Inspector pour verifier qualite, gaps, freshness et fallback technique.
 
 ## Timeframes requis
 
 - M5: timing d'entree;
 - M15: structure intraday;
-- H1: sous-vagues principales;
-- H4: vague superieure;
+- H1: structure intraday principale;
+- H4: structure superieure;
 - D1: tendance de fond.
 
 ## Format bougie
@@ -38,9 +39,10 @@ quality_flags
 ## Regles produit
 
 - Ne pas mentionner de broker dans l'interface.
-- Le dashboard principal affiche "Charte Elliott: M15/H1/H4" et pas la plomberie source.
+- Le dashboard principal affiche TradingView.
+- Le Chart Store est affiche dans Inspector ou comme fallback diagnostic, pas comme charte principale.
 - Les details source vont dans Inspector.
-- Si historique insuffisant: Elliott retourne `UNCLEAR` et non scorant.
+- Si historique insuffisant: le Technical Decision Engine retourne `WAIT` ou `NO_TRADE`, pas une conclusion directionnelle forte.
 
 ## Qualite
 
@@ -81,13 +83,13 @@ Afficher:
 - stale chart;
 - OHLC incomplet;
 - fallback source;
-- Elliott refuse si moins de bougies minimales.
+- Technical Decision Engine refuse si moins de bougies minimales.
 
 ## Phase 23 Contract
 
 ### Role
 
-Fournir une charte OHLC multi-timeframe fiable pour Technical et Elliott.
+Fournir une base OHLC multi-timeframe fiable pour Technical et l'Inspector.
 
 ### Inputs
 
@@ -115,14 +117,14 @@ Fournir une charte OHLC multi-timeframe fiable pour Technical et Elliott.
 
 - Ne pas inventer de bougies manquantes.
 - Ne pas mentionner de broker dans l'UI principale.
-- Ne pas autoriser Elliott si l'historique minimum manque.
+- Ne pas autoriser une decision technique forte si l'historique minimum manque.
 
 ### Bons exemples
 
 - `M15 READY: 480 bougies, dernier update 45s, aucun gap critique.`
-- `H1 INSUFFICIENT_HISTORY: 42 bougies, Elliott non scorant.`
+- `H1 INSUFFICIENT_HISTORY: 42 bougies, TechnicalDecisionEngine bloque en WAIT.`
 
 ### Mauvais exemples
 
 - `Charte OK` sans timeframe ni freshness.
-- Compter Elliott sur 20 closes recentes.
+- Afficher Chart Store comme charte principale a la place de TradingView.

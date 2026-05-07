@@ -1,33 +1,41 @@
 ---
 name: aureum-elliott-wave
-description: Specification Elliott Engine v3 pour XAU/USD. A utiliser seulement apres Chart Store et quarantine du scoring.
+description: Archive Elliott. Ne pas utiliser pour la v3.0 active sans validation utilisateur explicite.
 category: technical
 ---
 
-# Aureum Elliott Wave
+# Aureum Elliott Wave Archive
 
-## Etat actuel
+## Statut produit
 
-L'ElliottWaveAgent v2 est experimental. Il regarde surtout des variations recentes et ne fait pas un vrai comptage de vagues.
+Elliott est archive dans la roadmap v3.0 active.
 
-Regle:
+Regles:
 
-> Tant que le moteur v3 n'est pas livre, Elliott ne doit pas influencer le scoring.
+- Phase 27A doit retirer `ElliottWaveAgent` du dashboard, payload, Inspector, rapports et orchestrateur.
+- Elliott ne doit plus etre utilise comme agent, preuve, contradiction ou raison de decision.
+- Ce skill est conserve uniquement comme archive de recherche.
+- Toute reintroduction d'Elliott exige une validation utilisateur explicite et une nouvelle phase de conception.
 
-## Role cible
+## Pourquoi l'archiver
 
-Elliott devient l'agent de structure:
-- ou sommes-nous dans la vague?
-- quelle vague superieure?
-- quelle sous-vague?
-- quel scenario principal?
-- quelle invalidation?
-- quelle confirmation?
-- quels targets Fibonacci?
+Le moteur actuel regarde surtout des variations recentes et ne fait pas un vrai comptage de vagues.
+Sans moteur robuste, Elliott donne une impression de precision trompeuse.
 
-Les autres agents confirment ou contredisent le declenchement.
+La v3.0 remplace cette logique par `TechnicalDecisionEngine`:
+- structure de marche;
+- indicateurs;
+- niveaux;
+- volatilite;
+- confirmations inter-marches;
+- trigger;
+- invalidation.
 
-## Structures minimales a gerer
+## Archive theorique non active
+
+Les elements ci-dessous ne sont pas a implementer dans la roadmap active. Ils restent uniquement comme notes historiques si le sujet Elliott est rouvert plus tard.
+
+### Structures minimales a gerer
 
 - impulsion 1-2-3-4-5;
 - correction ABC;
@@ -39,7 +47,7 @@ Les autres agents confirment ou contredisent le declenchement.
 - corrections combinatoires;
 - sous-vagues internes.
 
-## Regles Elliott
+### Regles Elliott
 
 - Vague 2 ne retrace pas 100% de vague 1.
 - Vague 3 ne peut pas etre la plus courte.
@@ -48,7 +56,7 @@ Les autres agents confirment ou contredisent le declenchement.
 - Une correction complexe peut contenir W-X-Y ou W-X-Y-X-Z.
 - Toujours fournir scenario alternatif si confiance moyenne.
 
-## WaveScenario
+### WaveScenario
 
 Sortie attendue:
 
@@ -75,7 +83,7 @@ Statuts:
 - `INSUFFICIENT_HISTORY`;
 - `CONFLICTING_TIMEFRAMES`.
 
-## Exemple attendu
+### Exemple historique attendu
 
 ```text
 Structure: fin possible de vague 2 de 3.
@@ -107,45 +115,40 @@ Statut: WATCH_BUY, pas TRADE_BUY tant que le declencheur n'est pas confirme.
 
 ### Role
 
-Identifier la structure de vague probable uniquement apres livraison du Chart Store.
+Servir d'archive. Ne pas guider l'implementation active sans validation utilisateur explicite.
 
 ### Inputs
 
-- OHLC multi-timeframe;
-- pivots valides;
-- Fibonacci retracements/extensions;
-- confirmations des autres agents;
-- source quality.
+- decision utilisateur explicite de reouvrir Elliott;
+- plan de conception approuve;
+- fixtures de test robustes;
+- Chart Store valide.
 
 ### Outputs
 
-- `WaveScenario`;
-- scenario principal;
-- scenario alternatif;
-- invalidation;
-- trigger;
-- targets;
-- statut `UNCLEAR` si doute.
+- note d'archive;
+- risques;
+- conditions de reactivation.
 
 ### Methodologie
 
-1. Lire D1/H4 pour le degre superieur.
-2. Lire H1/M15 pour la sous-vague.
-3. Valider les regles Elliott.
-4. Calculer Fibonacci.
-5. Produire scenario principal et alternatif.
-6. Refuser toute conclusion si l'historique est insuffisant.
+1. Refuser toute utilisation Elliott par defaut.
+2. Pointer vers `aureum-technical-decision`.
+3. Si l'utilisateur demande Elliott, exiger une phase de conception separee.
+4. Ne jamais reintroduire Elliott dans le scoring sans tests.
 
 ### Limites
 
-- Ne pas scorer avant Phase 27.
-- Ne pas annoncer vague 3 sans trigger.
-- Ne pas ignorer corrections complexes WXY/WXYXZ.
+- Ne pas scorer.
+- Ne pas afficher dans le dashboard.
+- Ne pas lister comme preuve.
+- Ne pas l'utiliser dans l'orchestrateur.
 
 ### Bons exemples
 
-- `WATCH_BUY: fin possible vague 2 de 3, trigger cassure sommet sous-vague 1, invalidation bas vague 2.`
+- `Elliott archive: utiliser TechnicalDecisionEngine pour la decision v3.`
 
 ### Mauvais exemples
 
-- `Vague 3 commence` sans chart store ni trigger.
+- `Vague 3 commence.`
+- `Elliott confirme BUY.`

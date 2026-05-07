@@ -34,7 +34,8 @@ Vue marche:
 
 - spot XAU/USD;
 - IG Weekend Gold quand disponible;
-- chandelles 5 minutes;
+- vraie charte TradingView cible v3;
+- chandelles internes 5 minutes seulement comme fallback/diagnostic;
 - support/resistance;
 - correlations inter-marches;
 - regime politique/petrole;
@@ -57,13 +58,34 @@ Vue "pourquoi":
 Vue technique:
 
 - EMA 20/50/100/200;
-- RSI7;
+- RSI7/RSI14 cible v3;
 - MACD 5/34/5;
 - volume;
+- Chart Store OHLC M5/M15/H1/H4/D1 en diagnostic;
 - scenarios hausse/baisse/attente;
-- agents techniques, dont Elliott Wave Agent.
+- cible Phase 27B: Technical Decision Engine.
 
-Note: Elliott Wave est encore un agent passif experimental. Depuis la Phase 26, son poids est `0.00` dans l'orchestrateur: il ne peut pas changer la decision `BUY`, `SELL` ou `WAIT`. Le Chart Store OHLC livre en Phase 25 sert seulement de base technique au futur Elliott Engine v3.
+Note: Elliott Wave est archive dans la roadmap v3.0. Depuis la Phase 26, son poids est `0.00`; en Phase 27A il doit disparaitre du dashboard, du payload, de l'Inspector et des rapports. Il ne doit pas etre lu comme une preuve de decision.
+
+### Technical Decision Engine cible v3
+
+Le moteur technique cible remplace Elliott par des regles auditables:
+
+- `Market Structure`: swing highs/lows, HH/HL, LH/LL, BOS, CHoCH, retest, range high/low.
+- `Trend`: EMA 20/50/100/200, pente des EMA, alignement M15/H1/H4/D1.
+- `Momentum`: RSI7/RSI14, MACD, divergence RSI/prix, acceleration ou deceleration.
+- `Volatility`: ATR14, range du jour vs ATR, compression/expansion, volume spike proxy.
+- `Levels`: high/low jour et veille, open, sessions Asia/London/NY, VWAP si disponible, pivots P/R1/R2/S1/S2.
+- `Liquidity`: sweep de high/low recent, fausse cassure, retour dans range, distance au prochain niveau.
+- `Cross confirmation`: DXY, US10Y, 10Y real yield, WTI/Brent, Silver, GDX/GDXJ, VIX/GVZ.
+
+Les statuts attendus sont:
+
+- `WATCH_BUY`: setup haussier en preparation, trigger pas encore confirme.
+- `BUY`: `WATCH_BUY` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WATCH_SELL`: setup baissier en preparation, trigger pas encore confirme.
+- `SELL`: `WATCH_SELL` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WAIT`: range sale, contradiction forte, volatilite anormale, source bloquante ou prix trop loin du niveau d'entree.
 
 ### Macro
 
@@ -94,6 +116,8 @@ Vue d'audit:
 - sources actives;
 - dernier refresh;
 - sources missing/stale/weak;
+- Preflight;
+- Chart Store;
 - agents actifs;
 - sorties recentes des agents;
 - trades crees;
@@ -177,6 +201,7 @@ Ce fichier trace:
 - `BUY` ou `SELL` ne veut pas dire entrer au marche sans verification.
 - `WAIT` veut dire que le terminal refuse de valider une direction exploitable.
 - La v3.0 ajoutera des statuts intermediaires `WATCH_BUY` et `WATCH_SELL` pour afficher les setups a surveiller sans forcer un trade.
+- Elliott ne doit pas etre utilise comme argument de trade tant qu'il n'est pas refonde et revalide explicitement.
 - Un regime Hormuz/Oil Shock peut inverser la lecture classique geopolitique -> gold.
 - Si le petrole capte la liquidite et que le dollar monte, gold peut baisser malgre le risque geopolitique.
 - Le spread, l'heure, la volatilite et le calendrier macro doivent etre verifies avant toute decision.

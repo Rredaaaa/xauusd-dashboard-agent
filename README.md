@@ -2,7 +2,7 @@
 
 Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL` ou `WAIT` avec niveaux de risque.
 
-A partir de la v3.0, deux statuts intermediaires `WATCH_BUY` et `WATCH_SELL` seront ajoutes pour signaler les setups en surveillance sans forcer un trade. Tant que la v3.0 n'est pas livree, seuls `BUY`, `SELL` et `WAIT` sont affiches.
+A partir de la v3.0, deux statuts intermediaires `WATCH_BUY` et `WATCH_SELL` seront ajoutes pour signaler les setups en surveillance sans forcer un trade. La roadmap v3.0 retire aussi Elliott du parcours utilisateur et le remplace par un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
 
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
@@ -49,9 +49,9 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 ## Ce que le dashboard affiche
 
 - `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
-- `Market`: spot, IG Weekend Gold, chandelles, correlations, regime petrole/politique, COT et ETF flows.
+- `Market`: spot, IG Weekend Gold, vraie charte TradingView cible v3, correlations, regime petrole/politique, COT et ETF flows.
 - `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
-- `Technical`: EMA, RSI, MACD, volume, Chart Store OHLC M5/M15/H1/H4/D1, Elliott Wave passif (experimental, poids 0 dans le scoring depuis Phase 26).
+- `Technical`: EMA, RSI, MACD, volume, Chart Store OHLC M5/M15/H1/H4/D1, puis Technical Decision Engine v3. Elliott doit etre retire du dashboard en Phase 27A.
 - `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
 - `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
 - `Inspector`: audit des sources, Preflight, Chart Store, agents, gates, trades et qualite data.
@@ -95,5 +95,6 @@ python3 -m unittest discover -s tests -v
 - Les scores sont des aides a la decision, pas une certitude de marche.
 - Une source peut etre absente, stale ou contradictoire.
 - IG Weekend Gold est un proxy week-end, distinct du spot classique.
-- Les bougies intraday utilisent un proxy futures COMEX aligne sur le spot.
+- Les bougies intraday internes utilisent un proxy futures COMEX aligne sur le spot; la v3.0 doit afficher une vraie charte TradingView dans le dashboard principal.
+- Elliott est archive dans la roadmap v3.0 tant qu'il n'existe pas de moteur robuste; il ne doit plus etre presente comme preuve de decision.
 - Aucun trade ne doit etre pris sans controle humain du contexte, du spread, de l'heure et du risque.

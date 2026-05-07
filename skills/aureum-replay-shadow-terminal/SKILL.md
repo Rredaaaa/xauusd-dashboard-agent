@@ -69,7 +69,7 @@ Generer:
 - taux trade -> win;
 - agent accuracy;
 - false positives news;
-- false positives Elliott.
+- false positives technical structure.
 
 ## Tests
 

@@ -29,6 +29,7 @@ Il repond:
 - spread/proxy weekend;
 - TradeLedger cooldown;
 - contradictions agents.
+- TechnicalDecisionEngine status;
 
 ## Outputs
 
@@ -49,7 +50,7 @@ Bloquer trade exploitable si:
 - pas de TP clair;
 - risk/reward trop faible;
 - source prix stale;
-- Chart Store absent pour trade Elliott;
+- Chart Store insuffisant pour decision technique;
 - news non confirmee seule;
 - contradiction majeure;
 - volatilite/event mode impose prudence;
@@ -75,6 +76,7 @@ WATCH_SELL. Le biais technique et correlations pointent vers la baisse, mais mac
 - Ne pas transformer une headline faible en trade.
 - Ne pas ignorer data quality.
 - Ne pas recalculer retroactivement un TradePlan.
+- Ne pas accepter Elliott comme justification de risque.
 
 ## Tests
 
@@ -131,3 +133,4 @@ Decider si un signal devient trade exploitable, setup surveille ou refus.
 ### Mauvais exemples
 
 - `BUY` sans SL, TP ni raison de risque.
+- `TRADE_BUY` justifie par Elliott archive.

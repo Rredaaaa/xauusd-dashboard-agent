@@ -19,9 +19,11 @@ Une source critique absente ou stale degrade la `Data Quality`. Un signal direct
 | --- | --- | --- |
 | Investing.com XAU/USD | Spot principal XAU/USD | PriceAgent, RiskManagerAgent, OrchestratorAgent |
 | IG Weekend Gold | Proxy week-end indicatif | PriceAgent, RiskManagerAgent |
-| Yahoo Finance GC=F | Proxy futures pour chandelles/volume | TechnicalAgent |
+| Yahoo Finance GC=F | Proxy futures pour Chart Store OHLC, volume et fallback technique | TechnicalAgent |
+| TradingView widget | Charte utilisateur principale cible v3 | UI uniquement, pas source de scoring backend |
 
 IG Weekend Gold est distinct du spot semaine. Il sert a lire le marche week-end, pas a remplacer le spot classique.
+TradingView sert a afficher une vraie charte live dans le dashboard principal. Les calculs backend continuent d'utiliser les donnees auditees par SourceRegistry/Chart Store tant qu'aucune API officielle TradingView n'est integree.
 
 ## Sources macro
 
@@ -78,12 +80,11 @@ Les headlines seules ne suffisent pas. Les agents cherchent:
 - impact gold/oil/USD;
 - niveau de confirmation.
 
-## Orchestrateur v2
+## Orchestrateur v2 et transition v3
 
 L'Orchestrateur v2 combine les composants suivants:
 
 - TechnicalAgent;
-- ElliottWaveAgent;
 - MacroAgent;
 - GeopoliticalOilShockAgent;
 - CorrelationAgent;
@@ -91,12 +92,12 @@ L'Orchestrateur v2 combine les composants suivants:
 - regime;
 - data quality.
 
-Note v3.0:
-- `ElliottWaveAgent` existe dans la v2, mais son moteur actuel est experimental;
-- depuis la Phase 26, son poids orchestrateur est `0.00`: il reste visible pour audit, mais il ne peut pas changer `BUY`, `SELL` ou `WAIT`;
-- depuis la Phase 25, le Chart Store OHLC expose M5/M15/H1/H4/D1 dans l'Inspector et sert de precondition au futur Elliott Engine v3;
-- il ne doit pas etre considere comme un vrai comptage Elliott multi-timeframe tant que l'Elliott Engine v3 n'est pas livre;
-- la v3.0 doit ajouter les statuts `WATCH_BUY` et `WATCH_SELL` pour eviter que `WAIT` masque les setups en preparation.
+Decision v3.0:
+- `ElliottWaveAgent` est archive. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
+- Phase 27A doit retirer Elliott du dashboard, payload JSON, rapports, Inspector et orchestrateur.
+- Phase 27B remplace Elliott par un `TechnicalDecisionEngine` auditable.
+- Le Chart Store OHLC expose M5/M15/H1/H4/D1 dans l'Inspector pour verifier la qualite des donnees techniques.
+- TradingView devient la charte utilisateur principale, tandis que Chart Store reste la source auditable des calculs internes.
 
 Preflight v3:
 
@@ -122,14 +123,38 @@ Le verdict `WAIT` est force si:
 - regime event dangereux;
 - aucun avantage directionnel propre.
 
+## Technical Decision Engine cible v3
+
+Le scoring technique v3 ne doit pas reposer sur une vague Elliott supposee. Il doit produire un statut technique base sur des preuves observables:
+
+| Bloc | Indicateurs / preuves | Role dans le scoring |
+| --- | --- | --- |
+| Market Structure | swing highs/lows, HH/HL, LH/LL, BOS, CHoCH, retest, range high/low, premium/discount | definir la structure: trend, breakout, range, pullback ou reversal |
+| Trend | EMA 20/50/100/200, pente EMA, alignement M15/H1/H4/D1, position prix vs EMA 50/200 | confirmer la direction dominante |
+| Momentum | RSI7/RSI14, MACD ligne/signal/histogramme, divergence RSI/prix, acceleration/deceleration | confirmer ou refuser l'impulsion |
+| Volatility | ATR14, ATR percentile, range du jour vs ATR, compression/expansion, volume spike proxy futures | verifier si l'entree et le SL sont exploitables |
+| Levels | high/low jour, high/low veille, open, Asia/London/NY high/low, VWAP si disponible, pivots P/R1/R2/S1/S2 | definir trigger, invalidation, SL et TP |
+| Liquidity / Execution | sweep high/low recent, stop hunt probable, fausse cassure, distance prochain niveau | eviter d'acheter/vendre dans une zone piege |
+| Cross Confirmation | DXY, US10Y, 10Y real yield, WTI/Brent, Silver, GDX/GDXJ, VIX/GVZ | confirmer ou contredire la lecture technique |
+
+Regles de direction:
+
+- `WATCH_BUY`: contexte technique haussier en preparation, trigger absent.
+- `BUY`: `WATCH_BUY` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WATCH_SELL`: contexte technique baissier en preparation, trigger absent.
+- `SELL`: `WATCH_SELL` + trigger confirme + invalidation claire + risk/reward acceptable + Preflight non bloquant.
+- `WAIT`: range sale, contradiction forte, volatilite anormale, source bloquante ou prix trop loin du niveau d'entree.
+
+Le score technique doit etre secondaire au statut. Un `62/100` sans trigger, invalidation et niveau exploitable reste un `WATCH` ou `WAIT`, pas un trade.
+
 ## Trade Quality Gate
 
 Un Trade Plan n'est cree que si:
 
 - verdict `BUY` ou `SELL`;
-- score global suffisant;
+- score global suffisant ou statut v3 `TRADE_BUY` / `TRADE_SELL`;
 - data quality suffisante;
-- au moins deux agents valident;
+- confirmations suffisantes entre technique, macro, regime, flows et cross-assets;
 - contradictions limitees;
 - risk/reward exploitable;
 - pas de regime special bloquant.

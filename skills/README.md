@@ -8,7 +8,7 @@ Ordre de lecture recommande:
 2. `aureum-editorial-style/SKILL.md`
 3. `aureum-news-engine/SKILL.md`
 4. `aureum-chart-store/SKILL.md`
-5. `aureum-elliott-wave/SKILL.md`
+5. `aureum-technical-decision/SKILL.md`
 6. `aureum-data-preflight/SKILL.md`
 7. `aureum-gold-macro/SKILL.md`
 8. `aureum-geopolitical-oil/SKILL.md`
@@ -16,6 +16,7 @@ Ordre de lecture recommande:
 10. `aureum-scenario-orchestrator/SKILL.md`
 11. `aureum-trade-quality-gate/SKILL.md`
 12. `aureum-replay-shadow-terminal/SKILL.md`
+13. `aureum-elliott-wave/SKILL.md` archive, a ne pas utiliser sans validation explicite.
 
 Documents de reference a lire avant implementation:
 
@@ -30,4 +31,10 @@ Regle de reprise:
 
 > Aureum Flux v2.0 est stabilise apres Phase 18. La v3.0 commence par Phase 19: audit documentation, puis Phase 20: audit editorial phrase par phrase.
 
-Ne pas commencer par Elliott. Elliott a besoin du Chart Store et doit etre quarantine du scoring avant refonte.
+Decision v3.0 active:
+
+- ne pas commencer par Elliott;
+- Phase 27A retire Elliott du dashboard, payload, Inspector, rapports et orchestrateur;
+- Phase 27A remplace la charte interne principale par TradingView;
+- Phase 27B cree `TechnicalDecisionEngine`;
+- `aureum-elliott-wave` est archive et ne doit pas guider l'implementation sans validation utilisateur explicite.

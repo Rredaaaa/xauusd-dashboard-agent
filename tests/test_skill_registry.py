@@ -12,8 +12,8 @@ REQUIRED_SKILLS = [
     "aureum-project-context",
     "aureum-editorial-style",
     "aureum-news-engine",
-    "aureum-elliott-wave",
     "aureum-chart-store",
+    "aureum-technical-decision",
     "aureum-data-preflight",
     "aureum-gold-macro",
     "aureum-geopolitical-oil",
@@ -21,6 +21,7 @@ REQUIRED_SKILLS = [
     "aureum-scenario-orchestrator",
     "aureum-trade-quality-gate",
     "aureum-replay-shadow-terminal",
+    "aureum-elliott-wave",
 ]
 
 REQUIRED_SECTIONS = [

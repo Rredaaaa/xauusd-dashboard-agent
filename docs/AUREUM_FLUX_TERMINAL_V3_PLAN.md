@@ -107,16 +107,17 @@ Creer des modeles explicites:
   - risques;
   - invalidation.
 
-- `WaveScenario`
+- `TechnicalDecision`
   - timeframes utilises;
-  - scenario principal;
-  - scenario alternatif;
-  - vague majeure;
-  - sous-vague;
-  - pattern;
+  - direction technique;
+  - structure: trend, breakout, range, pullback ou reversal;
+  - trigger;
   - invalidation;
-  - confirmation;
-  - targets Fibonacci;
+  - entry zone;
+  - SL logique;
+  - TP1/TP2/TP3;
+  - indicateurs confirmants;
+  - contradictions;
   - confiance.
 
 - `TradeSetup`
@@ -637,9 +638,9 @@ Actions:
 5. Integrer macro/correlation comme validation.
 
 Exemple:
-- Scenario principal: fin possible vague 2, attente impulsion vague 3.
-- Confirmation: cassure M15 au-dessus resistance + DXY faible.
-- Invalidation: retour sous bas de vague 2.
+- Scenario principal: pullback haussier surveille pres d'un support valide.
+- Confirmation: cloture M15 au-dessus de la resistance de reprise + DXY faible + momentum qui repasse positif.
+- Invalidation: cloture sous le support/retest ou perte du dernier swing low.
 - Statut: `WATCH_BUY`.
 
 Livrables:

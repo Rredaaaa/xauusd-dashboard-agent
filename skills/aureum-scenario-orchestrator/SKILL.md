@@ -43,7 +43,8 @@ Produit:
 Poids changent selon regime:
 - marche normal: macro + technique plus forts;
 - geopolitique: oil/geopolitics plus forts;
-- Elliott unclear: poids 0;
+- structure technique claire: poids technique augmente;
+- structure technique contradictoire: poids technique reduit;
 - source degradee: poids reduit;
 - news non confirmee seule: pas de trade.
 
@@ -68,7 +69,7 @@ Il ne doit pas aller dans le Trade Ledger comme trade actif, mais peut aller dan
 - biais clair mais trigger absent -> WATCH;
 - trigger + quality gate OK -> TRADE;
 - source stale critique -> NO_TRADE ou WAIT;
-- Elliott unclear -> poids 0.
+- structure technique contradictoire -> WAIT ou poids reduit.
 
 ## Phase 23 Contract
 
@@ -106,7 +107,8 @@ Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou ref
 
 - Ne pas masquer les contradictions.
 - Ne pas forcer un trade pour reduire WAIT.
-- Elliott unclear vaut poids zero.
+- Ne pas utiliser Elliott comme structure de decision.
+- Un score technique sans trigger/invalidation ne vaut pas trade.
 
 ### Bons exemples
 
@@ -115,3 +117,4 @@ Assembler les agents en scenario decisionnel lisible: biais, setup, trade ou ref
 ### Mauvais exemples
 
 - `SELL car score global 55/100` sans trigger.
+- `BUY car Elliott dit vague 3` sans moteur valide.

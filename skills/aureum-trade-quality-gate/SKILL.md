@@ -50,7 +50,7 @@ Le terminal doit afficher ce qui manque:
 - source stale;
 - contradiction agents;
 - trigger pas confirme;
-- Elliott unclear;
+- structure technique unclear;
 - macro contradictoire;
 - oil/DXY non confirme;
 - risk/reward insuffisant.

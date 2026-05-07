@@ -7,11 +7,12 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 1. Collecte des sources marche, macro, news, flux et politique.
 2. Normalisation dans des dataclasses.
 3. Construction de la Data Quality.
-4. Construction des agents passifs.
-5. Orchestrateur v2.
-6. Trade Quality Gate et Trade Ledger.
-7. Payload JSON, rapport Markdown, dashboard HTML.
-8. Inspector et audit log.
+4. Preflight data et routage des sources.
+5. Construction des agents passifs.
+6. Orchestrateur v2 puis cible Orchestrateur v3.
+7. Trade Quality Gate et Trade Ledger.
+8. Payload JSON, rapport Markdown, dashboard HTML.
+9. Inspector et audit log.
 
 ## Modules logiques
 
@@ -19,18 +20,23 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Collecte macro: FRED, Fed, BEA, CME FedWatch link.
 - Collecte flux: CFTC COT, WGC ETF, BlackRock IAU.
 - Collecte news: RSS, Google News/fallback, White House.
-- Analyse technique: EMA, RSI, MACD, volume, Elliott Wave passif.
+- Analyse technique: EMA, RSI, MACD, volume, Chart Store OHLC, puis cible v3 `TechnicalDecisionEngine`.
 - Analyse fondamentale: dollar, taux, macro, real yield.
 - Analyse geopolitique: risk-off, Hormuz/Oil Shock, politique, oil/dollar liquidity.
-- Agents passifs: Price, Technical, Elliott Wave, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
+- Agents passifs: Price, Technical, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
 - Orchestrateur v2: pondération multi-agents, contre-signaux et Quality Gate.
+- Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
+- Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
+- Charte principale cible v3: TradingView dans Market/Technical, pas la charte interne.
 - Trade Ledger: signal locking append-only.
 - Inspector: audit sources/agents/trades.
 
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
-- la v3.0 doit commencer par l'audit editorial et la couche d'explication avant d'ajouter de nouveaux moteurs;
-- `ElliottWaveAgent` est actuellement passif et experimental; il doit etre sorti du scoring ou refondu avec un vrai Chart Store OHLC multi-timeframe;
+- la v3.0 a livre l'audit editorial, News Facts, Preflight et Chart Store; la suite active est Phase 27A puis 27B;
+- `ElliottWaveAgent` est archive dans la roadmap v3.0: Phase 27A doit le retirer du dashboard, payload, Inspector, rapports et orchestrateur;
+- Phase 27B remplace Elliott par un `TechnicalDecisionEngine` auditable;
+- la charte interne ne doit plus etre la charte principale: Phase 27A doit integrer TradingView;
 - la decision v3 ajoutera les statuts `WATCH_BUY` et `WATCH_SELL` aux cotes de `BUY`, `SELL` et `WAIT` pour exposer les setups en surveillance sans forcer un trade;
 - la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
@@ -38,6 +44,8 @@ Note de passation v3.0:
 
 - `BriefingBundle`: paquet complet utilise par le rendu.
 - `SourceSnapshot` / `DataQualitySnapshot`: gouvernance sources.
+- `PreflightCheck` / `DataRoute`: statut de readiness avant decision.
+- `ChartStore` / `ChartTimeframe`: qualite OHLC par timeframe.
 - `AgentResult`: sortie d'un agent.
 - `OrchestratorDecision`: decision globale multi-agents.
 - `TradePlan` / `TradeLedgerSummary`: trades historises.
@@ -52,6 +60,7 @@ Le dossier `reports/` recoit:
 - `xauusd_report.md`
 - `trade_ledger.jsonl`
 - `audit_log.jsonl`
+- `chart_store_cache.json`
 
 Ces fichiers sont ignores par Git car ils changent a chaque execution.
 
@@ -71,6 +80,8 @@ L'etat de l'onglet actif est conserve cote client via `localStorage` pour eviter
 
 - Extraire progressivement `xauusd_agent.py` en modules.
 - Ajouter une API OHLC spot XAU/USD professionnelle.
+- Integrer TradingView comme charte utilisateur principale.
+- Ajouter `TechnicalDecisionEngine` pour remplacer Elliott.
 - Ajouter alertes/notifications de TradePlan exploitable.
 - Remplacer certains feeds news par des flux institutionnels plus fiables.
 - Suivre le plan v3.0: `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.

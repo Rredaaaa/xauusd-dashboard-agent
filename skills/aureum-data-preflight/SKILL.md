@@ -71,7 +71,7 @@ Impact: trade bloque, mais lecture macro/market reste consultable.
 - source critique missing -> `NO_TRADE_DATA`;
 - source secondaire missing -> `USABLE`;
 - stale price -> bloque trade;
-- OHLC absent -> Elliott `INSUFFICIENT_HISTORY`;
+- OHLC absent -> TechnicalDecisionEngine `WAIT` ou `NO_TRADE`;
 - news weak -> degrade NewsFact confidence.
 
 ## Phase 23 Contract

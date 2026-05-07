@@ -20,7 +20,7 @@ Regles:
 Note 2026-05-02:
 - les phases v2.0 jusqu'a la Phase 18 sont terminees;
 - la suite du projet doit partir du document `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`;
-- la v3.0 traite l'audit editorial, News Facts v3, Chart Store, Elliott Engine v3, Scenario Engine et Trade Tracker v3.
+- note 2026-05-07: la roadmap v3.0 a ete mise a jour. Elliott Engine n'est plus une phase prioritaire; la suite active retire Elliott du produit visible, integre TradingView comme charte principale, puis cree `TechnicalDecisionEngine`.
 
 ## 1. Vision generale
 

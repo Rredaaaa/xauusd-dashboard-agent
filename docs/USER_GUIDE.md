@@ -4,7 +4,7 @@
 
 Aureum Flux Terminal aide a lire rapidement le marche `XAU/USD`:
 
-- direction live probable: `BUY`, `SELL` ou `WAIT`;
+- direction live probable: `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` ou `NO_TRADE`;
 - score global et raisons;
 - SL/TP proposes;
 - sources et agents qui valident ou contredisent;
@@ -23,7 +23,7 @@ Vue de synthese:
 - regime actif;
 - confidence;
 - alerte;
-- Orchestrateur v2;
+- Orchestrateur v3;
 - Trade Tracker.
 
 La carte `Position conseillee` montre le signal live. Elle peut changer.
@@ -49,7 +49,7 @@ Vue "pourquoi":
 - synthese prioritaire;
 - lecture des scores;
 - Scenario Engine v3;
-- Orchestrateur v2;
+- Orchestrateur v3;
 - Quality Gate;
 - contradictions entre agents;
 - Data Feed Governance.
@@ -154,13 +154,15 @@ Vue exports:
 
 ### Signal live
 
-Le signal live est calcule a chaque refresh. Il depend du prix, des sources, du regime, des agents et de l'Orchestrateur v2. Il peut passer de `BUY` a `WAIT`, ou de `SELL` a `WAIT`, si le contexte change.
+Le signal live est calcule a chaque refresh. Il depend du prix, des sources, du regime, des agents, du Scenario Engine v3 et de l'Orchestrateur v3. Il peut passer de `BUY` a `WATCH_BUY`, `WAIT` ou `NO_TRADE`, si le contexte change.
 
 Depuis la mise a jour scoring du 07/05/2026, un warning ne force plus automatiquement `WAIT`. Le terminal distingue:
 
 - blocage dur: prix XAU/USD principal absent/stale, data quality trop faible, contradiction directionnelle majeure, RR insuffisant ou regime extreme;
 - warning: source secondaire stale, news weak, data quality degradee mais exploitable, mode event modere;
-- signal valide avec confiance reduite: `BUY` ou `SELL` reste possible, mais les warnings sont visibles dans Decision/Inspector.
+- setup surveille: `WATCH_BUY` ou `WATCH_SELL` garde une direction probable sans verrouiller un trade;
+- signal exploitable: `TRADE_BUY` ou `TRADE_SELL` exige sources, confirmations, invalidation et risk/reward suffisants;
+- signal valide avec confiance reduite: `BUY` ou `SELL` reste possible dans les surfaces de synthese, mais les warnings sont visibles dans Decision/Inspector.
 
 ### Trade Plan
 

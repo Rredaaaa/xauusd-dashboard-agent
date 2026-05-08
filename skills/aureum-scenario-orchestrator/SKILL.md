@@ -49,6 +49,8 @@ Implementation v1:
 
 ## Poids dynamiques
 
+Statut projet: Phase 29 livree v1.
+
 Poids changent selon regime:
 - marche normal: macro + technique plus forts;
 - geopolitique: oil/geopolitics plus forts;
@@ -56,6 +58,13 @@ Poids changent selon regime:
 - structure technique contradictoire: poids technique reduit;
 - source degradee: poids reduit, pas `WAIT` automatique si ce n'est pas un blocker;
 - news non confirmee seule: pas de trade.
+
+Implementation v1:
+- moteur `orchestrator_v3_dynamic`;
+- poids dynamiques visibles dans Decision par composant;
+- `NO_TRADE` si preflight/source critique/data quality bloque;
+- `WATCH_BUY` ou `WATCH_SELL` si la direction existe mais qu'un trigger, une invalidation, une confirmation, une source ou le risk/reward manque;
+- `TRADE_BUY` ou `TRADE_SELL` seulement si le Quality Gate v3 valide direction, confirmations, invalidation, data quality et risk/reward.
 
 ## Exemple
 

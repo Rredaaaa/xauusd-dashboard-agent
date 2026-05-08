@@ -9,7 +9,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 3. Construction de la Data Quality.
 4. Preflight data et routage des sources.
 5. Construction des agents passifs.
-6. Orchestrateur v2 puis cible Orchestrateur v3.
+6. Orchestrateur v3 dynamique.
 7. Scenario Engine v3: scenario principal, alternatif, trigger, invalidation, confirmations.
 8. Trade Quality Gate et Trade Ledger.
 9. Payload JSON, rapport Markdown, dashboard HTML.
@@ -25,7 +25,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Analyse fondamentale: dollar, taux, macro, real yield.
 - Analyse geopolitique: risk-off, Hormuz/Oil Shock, politique, oil/dollar liquidity.
 - Agents passifs: Price, Technical, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
-- Orchestrateur v2: pondération multi-agents, contre-signaux et Quality Gate.
+- Orchestrateur v3: poids dynamiques multi-agents, contre-signaux, Quality Gate v3 et statuts `NO_TRADE`, `WATCH_*`, `TRADE_*`.
 - Scenario Engine v3: traduit la decision en plan trader lisible sans creer automatiquement un trade.
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
 - Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
@@ -41,6 +41,7 @@ Note de passation v3.0:
 - Phase 27B a remplace Elliott par un `TechnicalDecisionEngine` auditable v1;
 - la charte principale est TradingView dans Market/Technical;
 - Phase 28 expose les statuts scenario `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` et `WAIT` pour montrer le prochain trigger sans forcer un trade;
+- Phase 29 a livre l'Orchestrateur v3 dynamique: il ajuste les poids selon regime, qualite source, mode event et confirmation technique;
 - la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
 ## Dataclasses importantes
@@ -59,6 +60,7 @@ Regle de decision actuelle:
 - data quality tres faible = blocage dur;
 - WGC ETF stale, Google News weak ou mode event modere = warning;
 - RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan; ElliottWaveAgent est absent du produit actif.
+- `TRADE_*` exige TechnicalDecisionEngine confirme, invalidation claire, confirmations decisionnelles et risk/reward minimum; sinon le terminal reste en `WATCH_*`, `WAIT` ou `NO_TRADE`.
 - `TradeRecommendation`: signal live.
 
 ## Fichiers generes

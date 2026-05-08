@@ -11,7 +11,7 @@ category: project
 Aureum Flux Terminal est un dashboard local XAU/USD. Il aide l'utilisateur a lire le marche, pas a trader automatiquement.
 
 Objectif final:
-- decision claire `BUY`, `SELL`, `WAIT`, puis v3 `WATCH_BUY` / `WATCH_SELL`;
+- decision claire `BUY`, `SELL`, `WAIT`, `NO_TRADE`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY` ou `TRADE_SELL`;
 - explication concrete du pourquoi;
 - SL/TP seulement quand le Quality Gate valide un trade exploitable;
 - historique append-only des trades et signaux;
@@ -23,7 +23,7 @@ La v2.0 est terminee apres Phase 18:
 - dashboard multi-vues;
 - design structurel refait;
 - Inspector;
-- Orchestrateur v2;
+- Orchestrateur v3;
 - Trade Ledger;
 - agents passifs;
 - sources FRED, CFTC, WGC/ETF, IG Weekend, WTI/Brent, Event Facts, Trump/Political Statements.
@@ -39,7 +39,8 @@ La suite est v3.0:
 - Phase 27A: Elliott Removal + TradingView Chart, livree;
 - Phase 27B: Technical Decision Engine v1, livree;
 - Phase 28: Scenario Engine v3, livree v1;
-- Phase 29-34: Orchestrator, Trade Tracker, Replay, Settings, Reports, QA.
+- Phase 29: Orchestrator v3 dynamique, livree v1;
+- Phase 30-34: Trade Tracker, Replay, Settings, Reports, QA.
 
 ## Regles non negociables
 
@@ -74,6 +75,8 @@ Aureum Flux doit separer:
 Le terminal doit etre capable de dire:
 
 > Aucun trade exploitable, mais setup SELL surveille si cassure M15 sous support avec DXY confirme.
+
+Depuis la Phase 29, l'Orchestrateur v3 ajuste les poids selon regime, data quality, mode event et confirmation technique. Il peut produire `NO_TRADE`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY` ou `TRADE_SELL`.
 
 ## Fichiers importants
 

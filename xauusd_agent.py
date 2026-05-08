@@ -774,6 +774,7 @@ class OrchestratorComponent:
     confidence: int
     source: str
     reason: str
+    weight_reason: str = "Poids de base."
 
 
 @dataclass
@@ -5464,6 +5465,7 @@ def build_agent_component(
     agent: AgentResult | None,
     weight: float,
     direct_score: bool = False,
+    weight_reason: str = "Poids de base.",
 ) -> OrchestratorComponent:
     score = agent_bullish_score(agent, direct_score=direct_score)
     source = agent.name if agent else "indisponible"
@@ -5479,7 +5481,87 @@ def build_agent_component(
         confidence=confidence,
         source=source,
         reason=reason,
+        weight_reason=weight_reason,
     )
+
+
+def normalize_orchestrator_weights(weights: dict[str, float], target_total: float = 1.0) -> dict[str, float]:
+    cleaned = {key: max(0.02, value) for key, value in weights.items()}
+    total = sum(cleaned.values()) or target_total
+    return {key: round((value / total) * target_total, 4) for key, value in cleaned.items()}
+
+
+def build_dynamic_orchestrator_weights(
+    technical_agent: AgentResult | None,
+    data_quality: DataQualitySnapshot | None,
+    market_regime: MarketRegimeAnalysis | None,
+    event_mode: EventModeAnalysis | None,
+) -> tuple[dict[str, float], dict[str, list[str]]]:
+    weights = {
+        "technical": 0.18,
+        "macro": 0.18,
+        "geopolitical_oil": 0.14,
+        "cross_assets": 0.12,
+        "flows": 0.10,
+        "regime": 0.10,
+        "data_quality": 0.08,
+    }
+    reasons: dict[str, list[str]] = {key: [] for key in weights}
+
+    def adjust(key: str, delta: float, reason: str) -> None:
+        weights[key] = weights.get(key, 0.0) + delta
+        reasons.setdefault(key, []).append(reason)
+
+    regime_name = market_regime.name if market_regime else "Normal Macro"
+    regime_status = market_regime.status if market_regime else "NORMAL"
+    is_geopolitical_regime = regime_name != "Normal Macro" or regime_status == "ACTIF"
+
+    if not is_geopolitical_regime:
+        adjust("technical", 0.03, "Regime normal: technique plus importante.")
+        adjust("macro", 0.03, "Regime normal: macro plus importante.")
+        adjust("geopolitical_oil", -0.02, "Regime normal: geopolitique/oil reduit.")
+        adjust("regime", -0.01, "Regime normal: regime moins dominant.")
+    else:
+        adjust("geopolitical_oil", 0.06, "Regime geopolitique: oil/geopolitics prioritaire.")
+        adjust("regime", 0.04, "Regime geopolitique: contexte regime prioritaire.")
+        adjust("flows", 0.02, "Regime geopolitique: flux/positionnement surveilles.")
+        adjust("macro", -0.02, "Regime geopolitique: macro reduite face au risque event.")
+        adjust("technical", -0.01, "Regime geopolitique: technique confirmera, mais ne domine pas seule.")
+        if regime_name == "Hormuz / Oil Shock":
+            adjust("geopolitical_oil", 0.03, "Hormuz/Oil Shock: oil shock prioritaire.")
+            adjust("regime", 0.02, "Hormuz/Oil Shock: regime decisionnel augmente.")
+
+    if data_quality is None:
+        adjust("data_quality", 0.04, "Data quality indisponible: poids gouvernance augmente.")
+        adjust("flows", -0.02, "Sources degradees: flows reduits.")
+        adjust("cross_assets", -0.02, "Sources degradees: cross-assets reduits.")
+    elif data_quality.preflight and data_quality.preflight.trade_blocked:
+        adjust("data_quality", 0.06, f"Preflight bloquant {data_quality.preflight.status}: gouvernance prioritaire.")
+        adjust("technical", -0.03, "Preflight bloquant: technique reduite.")
+        adjust("flows", -0.03, "Preflight bloquant: flows reduits.")
+        adjust("cross_assets", -0.02, "Preflight bloquant: cross-assets reduits.")
+    elif data_quality.score < 70:
+        adjust("data_quality", 0.03, f"Data quality degradee {data_quality.score}/100: gouvernance augmente.")
+        adjust("flows", -0.02, "Source degradee: flows reduits.")
+        adjust("cross_assets", -0.02, "Source degradee: cross-assets reduits.")
+        adjust("geopolitical_oil", -0.01, "Source degradee: geopolitique/oil reduit.")
+
+    if event_mode is not None and event_mode.active:
+        adjust("regime", 0.02, "Mode event actif: regime execution augmente.")
+        adjust("technical", -0.01, "Mode event actif: technique reduite tant que volatilite instable.")
+
+    if technical_agent is None:
+        adjust("technical", -0.04, "TechnicalDecisionEngine indisponible: poids technique reduit.")
+    elif technical_agent.bias in {"BUY", "SELL"} and technical_agent.score >= 66 and technical_agent.confidence >= 62:
+        adjust("technical", 0.06, "Structure technique confirmee: poids technique augmente.")
+    elif technical_agent.bias in {"CAUTION", "NEUTRAL"} or technical_agent.score < 58 or technical_agent.confidence < 55:
+        adjust("technical", -0.05, "Structure technique contradictoire ou faible: poids technique reduit.")
+
+    for key in reasons:
+        if not reasons[key]:
+            reasons[key].append("Poids de base conserve.")
+
+    return normalize_orchestrator_weights(weights), reasons
 
 
 def regime_directional_score(market_regime: MarketRegimeAnalysis | None) -> tuple[int, str, str]:
@@ -5500,6 +5582,7 @@ def build_regime_component(
     market_regime: MarketRegimeAnalysis | None,
     event_mode: EventModeAnalysis | None,
     weight: float,
+    weight_reason: str = "Poids de base.",
 ) -> OrchestratorComponent:
     score, bias, reason = regime_directional_score(market_regime)
     if event_mode is not None and event_mode.active:
@@ -5514,12 +5597,14 @@ def build_regime_component(
         confidence=70 if market_regime else 40,
         source=market_regime.name if market_regime else "RegimeContext",
         reason=reason,
+        weight_reason=weight_reason,
     )
 
 
 def build_data_quality_component(
     data_quality: DataQualitySnapshot | None,
     weight: float,
+    weight_reason: str = "Poids de base.",
 ) -> OrchestratorComponent:
     quality_score = data_quality.score if data_quality else 50
     return OrchestratorComponent(
@@ -5532,6 +5617,7 @@ def build_data_quality_component(
         confidence=quality_score,
         source="SourceRegistry",
         reason=data_quality.summary if data_quality else "Data quality indisponible; score neutre.",
+        weight_reason=weight_reason,
     )
 
 
@@ -5548,20 +5634,55 @@ def summarize_trade_history_calibration(ledger_path: Path = TRADE_LEDGER_PATH) -
     return [], [f"Calibration ledger prudente: {losses} perte(s) contre {wins} win(s)."]
 
 
+def estimate_orchestrator_risk_reward(
+    gold: SymbolSnapshot,
+    verdict: str,
+    legacy_recommendation: TradeRecommendation,
+    technical_decision: TechnicalDecision | None,
+) -> tuple[float, str]:
+    direction = "BUY" if "BUY" in verdict else "SELL" if "SELL" in verdict else "WAIT"
+    if direction == "WAIT":
+        return 0.0, "Pas de direction: risk/reward non evalue."
+    if technical_decision is not None and direction in technical_decision.direction:
+        stop_loss = technical_decision.stop_loss
+        tp1 = technical_decision.tp1
+        source = "TechnicalDecisionEngine"
+    else:
+        stop_loss = legacy_recommendation.stop_loss
+        tp1 = legacy_recommendation.take_profit_1
+        source = "Legacy global levels"
+    risk = abs(gold.price - stop_loss)
+    reward = abs(tp1 - gold.price)
+    if risk <= 0.01:
+        return 0.0, f"Risk/reward invalide depuis {source}: stop confondu avec le prix."
+    return reward / risk, f"Risk/reward TP1 {reward / risk:.2f} depuis {source}."
+
+
 def build_orchestrator_quality_gate(
     verdict: str,
     score: int,
+    gold: SymbolSnapshot,
+    legacy_recommendation: TradeRecommendation,
     components: list[OrchestratorComponent],
     contradictions: list[str],
     data_quality: DataQualitySnapshot | None,
     event_mode: EventModeAnalysis | None,
     market_regime: MarketRegimeAnalysis | None,
+    technical_decision: TechnicalDecision | None = None,
 ) -> tuple[str, list[str]]:
     hard_reasons: list[str] = []
     advisory_reasons: list[str] = []
+    trade_blockers: list[str] = []
     directional_components = [component for component in components if component.key != "data_quality" and component.weight > 0]
     strong_buy = [component.label for component in directional_components if component.score >= 62]
     strong_sell = [component.label for component in directional_components if component.score <= 38]
+    direction = "BUY" if verdict == "BUY" else "SELL" if verdict == "SELL" else "WAIT"
+    supporting_components = [
+        component
+        for component in directional_components
+        if (direction == "BUY" and component.score >= 56)
+        or (direction == "SELL" and component.score <= 44)
+    ]
     if strong_buy and strong_sell:
         hard_reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
     directional_contradictions = [item for item in contradictions if item.startswith("BUY vs SELL")]
@@ -5570,30 +5691,57 @@ def build_orchestrator_quality_gate(
     if len(directional_contradictions) >= 2:
         hard_reasons.append("Contradictions directionnelles multiples: WAIT force avant trade.")
     if data_quality is None:
-        hard_reasons.append("Data quality indisponible: WAIT.")
+        hard_reasons.append("Data quality indisponible: NO_TRADE.")
     elif data_quality.preflight and data_quality.preflight.trade_blocked:
         hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
-    elif data_quality.score < 55:
-        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 55.")
+    elif data_quality.score < 50:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 50.")
+    elif data_quality.score < 62:
+        trade_blockers.append(f"Source quality limitee: {data_quality.score}/100; trade bloque mais setup surveillable.")
     elif data_quality.score < 70:
         advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; signal autorise mais confiance reduite.")
     if event_mode is not None and event_mode.active:
         if event_mode.score >= 75:
-            hard_reasons.append(f"Mode event extreme ({event_mode.score}/100): WAIT execution.")
+            trade_blockers.append(f"Mode event extreme ({event_mode.score}/100): pas de TRADE_* automatique.")
         else:
             advisory_reasons.append(f"Mode event surveille ({event_mode.score}/100): confirmation d'entree exigee.")
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
         if market_regime.score >= 75:
-            hard_reasons.append("Regime Hormuz/Oil Shock fort: WAIT sans validation manuelle.")
+            trade_blockers.append("Regime Hormuz/Oil Shock fort: setup seulement, validation manuelle requise.")
         else:
             advisory_reasons.append("Regime Hormuz/Oil Shock surveille: reduire confiance et taille.")
     if verdict in {"BUY", "SELL"} and score < 58:
-        hard_reasons.append(f"Score orchestrateur insuffisant: {score}/100 < 58.")
+        trade_blockers.append(f"Score orchestrateur insuffisant pour TRADE_*: {score}/100 < 58.")
+    if direction in {"BUY", "SELL"} and len(supporting_components) < 2:
+        trade_blockers.append("Confirmation insuffisante: moins de deux composants decisionnels soutiennent la direction.")
+    if technical_decision is None:
+        trade_blockers.append("TechnicalDecisionEngine absent: pas de trigger/invalidation exploitable.")
+    elif direction in {"BUY", "SELL"}:
+        has_invalidation = bool(technical_decision.invalidation.strip()) and abs(technical_decision.stop_loss - gold.price) > 0.01
+        if direction not in technical_decision.direction:
+            trade_blockers.append(f"Technique ne confirme pas {direction}: {technical_decision.direction}.")
+        if not has_invalidation:
+            trade_blockers.append("Setup sans invalidation technique claire.")
+    rr, rr_reason = estimate_orchestrator_risk_reward(gold, verdict, legacy_recommendation, technical_decision)
+    if direction in {"BUY", "SELL"}:
+        if rr < 0.80:
+            trade_blockers.append(f"Risk/reward minimum non atteint: {rr:.2f} < 0.80.")
+        else:
+            advisory_reasons.append(rr_reason)
     if verdict == "WAIT":
         hard_reasons.append("Zone centrale: aucune direction n'a assez d'avantage.")
     if hard_reasons:
-        return "WAIT", [*hard_reasons, *advisory_reasons][:6]
-    return "VALIDATED", [*advisory_reasons, "Quality Gate v2 valide: score, sources et contradictions autorisent la decision."][:6]
+        status = "NO_TRADE" if any("Preflight bloquant" in reason or "Data quality" in reason for reason in hard_reasons) else "WAIT"
+        return status, [*hard_reasons, *advisory_reasons][:7]
+    if verdict == "BUY":
+        status = "WATCH_BUY" if trade_blockers else "TRADE_BUY"
+    elif verdict == "SELL":
+        status = "WATCH_SELL" if trade_blockers else "TRADE_SELL"
+    else:
+        status = "WAIT"
+    if trade_blockers:
+        return status, [*trade_blockers, *advisory_reasons, "Quality Gate v3: setup surveille, pas de trade verrouille."][:7]
+    return status, [*advisory_reasons, "Quality Gate v3 valide: trigger, sources, confirmations et risk/reward autorisent TRADE_*."][:7]
 
 
 def build_orchestrator_decision(
@@ -5603,30 +5751,31 @@ def build_orchestrator_decision(
     data_quality: DataQualitySnapshot | None = None,
     market_regime: MarketRegimeAnalysis | None = None,
     event_mode: EventModeAnalysis | None = None,
+    technical_decision: TechnicalDecision | None = None,
 ) -> tuple[TradeRecommendation, OrchestratorDecision]:
-    weights = {
-        "technical": 0.18,
-        "macro": 0.18,
-        "geopolitical_oil": 0.14,
-        "cross_assets": 0.12,
-        "flows": 0.10,
-        "regime": 0.10,
-        "data_quality": 0.08,
-    }
     technical = agent_by_name(agent_results, "TechnicalAgent")
     macro = agent_by_name(agent_results, "MacroAgent")
     geopolitical = agent_by_name(agent_results, "GeopoliticalOilShockAgent")
     cross_assets = agent_by_name(agent_results, "CorrelationAgent")
     flows = agent_by_name(agent_results, "FlowPositioningAgent")
+    weights, weight_reasons = build_dynamic_orchestrator_weights(
+        technical,
+        data_quality,
+        market_regime,
+        event_mode,
+    )
+
+    def weight_reason(key: str) -> str:
+        return " ".join(weight_reasons.get(key, ["Poids de base conserve."]))
 
     components = [
-        build_agent_component("technical", "Technique", technical, weights["technical"]),
-        build_agent_component("macro", "Macro", macro, weights["macro"]),
-        build_agent_component("geopolitical_oil", "Geopolitique/Oil", geopolitical, weights["geopolitical_oil"]),
-        build_agent_component("cross_assets", "Cross-assets", cross_assets, weights["cross_assets"], direct_score=True),
-        build_agent_component("flows", "Flows", flows, weights["flows"], direct_score=True),
-        build_regime_component(market_regime, event_mode, weights["regime"]),
-        build_data_quality_component(data_quality, weights["data_quality"]),
+        build_agent_component("technical", "Technique", technical, weights["technical"], weight_reason=weight_reason("technical")),
+        build_agent_component("macro", "Macro", macro, weights["macro"], weight_reason=weight_reason("macro")),
+        build_agent_component("geopolitical_oil", "Geopolitique/Oil", geopolitical, weights["geopolitical_oil"], weight_reason=weight_reason("geopolitical_oil")),
+        build_agent_component("cross_assets", "Cross-assets", cross_assets, weights["cross_assets"], direct_score=True, weight_reason=weight_reason("cross_assets")),
+        build_agent_component("flows", "Flows", flows, weights["flows"], direct_score=True, weight_reason=weight_reason("flows")),
+        build_regime_component(market_regime, event_mode, weights["regime"], weight_reason=weight_reason("regime")),
+        build_data_quality_component(data_quality, weights["data_quality"], weight_reason=weight_reason("data_quality")),
     ]
     total_weight = sum(component.weight for component in components)
     bullish_score = round(sum(component.contribution for component in components) / total_weight, 2)
@@ -5645,17 +5794,31 @@ def build_orchestrator_decision(
     gate_status, gate_reasons = build_orchestrator_quality_gate(
         verdict,
         score,
+        gold,
+        legacy_recommendation,
         components,
         contradictions,
         data_quality,
         event_mode,
         market_regime,
+        technical_decision=technical_decision,
     )
-    if gate_status == "WAIT":
-        verdict = "WAIT"
+    if gate_status in {"WAIT", "NO_TRADE"}:
+        verdict = gate_status
         score = min(score, 59)
+    elif gate_status in {"WATCH_BUY", "WATCH_SELL"}:
+        verdict = gate_status
 
-    direction_is_buy = verdict != "SELL"
+    context_direction = (
+        "BUY"
+        if "BUY" in verdict
+        else "SELL"
+        if "SELL" in verdict
+        else "BUY"
+        if bullish_score >= 50
+        else "SELL"
+    )
+    direction_is_buy = context_direction == "BUY"
     supportive = [
         component
         for component in components
@@ -5680,8 +5843,15 @@ def build_orchestrator_decision(
         for component in counter[:3]
     ] + history_counters
 
-    recommendation_verdict = verdict if verdict in {"BUY", "SELL"} else legacy_recommendation.verdict
-    if recommendation_verdict == "BUY":
+    recommendation_verdict = "BUY" if gate_status == "TRADE_BUY" else "SELL" if gate_status == "TRADE_SELL" else verdict
+    level_direction = (
+        "BUY"
+        if "BUY" in recommendation_verdict
+        else "SELL"
+        if "SELL" in recommendation_verdict
+        else legacy_recommendation.verdict
+    )
+    if level_direction == "BUY":
         stop_loss, tp1, tp2 = build_trade_levels(
             gold.price,
             atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
@@ -5690,7 +5860,7 @@ def build_orchestrator_decision(
             tp1_multiplier=1.15,
             tp2_multiplier=2.1,
         )
-    elif recommendation_verdict == "SELL":
+    elif level_direction == "SELL":
         stop_loss, tp1, tp2 = build_trade_levels(
             gold.price,
             atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
@@ -5702,27 +5872,28 @@ def build_orchestrator_decision(
     else:
         stop_loss, tp1, tp2 = legacy_recommendation.stop_loss, legacy_recommendation.take_profit_1, legacy_recommendation.take_profit_2
 
+    display_verdict = recommendation_verdict if recommendation_verdict in {"BUY", "SELL"} else verdict
     summary = (
-        f"Orchestrateur v2 {verdict}: score pondere {bullish_score:.1f}/100, "
+        f"Orchestrateur v3 {gate_status}: score pondere {bullish_score:.1f}/100, "
         f"ancien moteur {legacy_recommendation.verdict} {legacy_recommendation.score}/100. "
-        + ("Quality Gate valide." if gate_status == "VALIDATED" else "WAIT force par Quality Gate.")
+        + ("Trade exploitable." if gate_status.startswith("TRADE_") else "Setup surveille." if gate_status.startswith("WATCH_") else "Pas de trade.")
     )
     recommendation = TradeRecommendation(
-        mode="Global v2",
-        verdict=verdict,
+        mode="Global v3",
+        verdict=display_verdict,
         score=score,
         summary=summary,
         reasons=(top_reasons[:3] + [f"Contre-signal: {item}" for item in counter_reasons[:3]] + gate_reasons)[:8],
         stop_loss=stop_loss,
         take_profit_1=tp1,
         take_profit_2=tp2,
-        source_note="Orchestrateur v2: agents ponderes, SourceRegistry, regime, contradictions et Trade Ledger.",
+        source_note="Orchestrateur v3: poids dynamiques, SourceRegistry, regime, contradictions, scenario et Quality Gate.",
     )
     decision = OrchestratorDecision(
-        verdict=verdict,
+        verdict=display_verdict,
         score=score,
         status=gate_status,
-        engine="orchestrator_v2_active",
+        engine="orchestrator_v3_dynamic",
         bullish_score=bullish_score,
         legacy_verdict=legacy_recommendation.verdict,
         legacy_score=legacy_recommendation.score,
@@ -5747,17 +5918,17 @@ def update_orchestrator_agent(agent_results: list[AgentResult], decision: Orches
                 department=agent.department,
                 bias=normalize_agent_bias(decision.verdict),
                 score=decision.score,
-                confidence=78 if decision.status == "VALIDATED" else 64,
+                confidence=82 if decision.status.startswith("TRADE_") else 72 if decision.status.startswith("WATCH_") else 64,
                 summary=(
-                    f"Orchestrateur v2 actif: verdict {decision.verdict} {decision.score}/100; "
+                    f"Orchestrateur v3 actif: verdict {decision.verdict} {decision.score}/100; "
                     f"ancien moteur {decision.legacy_verdict} {decision.legacy_score}/100."
                 ),
                 evidence=[
-                    AgentEvidence("Moteur", decision.engine, "Phase 14"),
+                    AgentEvidence("Moteur", decision.engine, "Phase 29"),
                     AgentEvidence("Score pondere", f"{decision.bullish_score:.1f}/100", "Agents ponderes"),
-                    AgentEvidence("Quality Gate", decision.status, "Orchestrator v2"),
+                    AgentEvidence("Quality Gate", decision.status, "Orchestrator v3"),
                 ],
-                risks=[AgentRisk("Gate", reason, "high" if decision.status == "WAIT" else "low") for reason in decision.quality_gate_reasons[:3]],
+                risks=[AgentRisk("Gate", reason, "high" if decision.status in {"WAIT", "NO_TRADE"} else "medium" if decision.status.startswith("WATCH_") else "low") for reason in decision.quality_gate_reasons[:3]],
                 status="ACTIVE",
                 experimental=False,
             )
@@ -7281,6 +7452,7 @@ def build_orchestrator_component_from_payload(data: dict[str, Any]) -> Orchestra
         confidence=int(data.get("confidence", 50) or 50),
         source=str(data.get("source", "")),
         reason=str(data.get("reason", "")),
+        weight_reason=str(data.get("weight_reason", "Poids de base.")),
     )
 
 
@@ -7291,7 +7463,7 @@ def build_orchestrator_decision_from_payload(data: dict[str, Any] | None) -> Orc
         verdict=str(data.get("verdict", "WAIT")),
         score=int(data.get("score", 50) or 50),
         status=str(data.get("status", "WAIT")),
-        engine=str(data.get("engine", "orchestrator_v2")),
+        engine=str(data.get("engine", "orchestrator_v3_dynamic")),
         bullish_score=float(data.get("bullish_score", 50.0) or 50.0),
         legacy_verdict=str(data.get("legacy_verdict", "n/a")),
         legacy_score=int(data.get("legacy_score", 50) or 50),
@@ -7898,7 +8070,7 @@ def render_report(
         lines.extend(
             [
                 "",
-                "## Orchestrateur v2",
+                "## Orchestrateur v3",
                 f"- Statut: {orchestrator_decision.status}",
                 f"- Verdict: {orchestrator_decision.verdict} {orchestrator_decision.score}/100",
                 f"- Bullish score pondere: {orchestrator_decision.bullish_score:.1f}/100",
@@ -9064,7 +9236,7 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
 
 def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) -> str:
     if decision is None:
-        return '<div class="empty-state">Orchestrateur v2 indisponible sur ce snapshot.</div>'
+        return '<div class="empty-state">Orchestrateur v3 indisponible sur ce snapshot.</div>'
     rows = "".join(
         f"""
         <tr>
@@ -9073,7 +9245,7 @@ def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) ->
           <td>{component.score}/100</td>
           <td>{component.weight:.2f}</td>
           <td>{component.contribution:.2f}</td>
-          <td>{html.escape(component.reason[:150])}</td>
+          <td>{html.escape(component.reason[:120])}<br><span class="soft">{html.escape(component.weight_reason[:140])}</span></td>
         </tr>
         """.strip()
         for component in decision.components
@@ -9083,11 +9255,11 @@ def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) ->
     gate_reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in decision.quality_gate_reasons[:5]) or "<li>Quality Gate non evalue.</li>"
     badge_class = recommendation_css_class(decision.verdict)
     return f"""
-    <div class="trade-verdict {badge_class}">Orchestrateur v2 · {html.escape(decision.verdict)} · {decision.score}/100 · {html.escape(decision.status)}</div>
+    <div class="trade-verdict {badge_class}">Orchestrateur v3 · {html.escape(decision.verdict)} · {decision.score}/100 · {html.escape(decision.status)}</div>
     <div class="tag-row">
       <span class="source-tag">Engine · {html.escape(decision.engine)}</span>
       <span class="source-tag">Legacy · {html.escape(decision.legacy_verdict)} {decision.legacy_score}/100</span>
-      <span class="source-tag {state_tone_class(decision.status)}">Gate · {html.escape(decision.status)}</span>
+      <span class="source-tag {state_tone_class(decision.status)}">Decision v3 · {html.escape(decision.status)}</span>
     </div>
     <p class="trade-summary">
       Score pondere bullish {decision.bullish_score:.1f}/100. Ancien moteur:
@@ -9118,11 +9290,11 @@ def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) ->
 
 def state_tone_class(status: str) -> str:
     upper = status.upper()
-    if upper in {"OK", "ONLINE", "VALIDATED", "ACTIVE", "LOCKED"}:
+    if upper in {"OK", "ONLINE", "VALIDATED", "ACTIVE", "LOCKED", "TRADE_BUY", "TRADE_SELL"}:
         return "bullish"
-    if upper in {"WAIT", "CAUTION", "STALE", "MISSING", "FORCED"}:
+    if upper in {"WAIT", "CAUTION", "STALE", "MISSING", "FORCED", "WATCH_BUY", "WATCH_SELL"}:
         return "caution"
-    if upper in {"ERROR", "WEAK", "BLOCKED"}:
+    if upper in {"ERROR", "WEAK", "BLOCKED", "NO_TRADE"}:
         return "bearish"
     return "neutral"
 
@@ -9144,13 +9316,13 @@ def render_terminal_state_board(
         source_detail = f"{data_quality.score}/100 · missing {len(data_quality.missing_sources)} · stale {len(data_quality.stale_sources)}"
     contradiction_count = len(orchestrator_decision.contradictions) if orchestrator_decision else 0
     gate_status = orchestrator_decision.status if orchestrator_decision else "WAIT"
-    wait_forced = global_recommendation.verdict == "WAIT" or gate_status == "WAIT"
+    wait_forced = global_recommendation.verdict in {"WAIT", "NO_TRADE"} or gate_status in {"WAIT", "NO_TRADE"}
     cards = [
         ("Live signal", global_recommendation.verdict, f"{global_recommendation.score}/100 · {global_recommendation.mode}", recommendation_css_class(global_recommendation.verdict)),
         ("Trade locked", "LOCKED" if active_trades else "WAIT", f"{active_trades} trade(s) actif(s)", "bullish" if active_trades else "neutral"),
         ("Sources", "STALE" if source_alerts else source_status, source_detail, "caution" if source_alerts else state_tone_class(source_status)),
         ("Contradictions", "ACTIVE" if contradiction_count else "OK", f"{contradiction_count} contradiction(s)", "caution" if contradiction_count else "bullish"),
-        ("Quality gate", "WAIT force" if wait_forced else gate_status, (market_regime.name if market_regime else "Normal Macro"), "caution" if wait_forced else state_tone_class(gate_status)),
+        ("Quality gate", "NO_TRADE" if gate_status == "NO_TRADE" else "WAIT force" if wait_forced else gate_status, (market_regime.name if market_regime else "Normal Macro"), state_tone_class(gate_status)),
     ]
     nodes = "".join(
         f"""
@@ -12756,7 +12928,7 @@ def render_dashboard_clarity_v2(
               </div>
             </article>
             <article class="panel span-6">
-              <div class="section-kicker">Orchestrateur v2</div>
+              <div class="section-kicker">Orchestrateur v3</div>
               <h2>Decision multi-agents</h2>
               {render_orchestrator_decision_panel(orchestrator_decision)}
             </article>
@@ -12824,7 +12996,7 @@ def render_dashboard_clarity_v2(
               </div>
             </article>
             <article class="panel span-12"><div class="section-kicker">Scenario Engine v3</div><h2>Scenario principal, declencheur et invalidation</h2>{render_scenario_plan_panel(scenario_plan)}</article>
-            <article class="panel span-12"><div class="section-kicker">Orchestrateur v2</div><h2>Ponderation, preuves et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
+            <article class="panel span-12"><div class="section-kicker">Orchestrateur v3</div><h2>Poids dynamiques, preuves et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
             <article class="panel span-6"><div class="section-kicker">Regime decisionnel</div><h2>WTI/Brent + Hormuz/Oil Shock</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
             <article class="panel span-6"><div class="section-kicker">Data Feed Governance</div><h2>Qualite, fraicheur et fiabilite des sources</h2>{render_data_quality_panel(data_quality)}</article>
             <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Decision agents & contradictions</h2>{render_agent_department_panel(agent_results, "Decision")}<div class="module-block"><div class="section-kicker">Contradictions entre agents</div>{render_agent_contradictions(agent_results)}</div></article>
@@ -13132,6 +13304,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         data_quality=data_quality,
         market_regime=market_regime,
         event_mode=event_mode,
+        technical_decision=technical_decision,
     )
     agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
     scenario_plan = build_scenario_plan(
@@ -13342,6 +13515,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         data_quality=data_quality,
         market_regime=market_regime,
         event_mode=event_mode,
+        technical_decision=technical_decision,
     )
     agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
     scenario_plan = build_scenario_plan(

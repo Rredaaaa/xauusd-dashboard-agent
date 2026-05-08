@@ -85,9 +85,9 @@ Les headlines seules ne suffisent pas. Les agents cherchent:
 - impact gold/oil/USD;
 - niveau de confirmation.
 
-## Orchestrateur v2 et transition v3
+## Orchestrateur v3 et poids dynamiques
 
-L'Orchestrateur v2 combine les composants suivants:
+Depuis la Phase 29, l'Orchestrateur v3 combine les composants suivants avec des poids contextuels:
 
 - TechnicalAgent;
 - MacroAgent;
@@ -96,6 +96,15 @@ L'Orchestrateur v2 combine les composants suivants:
 - FlowPositioningAgent;
 - regime;
 - data quality.
+
+Les poids changent selon:
+
+- regime normal: technique et macro augmentent;
+- regime geopolitique ou Hormuz/Oil Shock: geopolitique/oil, regime et flows augmentent;
+- data quality degradee: data quality augmente comme garde-fou, sources faibles reduites;
+- structure technique confirmee: poids technique augmente;
+- structure technique faible ou contradictoire: poids technique baisse;
+- mode event actif: execution plus prudente, sans `WAIT` automatique si les preuves restent exploitables.
 
 Decision v3.0:
 - `ElliottWaveAgent` est archive. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
@@ -126,19 +135,30 @@ Sources importantes mais non bloquantes seules:
 
 Il produit:
 
-- verdict `BUY`, `SELL` ou `WAIT`;
+- verdict `BUY`, `SELL`, `WAIT`, `NO_TRADE`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY` ou `TRADE_SELL`;
 - score `/100`;
 - raisons principales;
 - contre-signaux;
 - Quality Gate final.
 
-Le verdict `WAIT` est force si:
+Le Quality Gate v3 bloque `TRADE_*` si:
 
 - score trop faible;
 - data quality trop faible ou Preflight bloquant;
 - contradictions directionnelles fortes entre composants decisionnels;
 - regime event extreme;
-- aucun avantage directionnel propre.
+- aucun avantage directionnel propre;
+- TechnicalDecisionEngine absent ou contradictoire;
+- setup sans invalidation claire;
+- risk/reward minimum non atteint;
+- moins de deux composants decisionnels soutiennent la direction.
+
+Difference des statuts:
+
+- `NO_TRADE`: source critique/preflight/data quality bloque l'analyse de trade;
+- `WAIT`: marche incoherent ou avantage insuffisant;
+- `WATCH_BUY` / `WATCH_SELL`: setup surveille, pas verrouillable;
+- `TRADE_BUY` / `TRADE_SELL`: trade exploitable, eligible au Trade Tracker.
 
 Le verdict `WAIT` ne doit pas etre force uniquement parce que:
 

@@ -669,6 +669,8 @@ Definition de termine:
 
 ### Phase 29 - Orchestrator v3 et poids dynamiques
 
+Statut 2026-05-08: livree v1.
+
 Objectif:
 Remplacer le scoring fixe par une decision contextuelle.
 
@@ -707,6 +709,14 @@ Livrables:
 - `OrchestratorV3`;
 - affichage Decision refondu;
 - tests.
+
+Livraison v1:
+- l'orchestrateur actif utilise `orchestrator_v3_dynamic`;
+- les poids technique, macro, geopolitique/oil, cross-assets, flows, regime et data quality changent selon le regime, la qualite source, le mode event et la confirmation technique;
+- le Quality Gate v3 distingue `NO_TRADE`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY` et `TRADE_SELL`;
+- `TRADE_*` exige une direction, au moins deux confirmations decisionnelles, une validation technique, une invalidation exploitable, une data quality suffisante et un risk/reward minimum;
+- les warnings non bloquants restent visibles sans forcer `WAIT`;
+- l'affichage Decision expose les raisons de poids dynamiques par composant.
 
 Definition de termine:
 - le terminal peut donner un setup surveille sans verrouiller un trade.

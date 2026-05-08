@@ -1,8 +1,8 @@
 # Aureum Flux Terminal
 
-Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL` ou `WAIT` avec niveaux de risque.
+Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` ou `NO_TRADE` avec niveaux de risque.
 
-A partir de la v3.0, deux statuts intermediaires `WATCH_BUY` et `WATCH_SELL` seront ajoutes pour signaler les setups en surveillance sans forcer un trade. La roadmap v3.0 retire aussi Elliott du parcours utilisateur et le remplace par un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
+A partir de la v3.0, `WATCH_BUY` et `WATCH_SELL` signalent les setups en surveillance sans forcer un trade, tandis que `TRADE_BUY` et `TRADE_SELL` exigent validation technique, sources exploitables, invalidation et risk/reward. La roadmap v3.0 retire aussi Elliott du parcours utilisateur et le remplace par un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
 
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
@@ -48,7 +48,7 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 
 ## Ce que le dashboard affiche
 
-- `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v2, Trade Tracker.
+- `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v3, Trade Tracker.
 - `Market`: spot, IG Weekend Gold, vraie charte TradingView, correlations, regime petrole/politique, COT et ETF flows.
 - `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
 - `Technical`: vraie charte TradingView, Technical Decision Engine, EMA, RSI, MACD, volume et Chart Store OHLC M5/M15/H1/H4/D1 en diagnostic.

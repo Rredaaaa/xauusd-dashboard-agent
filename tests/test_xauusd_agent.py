@@ -21,6 +21,7 @@ from xauusd_agent import (
     NewsItem,
     OfficialMacroRates,
     PoliticalStatement,
+    PreflightCheck,
     PricePoint,
     SourceSnapshot,
     SymbolSnapshot,
@@ -106,6 +107,34 @@ class AnalysisShapeTests(unittest.TestCase):
             resistance=max(price, previous),
             fetched_at="2026-04-24T00:00:00+00:00",
             points=points,
+        )
+
+    def technical_decision(self, direction: str, price: float = 2400.0) -> TechnicalDecision:
+        is_buy = "BUY" in direction
+        return TechnicalDecision(
+            status="TRADE_READY",
+            direction=direction,
+            structure="trend",
+            score=72,
+            confidence=74,
+            trigger=(
+                f"BUY seulement si cloture M15 au-dessus de {price + 5:.2f}."
+                if is_buy
+                else f"SELL seulement si cloture M15 sous {price - 5:.2f}."
+            ),
+            invalidation=(
+                f"Invalidation BUY sous {price - 12:.2f}."
+                if is_buy
+                else f"Invalidation SELL au-dessus de {price + 12:.2f}."
+            ),
+            entry_zone_low=price - 2.0,
+            entry_zone_high=price + 2.0,
+            stop_loss=price - 12.0 if is_buy else price + 12.0,
+            tp1=price + 14.0 if is_buy else price - 14.0,
+            tp2=price + 28.0 if is_buy else price - 28.0,
+            tp3=price + 42.0 if is_buy else price - 42.0,
+            reasons=["Structure technique valide."],
+            contradictions=[],
         )
 
     def test_parse_ig_weekend_gold_snapshot(self) -> None:
@@ -706,7 +735,7 @@ class AnalysisShapeTests(unittest.TestCase):
             neutral_news=[],
         )
         recommendation = TradeRecommendation(
-            mode="Global v2",
+            mode="Global v3",
             verdict="BUY",
             score=68,
             summary="Signal test auditable.",
@@ -1100,7 +1129,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertFalse(any(agent.name == "ElliottWaveAgent" for agent in agents))
         self.assertEqual(official.verdict, "BUY")
 
-    def test_orchestrator_v2_validates_aligned_buy(self) -> None:
+    def test_orchestrator_v3_validates_aligned_buy(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         legacy = TradeRecommendation(
             mode="Global",
@@ -1138,16 +1167,18 @@ class AnalysisShapeTests(unittest.TestCase):
             data_quality=quality,
             market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
             event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=self.technical_decision("BUY", gold.price),
         )
         self.assertEqual(recommendation.verdict, "BUY")
-        self.assertEqual(decision.status, "VALIDATED")
+        self.assertEqual(decision.status, "TRADE_BUY")
         self.assertGreaterEqual(decision.score, 60)
+        self.assertEqual(decision.engine, "orchestrator_v3_dynamic")
         updated_agents = update_orchestrator_agent(agents, decision)
         active_orchestrator = next(agent for agent in updated_agents if agent.name == "OrchestratorAgent")
         self.assertEqual(active_orchestrator.status, "ACTIVE")
         self.assertFalse(active_orchestrator.experimental)
 
-    def test_orchestrator_v2_forces_wait_on_strong_contradiction(self) -> None:
+    def test_orchestrator_v3_forces_wait_on_strong_contradiction(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         legacy = TradeRecommendation(
             mode="Global",
@@ -1184,6 +1215,7 @@ class AnalysisShapeTests(unittest.TestCase):
             data_quality=quality,
             market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
             event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=self.technical_decision("BUY", gold.price),
         )
         self.assertEqual(recommendation.verdict, "WAIT")
         self.assertEqual(decision.status, "WAIT")
@@ -1226,11 +1258,103 @@ class AnalysisShapeTests(unittest.TestCase):
             data_quality=quality,
             market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
             event_mode=EventModeAnalysis(True, 35, "ACTIF", "surveillance", 1.5, ["volume eleve"]),
+            technical_decision=self.technical_decision("SELL", gold.price),
         )
         self.assertEqual(recommendation.verdict, "SELL")
-        self.assertEqual(decision.status, "VALIDATED")
+        self.assertEqual(decision.status, "TRADE_SELL")
         self.assertTrue(any("Data quality degradee" in reason for reason in decision.quality_gate_reasons))
         self.assertTrue(any("Mode event surveille" in reason for reason in decision.quality_gate_reasons))
+
+    def test_orchestrator_v3_watches_when_technical_trigger_missing(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=66,
+            summary="Ancien moteur haussier.",
+            reasons=["legacy"],
+            stop_loss=2385.0,
+            take_profit_1=2420.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 72, 70, "Technique constructive."),
+            AgentResult("MacroAgent", "Macro", "BUY", 74, 76, "Macro favorable."),
+            AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=90,
+            status="HIGH",
+            summary="Sources critiques ok.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=None,
+        )
+        self.assertEqual(recommendation.verdict, "WATCH_BUY")
+        self.assertEqual(decision.status, "WATCH_BUY")
+        self.assertTrue(any("TechnicalDecisionEngine absent" in reason for reason in decision.quality_gate_reasons))
+
+    def test_orchestrator_v3_blocks_trade_when_preflight_blocks(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="SELL",
+            score=66,
+            summary="Ancien moteur baissier.",
+            reasons=["legacy"],
+            stop_loss=2415.0,
+            take_profit_1=2375.0,
+            take_profit_2=2355.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "SELL", 72, 70, "Technique baissiere."),
+            AgentResult("MacroAgent", "Macro", "SELL", 74, 76, "Macro defavorable."),
+            AgentResult("CorrelationAgent", "Market", "SELL", 35, 70, "Cross-assets defavorables."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=88,
+            status="SOURCE_STALE",
+            summary="Prix principal stale.",
+            missing_sources=[],
+            stale_sources=["Investing.com XAU/USD"],
+            weak_sources=[],
+            contradictions=[],
+            preflight=PreflightCheck(
+                generated_at="2026-04-24T10:00:00+00:00",
+                status="SOURCE_STALE",
+                summary="Prix principal stale.",
+                trade_blocked=True,
+                blockers=["Investing.com XAU/USD stale"],
+                warnings=[],
+            ),
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=self.technical_decision("SELL", gold.price),
+        )
+        self.assertEqual(recommendation.verdict, "NO_TRADE")
+        self.assertEqual(decision.status, "NO_TRADE")
+        self.assertTrue(any("Preflight bloquant" in reason for reason in decision.quality_gate_reasons))
 
     def test_trade_gate_ignores_audit_agents_for_locking(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
@@ -1316,6 +1440,7 @@ class AnalysisShapeTests(unittest.TestCase):
             data_quality=quality,
             market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
             event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=self.technical_decision("BUY", gold.price),
         )
         self.assertEqual(recommendation.verdict, "BUY")
         self.assertFalse(any(component.key == "elliott" for component in decision.components))

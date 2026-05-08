@@ -66,6 +66,23 @@ Implementation v1:
 - `WATCH_BUY` ou `WATCH_SELL` si la direction existe mais qu'un trigger, une invalidation, une confirmation, une source ou le risk/reward manque;
 - `TRADE_BUY` ou `TRADE_SELL` seulement si le Quality Gate v3 valide direction, confirmations, invalidation, data quality et risk/reward.
 
+## UX Product Split Phase 30A
+
+Statut projet: documentee, a valider avant implementation.
+
+L'orchestrateur peut conserver toutes ses donnees internes, mais l'interface utilisateur doit separer:
+- `Desk`: resultat utile uniquement;
+- `Agents`: scoring et positions agents;
+- `News Flow`: informations recentes avec impact;
+- `Reports`: historique et exports;
+- `Inspector`: detail moteur.
+
+Regle d'affichage:
+- `WATCH_*` = setup surveille, pas une position conseillee avec SL/TP;
+- `TRADE_*` = seul statut autorise a afficher un trade exploitable avec SL/TP;
+- `NO_TRADE` et `WAIT` doivent expliquer le blocage en une phrase courte;
+- les raisons longues, chaines marche et validations internes vont dans Inspector.
+
 ## Exemple
 
 ```text

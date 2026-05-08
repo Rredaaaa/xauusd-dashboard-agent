@@ -40,6 +40,7 @@ La suite est v3.0:
 - Phase 27B: Technical Decision Engine v1, livree;
 - Phase 28: Scenario Engine v3, livree v1;
 - Phase 29: Orchestrator v3 dynamique, livree v1;
+- Phase 30A: UX Product Split + Noise Gate, documentee, a valider avant implementation;
 - Phase 30-34: Trade Tracker, Replay, Settings, Reports, QA.
 
 ## Regles non negociables
@@ -53,6 +54,7 @@ La suite est v3.0:
 7. Ne pas inclure Elliott dans le raisonnement utilisateur tant qu'il n'est pas refonde et explicitement revalide.
 8. Les details techniques de source restent dans Inspector.
 9. Le dashboard principal doit afficher le resultat utile, pas toute la plomberie.
+10. Le skill `ui-ux-pro-max` doit etre utilise comme garde-fou UX pour Phase 30A et toute refonte visuelle suivante.
 
 ## Probleme principal v3
 
@@ -77,6 +79,27 @@ Le terminal doit etre capable de dire:
 > Aucun trade exploitable, mais setup SELL surveille si cassure M15 sous support avec DXY confirme.
 
 Depuis la Phase 29, l'Orchestrateur v3 ajuste les poids selon regime, data quality, mode event et confirmation technique. Il peut produire `NO_TRADE`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY` ou `TRADE_SELL`.
+
+## Direction UX Phase 30A
+
+Skill installe:
+- `ui-ux-pro-max`;
+- repo: `https://github.com/nextlevelbuilder/ui-ux-pro-max-skill`;
+- chemin local Codex: `/Users/reda/.codex/skills/ui-ux-pro-max`.
+
+Structure cible:
+- `Desk`: prix, chef de file, biais, TradingView, signal locked;
+- `Agents`: scoring et positions agents;
+- `News Flow`: informations recentes utiles uniquement;
+- `Reports`: historique trades et exports;
+- `Inspector`: bruit moteur, logs, sources, preflight, payloads et audit.
+
+Regles Phase 30A:
+- pas de termes internes hors Inspector;
+- pas de chaines marche hors Inspector;
+- pas de news neutres ou anciennes dans News Flow principal;
+- pas de SL/TP affiches comme trade si les niveaux sont incoherents ou si le signal est seulement `WATCH_*`;
+- toute plomberie utile au moteur doit rester dans Inspector ou invisible.
 
 ## Fichiers importants
 

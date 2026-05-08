@@ -721,6 +721,58 @@ Livraison v1:
 Definition de termine:
 - le terminal peut donner un setup surveille sans verrouiller un trade.
 
+### Phase 30A - UX Product Split + Noise Gate
+
+Statut: ajoutee le 2026-05-08, a valider avant implementation.
+
+Objectif:
+Restructurer l'interface autour de ce que l'utilisateur veut vraiment voir, en gardant la complexite moteur dans l'Inspector ou invisible.
+
+Skill UX de reference:
+- `ui-ux-pro-max`;
+- source: `https://github.com/nextlevelbuilder/ui-ux-pro-max-skill`;
+- installe localement dans `/Users/reda/.codex/skills/ui-ux-pro-max`.
+
+Structure cible:
+1. `Desk`: prix, chef de file, biais, TradingView, signal locked.
+2. `Agents`: scoring, poids et positions de tous les agents.
+3. `News Flow`: flux d'informations recentes et utiles uniquement.
+4. `Reports`: rapports et historique de trades.
+5. `Inspector`: bruit moteur, source registry, preflight, chaines internes, logs et audit.
+
+Actions:
+1. Faire un audit UX de l'interface actuelle.
+2. Definir les contrats d'affichage par page.
+3. Creer un Noise Gate global:
+   - pas de termes internes hors Inspector;
+   - pas de chaines marche hors Inspector;
+   - pas de phrases d'audit agent dans Desk/News Flow;
+   - pas de news neutres ou anciennes dans le flux principal.
+4. Creer un News Gate:
+   - tri par heure de publication;
+   - impact `BULLISH`, `BEARISH` ou `NEUTRAL`;
+   - neutral cache par defaut;
+   - source faible ou stale cachee hors Inspector.
+5. Creer un SL/TP Gate:
+   - `BUY`: `SL < entry <= TP1 < TP2 < TP3`;
+   - `SELL`: `SL > entry >= TP1 > TP2 > TP3`;
+   - aucun SL/TP presente comme trade si le statut est `WAIT`, `NO_TRADE` ou `WATCH_*`.
+6. Verifier avec screenshots desktop/mobile.
+
+Livrables:
+- structure 5 pages;
+- Noise Gate;
+- News Gate;
+- SL/TP Gate;
+- documentation utilisateur mise a jour;
+- tests et captures.
+
+Definition de termine:
+- le Desk ne contient plus de bruit moteur;
+- le flux d'information montre seulement ce qui est recent et utile;
+- tout detail technique reste dans Inspector;
+- aucun niveau incoherent ne peut etre presente comme trade exploitable.
+
 ### Phase 30 - Trade Tracker v3 / Shadow Terminal
 
 Objectif:
@@ -886,11 +938,12 @@ Ordre recommande:
 9. Phase 27B - Technical Decision Engine;
 10. Phase 28 - scenario engine;
 11. Phase 29 - orchestrator v3;
-12. Phase 30 - trade tracker v3;
-13. Phase 31 - replay;
-14. Phase 32 - settings;
-15. Phase 33 - reports;
-16. Phase 34 - QA finale.
+12. Phase 30A - UX Product Split + Noise Gate;
+13. Phase 30 - trade tracker v3;
+14. Phase 31 - replay;
+15. Phase 32 - settings;
+16. Phase 33 - reports;
+17. Phase 34 - QA finale.
 
 Raison:
 - le langage utilisateur doit etre corrige avant d'ajouter plus d'intelligence;

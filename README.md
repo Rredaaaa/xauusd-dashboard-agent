@@ -8,7 +8,8 @@ Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer
 
 Etat roadmap:
 - v2.0 est stabilisee apres la Phase 18;
-- la suite officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md).
+- la suite officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
+- avant Phase 30, la Phase 30A restructure l'UX en 5 pages avec Noise Gate, News Gate et SL/TP Gate.
 
 ## Lancer sur Mac
 
@@ -48,14 +49,15 @@ python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .
 
 ## Ce que le dashboard affiche
 
-- `Dashboard`: prix live, decision globale, SL/TP, Orchestrateur v3, Trade Tracker.
-- `Market`: spot, IG Weekend Gold, vraie charte TradingView, correlations, regime petrole/politique, COT et ETF flows.
-- `Decision`: pourquoi le terminal dit `BUY`, `SELL` ou `WAIT`.
-- `Technical`: vraie charte TradingView, Technical Decision Engine, EMA, RSI, MACD, volume et Chart Store OHLC M5/M15/H1/H4/D1 en diagnostic.
-- `Macro`: DXY, FRED DGS10/DGS2/T10YIE/DFII10, calendrier Fed/BEA.
-- `Geopolitics & Flows`: faits geopolitique, Trump/White House, news sourcees, flows.
-- `Inspector`: audit des sources, Preflight, Chart Store, agents, gates, trades et qualite data.
-- `Reports`: exports Markdown/JSON et recapitulatif complet.
+Structure cible Phase 30A:
+
+- `Desk`: prix live, chef de file, biais, TradingView, signal locked.
+- `Agents`: scoring, poids et positions de tous les agents.
+- `News Flow`: informations recentes utiles, triees par date et impact.
+- `Reports`: exports, historique de decisions et trades.
+- `Inspector`: audit des sources, Preflight, Chart Store, agents, gates, logs et bruit moteur.
+
+Les details internes restent dans `Inspector`. Les pages trader ne doivent pas afficher les chaines marche, textes d'audit, news neutres anciennes ou termes internes.
 
 ## Signal live vs Trade Plan
 
@@ -81,6 +83,7 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - [Guide utilisateur](docs/USER_GUIDE.md)
 - [Sources et scoring](docs/SOURCES_AND_SCORING.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Phase 30A UX Product Split](docs/UX_PRODUCT_SPLIT_PHASE_30A.md)
 - [Plan v2.0](docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md)
 - [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
 - [Skills Aureum pour reprise Claude](skills/README.md)

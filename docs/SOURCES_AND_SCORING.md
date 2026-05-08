@@ -160,6 +160,14 @@ Difference des statuts:
 - `WATCH_BUY` / `WATCH_SELL`: setup surveille, pas verrouillable;
 - `TRADE_BUY` / `TRADE_SELL`: trade exploitable, eligible au Trade Tracker.
 
+Phase 30A ajoute une separation stricte entre scoring interne et affichage utilisateur:
+
+- les composants internes peuvent continuer a travailler avec les details complets;
+- `Desk` ne doit afficher que le prix, le chef de file, le biais, TradingView et le signal locked;
+- `News Flow` doit cacher les informations neutres, anciennes, redondantes ou non confirmees;
+- `Inspector` est le seul endroit autorise pour les chaines marche, validations internes, details source, preflight et bruit moteur;
+- les SL/TP ne doivent etre visibles comme trade que si le signal est `TRADE_BUY` ou `TRADE_SELL` et que l'ordre des niveaux est coherent.
+
 Le verdict `WAIT` ne doit pas etre force uniquement parce que:
 
 - data quality est `DEGRADED` mais prix principal, macro et cross-assets restent exploitables;

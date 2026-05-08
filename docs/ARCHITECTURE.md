@@ -33,6 +33,8 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Charte principale v3: TradingView dans Market/Technical, pas la charte interne.
 - Trade Ledger: signal locking append-only.
 - Inspector: audit sources/agents/trades.
+- Phase 30A UX split: `Desk`, `Agents`, `News Flow`, `Reports`, `Inspector`.
+- Noise Gate: la plomberie moteur reste dans Inspector ou invisible.
 
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
@@ -42,6 +44,7 @@ Note de passation v3.0:
 - la charte principale est TradingView dans Market/Technical;
 - Phase 28 expose les statuts scenario `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` et `WAIT` pour montrer le prochain trigger sans forcer un trade;
 - Phase 29 a livre l'Orchestrateur v3 dynamique: il ajuste les poids selon regime, qualite source, mode event et confirmation technique;
+- Phase 30A doit appliquer le skill `ui-ux-pro-max` pour separer l'interface trader du bruit moteur;
 - la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
 ## Dataclasses importantes
@@ -87,6 +90,18 @@ Endpoints:
 - `/api/live.json`: payload JSON live.
 
 L'etat de l'onglet actif est conserve cote client via `localStorage` pour eviter que le refresh renvoie l'utilisateur au premier onglet.
+
+## UX cible Phase 30A
+
+Le dashboard doit etre structure en 5 pages:
+
+- `Desk`: prix, chef de file, biais, TradingView, signal locked;
+- `Agents`: scoring et positions agents;
+- `News Flow`: flux d'informations recentes et utiles;
+- `Reports`: rapports et historique trades;
+- `Inspector`: details techniques, logs, source registry, preflight, data quality et bruit moteur.
+
+Les calculs internes peuvent conserver des noms techniques, mais l'UI utilisateur ne doit pas afficher les termes internes, chaines marche, validations agent ou news neutres anciennes hors Inspector.
 
 ## Points d'extension
 

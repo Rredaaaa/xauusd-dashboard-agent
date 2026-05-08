@@ -12,47 +12,84 @@ Aureum Flux Terminal aide a lire rapidement le marche `XAU/USD`:
 
 Le terminal est un outil d'analyse. Il ne remplace pas le jugement du trader.
 
-## Onglets
+## Pages cible Phase 30A
 
-### Dashboard
+La prochaine structure UX officielle separe les pages trader et le bruit moteur.
 
-Vue de synthese:
+### Desk
 
-- prix live;
-- decision globale;
-- regime actif;
-- confidence;
-- alerte;
-- Orchestrateur v3;
-- Trade Tracker.
+Vue de decision immediate:
 
-La carte `Position conseillee` montre le signal live. Elle peut changer.
+- prix XAU/USD live;
+- position du chef de file;
+- biais global;
+- charte TradingView;
+- signal locked;
+- statut du trade: aucun trade, setup surveille ou trade exploitable;
+- SL/TP uniquement si les niveaux sont valides et le trade verrouillable.
 
-### Market
+Interdit dans Desk:
+- textes longs;
+- chaines marche;
+- details de source;
+- news neutres;
+- termes internes de moteur;
+- informations anciennes sans impact actuel.
 
-Vue marche:
+### Agents
 
-- spot XAU/USD;
-- IG Weekend Gold quand disponible;
-- vraie charte TradingView cible v3;
-- chandelles internes 5 minutes seulement comme fallback/diagnostic;
-- support/resistance;
-- correlations inter-marches;
-- regime politique/petrole;
-- COT CFTC;
-- ETF flows WGC/GLD/IAU.
+Vue de controle du scoring:
 
-### Decision
+- score global;
+- decision de l'Orchestrateur v3;
+- position de chaque agent;
+- poids de chaque agent;
+- contradictions utiles;
+- raison courte du statut final.
 
-Vue "pourquoi":
+### News Flow
 
-- synthese prioritaire;
-- lecture des scores;
-- Scenario Engine v3;
-- Orchestrateur v3;
-- Quality Gate;
-- contradictions entre agents;
-- Data Feed Governance.
+Vue flux d'information:
+
+- flash infos recentes;
+- politique;
+- macro;
+- geopolitique;
+- petrole/dollar;
+- source;
+- heure;
+- impact `BULLISH`, `BEARISH` ou `NEUTRAL`.
+
+Regle: les informations `NEUTRAL`, anciennes, redondantes ou sans impact immediat sont cachees par defaut.
+
+### Reports
+
+Vue memoire:
+
+- rapports Markdown/JSON;
+- historique de decisions;
+- trades locked;
+- trades actifs;
+- trades expires ou invalides;
+- post-mortem quand disponible.
+
+### Inspector
+
+Vue moteur:
+
+- Source Registry;
+- Data Quality;
+- Preflight;
+- routes internes;
+- chaines marche;
+- validations internes;
+- logs;
+- audit;
+- payload agents.
+
+Tout ce qui sert au moteur mais pas a l'utilisateur final doit rester ici.
+
+## Modules analytiques
 
 Le Scenario Engine v3 explique:
 
@@ -65,7 +102,7 @@ Le Scenario Engine v3 explique:
 
 Important: `WATCH_BUY` ou `WATCH_SELL` veut dire "setup surveille", pas "trade a prendre". Un trade verrouille reste gere par le Trade Tracker et le Quality Gate.
 
-### Technical
+### Technical Decision Engine
 
 Vue technique:
 
@@ -115,7 +152,7 @@ Vue risque externe:
 
 - geopolitique;
 - regime de volatilite;
-- Hormuz/Oil Shock;
+- stress politique petrole/dollar;
 - ETF flows;
 - Event Facts;
 - Trump / White House;

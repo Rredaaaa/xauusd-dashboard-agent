@@ -38,7 +38,8 @@ La suite est v3.0:
 - Phase 26: Elliott quarantine;
 - Phase 27A: Elliott Removal + TradingView Chart, livree;
 - Phase 27B: Technical Decision Engine v1, livree;
-- Phase 28-34: Scenario, Orchestrator, Trade Tracker, Replay, Settings, Reports, QA.
+- Phase 28: Scenario Engine v3, livree v1;
+- Phase 29-34: Orchestrator, Trade Tracker, Replay, Settings, Reports, QA.
 
 ## Regles non negociables
 
@@ -110,6 +111,7 @@ Elliott est archive pour la v3.0 active:
 - la charte principale est une vraie charte TradingView;
 - le Chart Store reste en Inspector pour l'audit des donnees OHLC;
 - Phase 27B cree un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
+- Phase 28 cree un `ScenarioEngine v3` qui expose scenario principal, scenario alternatif, declencheur, invalidation, confirmations, validations et contradictions dans l'onglet Decision.
 
 Indicateurs techniques cibles:
 - Market Structure: swing highs/lows, HH/HL, LH/LL, BOS, CHoCH, retest, range high/low;

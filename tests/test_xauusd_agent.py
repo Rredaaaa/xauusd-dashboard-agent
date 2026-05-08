@@ -50,6 +50,7 @@ from xauusd_agent import (
     build_passive_agent_results,
     build_payload,
     build_orchestrator_decision,
+    build_scenario_plan,
     build_technical_decision,
     price_points_to_candles,
     parse_ig_weekend_gold_snapshot,
@@ -606,6 +607,8 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("PriceAgent", dashboard)
         self.assertIn("TradingView", dashboard)
         self.assertIn("TechnicalDecisionEngine", dashboard)
+        self.assertIn("Scenario Engine v3", dashboard)
+        self.assertIn("Scenario principal, declencheur et invalidation", dashboard)
         self.assertNotIn("ElliottWaveAgent", dashboard)
         self.assertIn("OrchestratorAgent", dashboard)
         self.assertIn("Contradictions entre agents", dashboard)
@@ -1652,6 +1655,103 @@ class LocalFreeContextTests(unittest.TestCase):
         self.assertIn("cloture M15", decision.trigger)
         self.assertGreater(decision.tp3, decision.tp2)
 
+    def test_scenario_engine_builds_watch_buy_with_trigger_and_validation(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        technical_decision = TechnicalDecision(
+            status="WATCH",
+            direction="WATCH_BUY",
+            structure="pullback",
+            score=66,
+            confidence=68,
+            trigger="BUY seulement si cloture M15 au-dessus de 2405.00.",
+            invalidation="Invalidation BUY sous 2388.00.",
+            entry_zone_low=2398.0,
+            entry_zone_high=2402.0,
+            stop_loss=2388.0,
+            tp1=2412.0,
+            tp2=2424.0,
+            tp3=2440.0,
+            reasons=["Pullback haussier surveille."],
+            contradictions=[],
+        )
+        global_recommendation = TradeRecommendation(
+            "Global",
+            "BUY",
+            64,
+            "Biais haussier sous confirmation.",
+            ["Test"],
+            2388.0,
+            2412.0,
+            2424.0,
+            "test",
+        )
+        fundamental = TradeRecommendation(
+            "Fondamental",
+            "BUY",
+            70,
+            "Macro confirme le biais.",
+            ["Test"],
+            2388.0,
+            2412.0,
+            2424.0,
+            "test",
+        )
+        plan = build_scenario_plan(gold, technical_decision, global_recommendation, fundamental)
+        self.assertEqual(plan.status, "WATCH_BUY")
+        self.assertEqual(plan.bias, "BUY")
+        self.assertIn("2405.00", plan.trigger)
+        self.assertTrue(any("Macro/Fondamental confirme BUY" in item for item in plan.validations))
+        self.assertTrue(plan.confirmation_required)
+
+    def test_scenario_engine_records_news_contradiction(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        technical_decision = TechnicalDecision(
+            status="WATCH",
+            direction="WATCH_BUY",
+            structure="breakout",
+            score=64,
+            confidence=66,
+            trigger="BUY seulement si cloture M15 au-dessus de 2405.00.",
+            invalidation="Invalidation BUY sous 2388.00.",
+            entry_zone_low=2398.0,
+            entry_zone_high=2402.0,
+            stop_loss=2388.0,
+            tp1=2412.0,
+            tp2=2424.0,
+            tp3=2440.0,
+            reasons=[],
+            contradictions=[],
+        )
+        global_recommendation = TradeRecommendation(
+            "Global",
+            "BUY",
+            63,
+            "Biais haussier sous confirmation.",
+            [],
+            2388.0,
+            2412.0,
+            2424.0,
+            "test",
+        )
+        fact = EventFact(
+            title="Oil squeeze draws liquidity into crude while gold slips",
+            source="Reuters",
+            source_url="https://example.com",
+            published_at="2026-04-24T10:00:00+00:00",
+            category="geopolitical",
+            actors=["US", "Iran"],
+            locations=["Hormuz"],
+            themes=["oil"],
+            confirmation_level="confirmed_secondary",
+            market_chain="Oil up, dollar up, gold liquidity pressure",
+            gold_impact="Oil et dollar captent la liquidite, pression possible sur XAU/USD.",
+            impact_bias="SELL",
+            confidence=82,
+        )
+        plan = build_scenario_plan(gold, technical_decision, global_recommendation, event_facts=[fact])
+        self.assertEqual(plan.status, "WATCH_BUY")
+        self.assertTrue(any("NewsFact contredit BUY" in item for item in plan.contradictions))
+
     def test_phase27_payload_excludes_elliott_and_keeps_technical_decision(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         dxy = self.snapshot("DXY", 99.0, 100.0)
@@ -1709,6 +1809,11 @@ class LocalFreeContextTests(unittest.TestCase):
             outcome="open",
             outcome_reason="test",
         )
+        scenario_plan = build_scenario_plan(
+            gold,
+            technical_decision,
+            TradeRecommendation("Global", "BUY", 72, "Test", [], 2388.0, 2412.0, 2424.0, "test"),
+        )
         payload = build_payload(
             gold,
             dxy,
@@ -1716,6 +1821,7 @@ class LocalFreeContextTests(unittest.TestCase):
             [],
             analysis,
             technical_decision=technical_decision,
+            scenario_plan=scenario_plan,
             agent_results=[AgentResult("TechnicalAgent", "Technical", "BUY", 72, 74, "Decision technique.")],
             trade_ledger=TradeLedgerSummary(
                 ledger_path="reports/trade_ledger.jsonl",
@@ -1726,6 +1832,7 @@ class LocalFreeContextTests(unittest.TestCase):
             ),
         )
         self.assertIn("technical_decision", payload)
+        self.assertIn("scenario_plan", payload)
         self.assertNotIn("ElliottWaveAgent", str(payload))
         self.assertNotIn("elliott_wave_snapshot", str(payload))
 

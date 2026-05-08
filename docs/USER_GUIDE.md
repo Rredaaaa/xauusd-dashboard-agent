@@ -48,10 +48,22 @@ Vue "pourquoi":
 
 - synthese prioritaire;
 - lecture des scores;
+- Scenario Engine v3;
 - Orchestrateur v2;
 - Quality Gate;
 - contradictions entre agents;
 - Data Feed Governance.
+
+Le Scenario Engine v3 explique:
+
+- le scenario principal surveille;
+- le scenario alternatif;
+- le declencheur attendu;
+- l'invalidation;
+- les confirmations requises;
+- les validations et contradictions.
+
+Important: `WATCH_BUY` ou `WATCH_SELL` veut dire "setup surveille", pas "trade a prendre". Un trade verrouille reste gere par le Trade Tracker et le Quality Gate.
 
 ### Technical
 

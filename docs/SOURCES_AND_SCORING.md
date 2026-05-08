@@ -101,6 +101,7 @@ Decision v3.0:
 - `ElliottWaveAgent` est archive. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
 - Phase 27A a retire Elliott du dashboard, payload JSON public, Inspector et orchestrateur.
 - Phase 27B a introduit `TechnicalDecisionEngine` comme moteur technique actif v1.
+- Phase 28 a introduit `ScenarioEngine v3`: il transforme le signal technique, les news, la macro, les correlations et la Data Quality en scenario principal, scenario alternatif, declencheur, invalidation et confirmations requises.
 - Le Chart Store OHLC expose M5/M15/H1/H4/D1 dans l'Inspector pour verifier la qualite des donnees techniques.
 - TradingView devient la charte utilisateur principale, tandis que Chart Store reste la source auditable des calculs internes.
 
@@ -169,6 +170,30 @@ Regles de direction:
 - `WAIT`: range sale, contradiction forte, volatilite anormale, source bloquante ou prix trop loin du niveau d'entree.
 
 Le score technique doit etre secondaire au statut. Un `62/100` sans trigger, invalidation et niveau exploitable reste un `WATCH` ou `WAIT`, pas un trade.
+
+## Scenario Engine v3
+
+Le Scenario Engine ne remplace pas le Quality Gate. Il traduit la decision en plan lisible:
+
+- `scenario principal`: ce que le terminal surveille maintenant;
+- `scenario alternatif`: ce qui invalide ou inverse l'hypothese;
+- `declencheur`: condition technique minimale avant action;
+- `invalidation`: niveau ou condition qui annule le scenario;
+- `confirmations requises`: DXY, 10Y reel, oil, macro, News Facts ou momentum;
+- `validations`: composants qui soutiennent le biais;
+- `contradictions`: composants qui demandent prudence.
+
+Regle de lecture:
+
+- `WATCH_BUY` / `WATCH_SELL`: setup surveille, pas un trade verrouille;
+- `TRADE_BUY` / `TRADE_SELL`: scenario techniquement confirme, encore soumis au Trade Quality Gate;
+- `WAIT`: aucune structure exploitable ou contradictions trop fortes.
+
+Une news peut devenir:
+
+- declencheur si elle confirme le biais et la chaine de marche;
+- contradiction si elle tire oil/dollar/liquidite contre le scenario;
+- simple contexte si elle est faible ou non confirmee.
 
 ## Trade Quality Gate
 

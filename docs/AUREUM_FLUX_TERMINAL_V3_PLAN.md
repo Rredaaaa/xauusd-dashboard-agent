@@ -631,6 +631,8 @@ Definition de termine:
 
 ### Phase 28 - Scenario Engine
 
+Statut 2026-05-08: livree v1.
+
 Objectif:
 Passer de "score unique" a scenarios trader.
 
@@ -655,6 +657,12 @@ Exemple:
 Livrables:
 - scenarios visibles dans Decision;
 - tests de combinaisons contradictoires.
+
+Livraison v1:
+- `ScenarioPlan` ajoute au `BriefingBundle` et au payload `/api/live.json`;
+- `build_scenario_plan` assemble TechnicalDecisionEngine, global score, macro, cross-assets, regime, News Facts et Data Quality;
+- l'onglet Decision affiche scenario principal, scenario alternatif, declencheur, invalidation, confirmations, validations et contradictions;
+- tests unitaires pour setup `WATCH_BUY` et contradiction news.
 
 Definition de termine:
 - le dashboard ne dit plus seulement WAIT; il explique le prochain trigger.

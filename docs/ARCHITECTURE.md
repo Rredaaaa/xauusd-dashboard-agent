@@ -10,9 +10,10 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 4. Preflight data et routage des sources.
 5. Construction des agents passifs.
 6. Orchestrateur v2 puis cible Orchestrateur v3.
-7. Trade Quality Gate et Trade Ledger.
-8. Payload JSON, rapport Markdown, dashboard HTML.
-9. Inspector et audit log.
+7. Scenario Engine v3: scenario principal, alternatif, trigger, invalidation, confirmations.
+8. Trade Quality Gate et Trade Ledger.
+9. Payload JSON, rapport Markdown, dashboard HTML.
+10. Inspector et audit log.
 
 ## Modules logiques
 
@@ -25,6 +26,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Analyse geopolitique: risk-off, Hormuz/Oil Shock, politique, oil/dollar liquidity.
 - Agents passifs: Price, Technical, Macro, Geopolitical/Oil, Sentiment/News, Correlation, Flow/Positioning, Event Facts, Trump/Political Statements, Risk Manager, Orchestrator.
 - Orchestrateur v2: pondération multi-agents, contre-signaux et Quality Gate.
+- Scenario Engine v3: traduit la decision en plan trader lisible sans creer automatiquement un trade.
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
 - Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
 - Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
@@ -34,11 +36,11 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
-- la v3.0 a livre l'audit editorial, News Facts, Preflight, Chart Store, Phase 27A et Phase 27B;
+- la v3.0 a livre l'audit editorial, News Facts, Preflight, Chart Store, Phase 27A, Phase 27B et Phase 28;
 - `ElliottWaveAgent` est archive dans la roadmap v3.0 et n'apparait plus dans les surfaces actives;
 - Phase 27B a remplace Elliott par un `TechnicalDecisionEngine` auditable v1;
 - la charte principale est TradingView dans Market/Technical;
-- la decision v3 ajoutera les statuts `WATCH_BUY` et `WATCH_SELL` aux cotes de `BUY`, `SELL` et `WAIT` pour exposer les setups en surveillance sans forcer un trade;
+- Phase 28 expose les statuts scenario `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` et `WAIT` pour montrer le prochain trigger sans forcer un trade;
 - la roadmap detaillee est dans `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`.
 
 ## Dataclasses importantes
@@ -47,6 +49,7 @@ Note de passation v3.0:
 - `SourceSnapshot` / `DataQualitySnapshot`: gouvernance sources.
 - `PreflightCheck` / `DataRoute`: statut de readiness avant decision.
 - `ChartStore` / `ChartTimeframe`: qualite OHLC par timeframe.
+- `ScenarioPlan`: scenario principal, alternatif, trigger, invalidation, validations et contradictions.
 - `AgentResult`: sortie d'un agent.
 - `OrchestratorDecision`: decision globale multi-agents.
 - `TradePlan` / `TradeLedgerSummary`: trades historises.

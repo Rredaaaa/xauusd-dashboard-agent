@@ -29,6 +29,8 @@ La v3 doit afficher:
 
 ## ScenarioEngine
 
+Statut projet: Phase 28 livree v1.
+
 Produit:
 - scenario principal;
 - scenario alternatif;
@@ -37,6 +39,13 @@ Produit:
 - confirmation requise;
 - agents qui soutiennent;
 - agents qui contredisent.
+
+Implementation v1:
+- dataclass `ScenarioPlan`;
+- fonction `build_scenario_plan`;
+- payload public `scenario_plan`;
+- panneau Decision `Scenario Engine v3`;
+- tests `WATCH_BUY` et contradiction NewsFact.
 
 ## Poids dynamiques
 

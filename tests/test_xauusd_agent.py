@@ -1059,6 +1059,64 @@ class AnalysisShapeTests(unittest.TestCase):
             )
             self.assertEqual(summary.recent_trades[0].status, "sl_hit")
             self.assertEqual(summary.recent_trades[0].outcome, "loss")
+            self.assertEqual(summary.recent_trades[0].record_type, "trade_exploitable")
+            self.assertEqual(summary.recent_trades[0].r_multiple, -1.0)
+            self.assertEqual(summary.losses, 1)
+            self.assertEqual(summary.stats.expectancy_r, -1.0)
+            self.assertEqual(summary.stats.trade_to_win_rate, 0.0)
+            self.assertTrue(summary.post_mortems)
+            self.assertIn("Loss", summary.post_mortems[0].summary)
+
+    def test_trade_ledger_v3_builds_expired_post_mortem_and_stats(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=72,
+            summary="Signal test.",
+            reasons=["Test"],
+            stop_loss=2380.0,
+            take_profit_1=2425.0,
+            take_profit_2=2450.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+            )
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 17, tzinfo=timezone.utc),
+                allow_create=False,
+            )
+            self.assertEqual(summary.recent_trades[0].status, "expired")
+            self.assertEqual(summary.recent_trades[0].record_type, "trade_expire")
+            self.assertEqual(summary.recent_trades[0].r_multiple, 0.0)
+            self.assertEqual(summary.expired, 1)
+            self.assertEqual(summary.stats.expectancy_r, 0.0)
+            self.assertEqual(summary.stats.average_duration_minutes, 420)
+            self.assertIn("Expired", summary.post_mortems[0].summary)
 
     def test_passive_agents_do_not_replace_official_scoring(self) -> None:
         points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]

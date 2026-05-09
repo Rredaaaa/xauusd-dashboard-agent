@@ -775,6 +775,8 @@ Definition de termine:
 
 ### Phase 30 - Trade Tracker v3 / Shadow Terminal
 
+Statut: implementation lancee.
+
 Objectif:
 Apprendre des signaux precedents.
 

@@ -718,6 +718,40 @@ class TradePlan:
     outcome: str
     outcome_reason: str
     closed_at: str | None = None
+    record_type: str = "trade_exploitable"
+    scenario_snapshot: str = ""
+    useful_agents: list[str] = field(default_factory=list)
+    misleading_agents: list[str] = field(default_factory=list)
+    missed_condition: str = ""
+    post_mortem: str = ""
+    r_multiple: float = 0.0
+    duration_minutes: int = 0
+
+
+@dataclass
+class TradePostMortem:
+    trade_id: str
+    direction: str
+    outcome: str
+    record_type: str
+    r_multiple: float
+    duration_minutes: int
+    useful_agents: list[str]
+    misleading_agents: list[str]
+    missed_condition: str
+    summary: str
+
+
+@dataclass
+class TradeLedgerStats:
+    win_rate: float = 0.0
+    expectancy_r: float = 0.0
+    average_r: float = 0.0
+    average_duration_minutes: int = 0
+    setup_to_trade_rate: float = 0.0
+    trade_to_win_rate: float = 0.0
+    total_setups: int = 0
+    total_trade_records: int = 0
 
 
 @dataclass
@@ -733,6 +767,9 @@ class TradeLedgerSummary:
     losses: int = 0
     partials: int = 0
     expired: int = 0
+    invalidated: int = 0
+    stats: TradeLedgerStats = field(default_factory=TradeLedgerStats)
+    post_mortems: list[TradePostMortem] = field(default_factory=list)
 
 
 @dataclass
@@ -1197,6 +1234,14 @@ def parse_trade_plan(data: dict[str, Any]) -> TradePlan:
         outcome=str(data.get("outcome", "open")),
         outcome_reason=str(data.get("outcome_reason", "")),
         closed_at=str(data.get("closed_at")) if data.get("closed_at") else None,
+        record_type=str(data.get("record_type", "trade_exploitable")),
+        scenario_snapshot=str(data.get("scenario_snapshot", "")),
+        useful_agents=[str(item) for item in data.get("useful_agents", [])],
+        misleading_agents=[str(item) for item in data.get("misleading_agents", [])],
+        missed_condition=str(data.get("missed_condition", "")),
+        post_mortem=str(data.get("post_mortem", "")),
+        r_multiple=float(data.get("r_multiple", 0.0) or 0.0),
+        duration_minutes=int(data.get("duration_minutes", 0) or 0),
     )
 
 
@@ -1252,9 +1297,102 @@ def trade_signal_id(direction: str, market_regime: str, reference_price: float, 
     return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
 
 
+def trade_record_type(plan: TradePlan) -> str:
+    if plan.status == "expired" or plan.outcome == "expired":
+        return "trade_expire"
+    if plan.status in {"invalidated", "closed_manual"} or plan.outcome == "invalidated":
+        return "trade_invalide"
+    if plan.status in {"pending", "watch", "setup"}:
+        return "setup_surveille"
+    return "trade_exploitable"
+
+
+def trade_duration_minutes(plan: TradePlan) -> int:
+    created = parse_iso_datetime(plan.created_at)
+    ended = parse_iso_datetime(plan.closed_at or plan.updated_at)
+    if created is None or ended is None:
+        return 0
+    return max(0, round((ended - created).total_seconds() / 60))
+
+
+def trade_realized_r(plan: TradePlan) -> float:
+    if plan.outcome == "loss" or plan.status == "sl_hit":
+        return -1.0
+    if plan.outcome == "partial" or plan.status == "tp1_hit":
+        return max(0.0, plan.risk_reward_tp1)
+    if plan.outcome == "win":
+        if plan.status == "tp3_hit":
+            return max(plan.risk_reward_tp3, plan.risk_reward_tp2, plan.risk_reward_tp1)
+        if plan.status == "tp2_hit":
+            return max(plan.risk_reward_tp2, plan.risk_reward_tp1)
+        return max(plan.risk_reward_tp1, 1.0)
+    return 0.0
+
+
+def build_trade_post_mortem(plan: TradePlan) -> TradePostMortem:
+    record_type = trade_record_type(plan)
+    r_multiple = trade_realized_r(plan)
+    duration = trade_duration_minutes(plan)
+    if plan.outcome == "win":
+        useful_agents = plan.agents_validating
+        misleading_agents = plan.agents_contradicting
+        missed_condition = "Aucune condition manquee majeure detectee."
+        summary = f"Win {r_multiple:+.2f}R: direction {plan.direction} confirmee apres {duration} min."
+    elif plan.outcome == "partial":
+        useful_agents = plan.agents_validating
+        misleading_agents = plan.agents_contradicting
+        missed_condition = "Le mouvement a atteint TP1 sans extension complete."
+        summary = f"Partial {r_multiple:+.2f}R: TP1 touche puis suivi encore ouvert ou incomplet."
+    elif plan.outcome == "loss":
+        useful_agents = plan.agents_contradicting
+        misleading_agents = plan.agents_validating
+        missed_condition = "Le SL a ete touche avant validation d'une extension favorable."
+        summary = f"Loss {r_multiple:+.2f}R: SL touche apres {duration} min. Agents a revoir: {', '.join(misleading_agents) or 'n/a'}."
+    elif plan.outcome == "expired":
+        useful_agents = plan.agents_contradicting
+        misleading_agents = plan.agents_validating
+        missed_condition = "Temps de validite expire sans TP/SL: impulsion insuffisante."
+        summary = f"Expired {r_multiple:+.2f}R: le trade n'a pas atteint TP/SL avant expiration."
+    elif plan.outcome == "invalidated":
+        useful_agents = plan.agents_contradicting
+        misleading_agents = plan.agents_validating
+        missed_condition = "Regle d'invalidation contextuelle declenchee."
+        summary = "Invalidated: le contexte a annule le plan avant outcome prix."
+    else:
+        useful_agents = plan.agents_validating
+        misleading_agents = plan.agents_contradicting
+        missed_condition = "Trade encore ouvert."
+        summary = "Open: post-mortem final indisponible tant que le plan n'est pas clos."
+    return TradePostMortem(
+        trade_id=plan.trade_id,
+        direction=plan.direction,
+        outcome=plan.outcome,
+        record_type=record_type,
+        r_multiple=round(r_multiple, 2),
+        duration_minutes=duration,
+        useful_agents=useful_agents[:6],
+        misleading_agents=misleading_agents[:6],
+        missed_condition=missed_condition,
+        summary=summary,
+    )
+
+
+def enrich_trade_plan_v3(plan: TradePlan) -> TradePlan:
+    updated = copy.deepcopy(plan)
+    post_mortem = build_trade_post_mortem(updated)
+    updated.record_type = post_mortem.record_type
+    updated.r_multiple = post_mortem.r_multiple
+    updated.duration_minutes = post_mortem.duration_minutes
+    updated.useful_agents = post_mortem.useful_agents
+    updated.misleading_agents = post_mortem.misleading_agents
+    updated.missed_condition = post_mortem.missed_condition
+    updated.post_mortem = post_mortem.summary
+    return updated
+
+
 def evaluate_trade_plan(plan: TradePlan, current_price: float, now: datetime | None = None) -> TradePlan:
     if trade_plan_closed(plan):
-        return plan
+        return enrich_trade_plan_v3(plan)
     reference = now or datetime.now(timezone.utc)
     updated = copy.deepcopy(plan)
     updated.updated_at = reference.replace(microsecond=0).isoformat()
@@ -1317,8 +1455,8 @@ def evaluate_trade_plan(plan: TradePlan, current_price: float, now: datetime | N
         and updated.outcome_reason == plan.outcome_reason
         and updated.closed_at == plan.closed_at
     ):
-        return plan
-    return updated
+        return enrich_trade_plan_v3(plan)
+    return enrich_trade_plan_v3(updated)
 
 
 def update_trade_ledger_outcomes(
@@ -1495,6 +1633,27 @@ def has_recent_similar_trade(
     return False
 
 
+def build_trade_ledger_stats(plans: list[TradePlan]) -> TradeLedgerStats:
+    enriched = [enrich_trade_plan_v3(plan) for plan in plans]
+    setups = [plan for plan in enriched if trade_record_type(plan) == "setup_surveille"]
+    trade_records = [plan for plan in enriched if trade_record_type(plan) != "setup_surveille"]
+    closed = [plan for plan in trade_records if plan.outcome in {"win", "loss", "partial", "expired", "invalidated"}]
+    wins = [plan for plan in closed if plan.outcome == "win"]
+    r_values = [trade_realized_r(plan) for plan in closed]
+    durations = [trade_duration_minutes(plan) for plan in closed if trade_duration_minutes(plan) > 0]
+    setup_base = len(setups) + len(trade_records)
+    return TradeLedgerStats(
+        win_rate=round((len(wins) / len(closed)) * 100, 1) if closed else 0.0,
+        expectancy_r=round(sum(r_values) / len(r_values), 2) if r_values else 0.0,
+        average_r=round(sum(r_values) / len(r_values), 2) if r_values else 0.0,
+        average_duration_minutes=round(sum(durations) / len(durations)) if durations else 0,
+        setup_to_trade_rate=round((len(trade_records) / setup_base) * 100, 1) if setup_base else 0.0,
+        trade_to_win_rate=round((len(wins) / len(trade_records)) * 100, 1) if trade_records else 0.0,
+        total_setups=len(setups),
+        total_trade_records=len(trade_records),
+    )
+
+
 def build_trade_ledger_summary(
     gold: SymbolSnapshot,
     global_recommendation: TradeRecommendation,
@@ -1523,16 +1682,24 @@ def build_trade_ledger_summary(
         if has_recent_similar_trade(plans, candidate, now=reference):
             gate_reasons = ["Cooldown actif: un trade similaire est deja actif ou trop recent."]
         elif allow_create:
+            candidate = enrich_trade_plan_v3(candidate)
             append_trade_plan_snapshot(candidate, path)
             plans = [candidate, *plans]
             gate_reasons = ["Trade Snapshot cree et verrouille dans le ledger append-only."]
 
+    plans = [enrich_trade_plan_v3(plan) for plan in plans]
     active_statuses = {"pending", "active", "tp1_hit"}
     active_trades = [plan for plan in plans if plan.status in active_statuses]
     wins = sum(1 for plan in plans if plan.outcome == "win")
     losses = sum(1 for plan in plans if plan.outcome == "loss")
     partials = sum(1 for plan in plans if plan.outcome == "partial")
     expired = sum(1 for plan in plans if plan.outcome == "expired")
+    invalidated = sum(1 for plan in plans if plan.outcome == "invalidated" or plan.status == "invalidated")
+    post_mortems = [
+        build_trade_post_mortem(plan)
+        for plan in plans
+        if plan.outcome in {"win", "loss", "partial", "expired", "invalidated"}
+    ][:10]
     return TradeLedgerSummary(
         ledger_path=str(path),
         generated_at=reference.replace(microsecond=0).isoformat(),
@@ -1545,6 +1712,9 @@ def build_trade_ledger_summary(
         losses=losses,
         partials=partials,
         expired=expired,
+        invalidated=invalidated,
+        stats=build_trade_ledger_stats(plans),
+        post_mortems=post_mortems,
     )
 
 
@@ -1595,6 +1765,10 @@ def build_monitoring_inspector_payload(
                     "tp2": plan.tp2,
                     "tp3": plan.tp3,
                     "outcome_reason": plan.outcome_reason,
+                    "record_type": plan.record_type,
+                    "r_multiple": plan.r_multiple,
+                    "duration_minutes": plan.duration_minutes,
+                    "post_mortem": plan.post_mortem,
                 }
             )
 
@@ -1680,6 +1854,9 @@ def build_monitoring_inspector_payload(
             "losses": trade_ledger.losses if trade_ledger else 0,
             "partials": trade_ledger.partials if trade_ledger else 0,
             "expired": trade_ledger.expired if trade_ledger else 0,
+            "invalidated": trade_ledger.invalidated if trade_ledger else 0,
+            "stats": asdict(trade_ledger.stats) if trade_ledger else asdict(TradeLedgerStats()),
+            "post_mortems": [asdict(item) for item in trade_ledger.post_mortems] if trade_ledger else [],
             "rows": trade_rows[:12],
         },
     }
@@ -7418,6 +7595,8 @@ def build_data_quality_from_payload(data: dict[str, Any] | None) -> DataQualityS
 def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerSummary | None:
     if not isinstance(data, dict):
         return None
+    stats_data = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+    post_mortems_data = data.get("post_mortems") if isinstance(data.get("post_mortems"), list) else []
     return TradeLedgerSummary(
         ledger_path=str(data.get("ledger_path", str(TRADE_LEDGER_PATH))),
         generated_at=str(data.get("generated_at", iso_now())),
@@ -7438,6 +7617,33 @@ def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerS
         losses=int(data.get("losses", 0) or 0),
         partials=int(data.get("partials", 0) or 0),
         expired=int(data.get("expired", 0) or 0),
+        invalidated=int(data.get("invalidated", 0) or 0),
+        stats=TradeLedgerStats(
+            win_rate=float(stats_data.get("win_rate", 0.0) or 0.0),
+            expectancy_r=float(stats_data.get("expectancy_r", 0.0) or 0.0),
+            average_r=float(stats_data.get("average_r", 0.0) or 0.0),
+            average_duration_minutes=int(stats_data.get("average_duration_minutes", 0) or 0),
+            setup_to_trade_rate=float(stats_data.get("setup_to_trade_rate", 0.0) or 0.0),
+            trade_to_win_rate=float(stats_data.get("trade_to_win_rate", 0.0) or 0.0),
+            total_setups=int(stats_data.get("total_setups", 0) or 0),
+            total_trade_records=int(stats_data.get("total_trade_records", 0) or 0),
+        ),
+        post_mortems=[
+            TradePostMortem(
+                trade_id=str(item.get("trade_id", "")),
+                direction=str(item.get("direction", "")),
+                outcome=str(item.get("outcome", "")),
+                record_type=str(item.get("record_type", "")),
+                r_multiple=float(item.get("r_multiple", 0.0) or 0.0),
+                duration_minutes=int(item.get("duration_minutes", 0) or 0),
+                useful_agents=[str(agent) for agent in item.get("useful_agents", [])],
+                misleading_agents=[str(agent) for agent in item.get("misleading_agents", [])],
+                missed_condition=str(item.get("missed_condition", "")),
+                summary=str(item.get("summary", "")),
+            )
+            for item in post_mortems_data
+            if isinstance(item, dict)
+        ],
     )
 
 
@@ -9170,10 +9376,12 @@ def render_monitoring_inspector_panel(
 
 
 def trade_status_class(status: str) -> str:
-    if status in {"tp1_hit", "tp2_hit", "tp3_hit"}:
+    if status in {"tp1_hit", "tp2_hit", "tp3_hit", "win", "partial"}:
         return "bullish"
-    if status in {"sl_hit", "invalidated"}:
+    if status in {"sl_hit", "invalidated", "loss"}:
         return "bearish"
+    if status in {"expired"}:
+        return "caution"
     return "neutral"
 
 
@@ -9460,7 +9668,22 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
               <td>{plan.reference_price:.2f}</td>
               <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
               <td>{html.escape(plan.outcome)}</td>
-              <td>{html.escape(plan.market_regime)}</td>
+              <td>{plan.r_multiple:+.2f}R</td>
+              <td>{html.escape(plan.record_type)}</td>
+            </tr>
+            """.strip()
+        )
+    post_mortem_rows = []
+    for item in ledger.post_mortems[:6]:
+        post_mortem_rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(item.direction)}</strong><br><span class="soft">{html.escape(item.trade_id)}</span></td>
+              <td class="{trade_status_class(item.outcome)}">{html.escape(item.outcome)}</td>
+              <td>{item.r_multiple:+.2f}R</td>
+              <td>{item.duration_minutes} min</td>
+              <td>{html.escape(item.summary[:180])}</td>
+              <td>{html.escape(item.missed_condition[:140])}</td>
             </tr>
             """.strip()
         )
@@ -9479,6 +9702,10 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
       <div class="geo-stat"><strong>Losses</strong><span>{ledger.losses}</span></div>
       <div class="geo-stat"><strong>Partials</strong><span>{ledger.partials}</span></div>
       <div class="geo-stat"><strong>Expired</strong><span>{ledger.expired}</span></div>
+      <div class="geo-stat"><strong>Win rate</strong><span>{ledger.stats.win_rate:.1f}%</span><small>Trades clos</small></div>
+      <div class="geo-stat"><strong>Expectancy</strong><span>{ledger.stats.expectancy_r:+.2f}R</span><small>Moyenne outcomes clos</small></div>
+      <div class="geo-stat"><strong>Duree moyenne</strong><span>{ledger.stats.average_duration_minutes} min</span><small>Trades clos</small></div>
+      <div class="geo-stat"><strong>Setup -> trade</strong><span>{ledger.stats.setup_to_trade_rate:.1f}%</span><small>{ledger.stats.total_setups} setup(s)</small></div>
     </div>
     <div class="module-block">
       <div class="section-kicker">Quality Gate</div>
@@ -9493,8 +9720,14 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
     </div>
     <div class="table-wrap">
       <table class="technical-table">
-        <thead><tr><th>Cree</th><th>Direction</th><th>Entry</th><th>Status</th><th>Outcome</th><th>Regime</th></tr></thead>
-        <tbody>{''.join(recent_rows) or '<tr><td colspan="6">Historique vide.</td></tr>'}</tbody>
+        <thead><tr><th>Cree</th><th>Direction</th><th>Entry</th><th>Status</th><th>Outcome</th><th>R</th><th>Type</th></tr></thead>
+        <tbody>{''.join(recent_rows) or '<tr><td colspan="7">Historique vide.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Trade</th><th>Outcome</th><th>R</th><th>Duree</th><th>Post-mortem</th><th>Condition manquee</th></tr></thead>
+        <tbody>{''.join(post_mortem_rows) or '<tr><td colspan="6">Aucun post-mortem disponible pour le moment.</td></tr>'}</tbody>
       </table>
     </div>
     """.strip()

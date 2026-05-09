@@ -1,0 +1,18 @@
+{
+  "active_agents": [
+    "CorrelationAgent",
+    "FlowPositioningAgent",
+    "GeopoliticalOilShockAgent",
+    "MacroAgent",
+    "PriceAgent",
+    "SentimentNewsAgent",
+    "TechnicalAgent"
+  ],
+  "scoring_mode": "aggressive_controlled",
+  "minimum_agent_confidence": 50,
+  "watch_threshold": 50,
+  "trade_threshold": 55,
+  "cooldown_minutes": 90,
+  "minimum_risk_reward": 0.65,
+  "notifications_enabled": false
+}

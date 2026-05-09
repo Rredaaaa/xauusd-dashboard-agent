@@ -8,7 +8,8 @@ Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer
 
 Etat roadmap:
 - la reference officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
-- le dashboard actif est structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector.
+- le dashboard actif est structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector;
+- les phases v3.0 restantes ont ajoute Replay, Settings, Reports v3 et QA finale.
 
 ## Lancer sur Mac
 
@@ -63,6 +64,23 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - `xauusd_report.md`
 - `trade_ledger.jsonl`
 - `audit_log.jsonl`
+- `v3/`: daily report, signal report, trade report, replay report, news audit et source quality audit.
+
+Le fichier local `config/aureum_settings.json` permet d'ajuster les seuils sans modifier le code. Un exemple suivi par Git est disponible dans `config/aureum_settings.example.json`.
+
+## Replay et settings
+
+Initialiser les settings locaux:
+
+```bash
+python xauusd_agent.py --init-settings
+```
+
+Generer un replay depuis `trade_ledger.jsonl` et `audit_log.jsonl`:
+
+```bash
+python xauusd_agent.py --replay --replay-output reports/v3/replay_report.md
+```
 
 ## Documentation
 
@@ -71,6 +89,7 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - [Sources et scoring](docs/SOURCES_AND_SCORING.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
+- [Checklist QA v3.0](docs/V3_QA_CHECKLIST.md)
 - [Skills Aureum pour reprise Claude](skills/README.md)
 
 ## Tests

@@ -23,10 +23,11 @@ Documents de reference a lire avant implementation:
 - `docs/SOURCES_AND_SCORING.md`
 - `docs/ARCHITECTURE.md`
 - `docs/USER_GUIDE.md`
+- `docs/V3_QA_CHECKLIST.md`
 
 Regle de reprise:
 
-> Aureum Flux v2.0 est stabilise apres Phase 18. La v3.0 commence par Phase 19: audit documentation, puis Phase 20: audit editorial phrase par phrase.
+> Aureum Flux v3.0 est livree localement jusqu'a la Phase 34. Toute reprise doit commencer par verifier Git, relire la checklist QA et comprendre les 5 pages actives.
 
 Decision v3.0 active:
 
@@ -34,4 +35,5 @@ Decision v3.0 active:
 - Phase 27A a retire Elliott du dashboard, payload public, Inspector et orchestrateur;
 - Phase 27A a remplace la charte interne principale par TradingView;
 - Phase 27B a cree `TechnicalDecisionEngine` v1;
+- Phases 30-34 ont livre Trade Tracker, Replay, Settings, Reports v3 et QA finale;
 - le skill Elliott archive a ete supprime du repo: il ne doit plus guider l'implementation.

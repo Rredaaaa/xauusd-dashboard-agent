@@ -1,4 +1,6 @@
+import json
 import unittest
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,6 +32,7 @@ from xauusd_agent import (
     TradeLedgerSummary,
     TradePlan,
     TradeRecommendation,
+    UserSettings,
     WeekendGoldSnapshot,
     append_audit_log_snapshot,
     build_market_regime_analysis,
@@ -40,6 +43,7 @@ from xauusd_agent import (
     build_event_facts,
     build_data_quality_snapshot,
     build_trade_ledger_summary,
+    build_replay_report,
     build_wgc_etf_flows_analysis,
     build_cftc_positioning_from_rows,
     build_political_statements,
@@ -57,6 +61,9 @@ from xauusd_agent import (
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
     render_dashboard,
+    render_replay_report_markdown,
+    write_reports_v3,
+    load_user_settings,
     resample_candles,
     score_headline,
     update_orchestrator_agent,
@@ -2091,6 +2098,121 @@ class LocalFreeContextTests(unittest.TestCase):
         self.assertIn("scenario_plan", payload)
         self.assertNotIn("ElliottWaveAgent", str(payload))
         self.assertNotIn("elliott_wave_snapshot", str(payload))
+
+
+class Phase31To34CompletionTests(unittest.TestCase):
+    def snapshot(self, symbol: str = "XAU/USD", price: float = 100.0) -> SymbolSnapshot:
+        return SymbolSnapshot(
+            symbol=symbol,
+            label=symbol,
+            price=price,
+            previous_close=price - 1,
+            change_abs=1.0,
+            change_pct=1.0,
+            period_change_pct=1.0,
+            day_high=price + 2,
+            day_low=price - 2,
+            support=price - 2,
+            resistance=price + 2,
+            fetched_at="2026-04-24T10:00:00+00:00",
+            points=[PricePoint(timestamp=1, close=price - 1), PricePoint(timestamp=2, close=price)],
+        )
+
+    def trade_plan(self) -> TradePlan:
+        return TradePlan(
+            trade_id="replay-test",
+            created_at="2026-04-24T10:00:00+00:00",
+            updated_at="2026-04-24T10:00:00+00:00",
+            status="active",
+            direction="BUY",
+            entry_type="market_reference",
+            reference_price=100.0,
+            entry_zone_low=99.5,
+            entry_zone_high=100.5,
+            stop_loss=95.0,
+            tp1=105.0,
+            tp2=110.0,
+            tp3=115.0,
+            risk_reward_tp1=1.0,
+            risk_reward_tp2=2.0,
+            risk_reward_tp3=3.0,
+            max_valid_until="2026-04-24T16:00:00+00:00",
+            source_signal_id="replay",
+            global_score_at_creation=72,
+            data_quality_score=88,
+            confidence_score=70,
+            market_regime="Normal Macro",
+            agents_validating=["PriceAgent", "TechnicalAgent", "MacroAgent"],
+            agents_contradicting=[],
+            evidence_sources=["test"],
+            event_facts_snapshot=[],
+            technical_snapshot="15m:BUY",
+            macro_snapshot="macro ok",
+            geopolitical_snapshot="geo ok",
+            elliott_wave_snapshot="",
+            invalidation_rules=["SL"],
+            outcome="open",
+            outcome_reason="test",
+        )
+
+    def test_phase31_replay_uses_audit_log_prices(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            ledger_path = tmp_path / "trade_ledger.jsonl"
+            audit_path = tmp_path / "audit_log.jsonl"
+            ledger_path.write_text(json.dumps(asdict(self.trade_plan())) + "\n", encoding="utf-8")
+            audit_entries = [
+                {"generated_at": "2026-04-24T10:00:00+00:00", "xauusd_price": 100.0, "decision": {"status": "TRADE_BUY", "score": 72}},
+                {"generated_at": "2026-04-24T11:00:00+00:00", "xauusd_price": 106.0, "decision": {"status": "TRADE_BUY", "score": 74}},
+            ]
+            audit_path.write_text("\n".join(json.dumps(item) for item in audit_entries) + "\n", encoding="utf-8")
+            report = build_replay_report(ledger_path=ledger_path, audit_log_path=audit_path)
+            self.assertEqual(report.trades_replayed, 1)
+            self.assertEqual(report.results[0].replay_outcome, "partial")
+            self.assertIn("Replay v3", render_replay_report_markdown(report))
+
+    def test_phase32_settings_file_can_be_initialized_and_validated(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "aureum_settings.json"
+            settings, validation = load_user_settings(path=settings_path, create_if_missing=True)
+            self.assertTrue(settings_path.exists())
+            self.assertEqual(validation.status, "OK")
+            self.assertIn("TechnicalAgent", settings.active_agents)
+
+            settings_path.write_text(
+                json.dumps({"active_agents": ["TechnicalAgent"], "scoring_mode": "conservative", "trade_threshold": 55}),
+                encoding="utf-8",
+            )
+            loaded, validation = load_user_settings(path=settings_path)
+            self.assertEqual(validation.status, "OK")
+            self.assertEqual(loaded.trade_threshold, 60)
+
+    def test_phase33_reports_v3_exports_are_written(self) -> None:
+        bundle = BriefingBundle(
+            gold=self.snapshot("XAU/USD", 100.0),
+            dxy=self.snapshot("DX-Y.NYB", 98.0),
+            us10y=self.snapshot("^TNX", 4.2),
+            news=[],
+            analysis=AnalysisResult("bullish", 6, 70, ["test"], [], [], []),
+            payload={"generated_at": "2026-04-24T10:00:00+00:00"},
+            ai_analysis=None,
+            global_recommendation=TradeRecommendation("Global", "BUY", 72, "Signal test.", [], 95.0, 105.0, 110.0, "test"),
+            trade_ledger=TradeLedgerSummary(
+                ledger_path="reports/trade_ledger.jsonl",
+                generated_at="2026-04-24T10:00:00+00:00",
+                quality_gate_status="WAIT",
+                quality_gate_reasons=["test"],
+                recent_trades=[self.trade_plan()],
+                total_trades=1,
+            ),
+        )
+        with TemporaryDirectory() as tmp:
+            exports = write_reports_v3(bundle, "# main\n", output_dir=Path(tmp))
+            labels = {export.label for export in exports}
+            self.assertIn("daily_report.md", labels)
+            self.assertIn("signal_report.md", labels)
+            self.assertIn("replay_report.json", labels)
+            self.assertTrue((Path(tmp) / "index.html").exists())
 
 
 if __name__ == "__main__":

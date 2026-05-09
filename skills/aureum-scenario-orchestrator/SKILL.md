@@ -68,7 +68,7 @@ Implementation v1:
 
 ## UX Product Split Phase 30A
 
-Statut projet: documentee, a valider avant implementation.
+Statut projet: livree.
 
 L'orchestrateur peut conserver toutes ses donnees internes, mais l'interface utilisateur doit separer:
 - `Desk`: resultat utile uniquement;

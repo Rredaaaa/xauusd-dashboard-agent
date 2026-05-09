@@ -500,7 +500,7 @@ Actions:
    - symbole configurable;
    - `OANDA:XAUUSD` par defaut ou autre symbole public disponible;
    - timeframes TradingView;
-   - plein panneau dans Market/Technical.
+   - plein panneau dans `Desk`.
 6. Conserver le Chart Store OHLC en Inspector uniquement:
    - qualite data;
    - timeframes disponibles;
@@ -527,7 +527,7 @@ Definition de termine:
 ### Phase 27B - Technical Decision Engine
 
 Statut 2026-05-07: LIVREE v1.
-La v1 remplace Elliott dans les surfaces actives par `TechnicalDecisionEngine`, affiche `TradingView` dans Market/Technical et expose direction, structure, trigger, invalidation, entry zone, SL, TP1/TP2/TP3, raisons et contradictions. Les indicateurs avances listés ci-dessous restent la cible d'enrichissement progressif des phases suivantes.
+La v1 remplace Elliott dans les surfaces actives par `TechnicalDecisionEngine`, affiche `TradingView` dans `Desk` et expose direction, structure, trigger, invalidation, entry zone, SL, TP1/TP2/TP3, raisons et contradictions. Les indicateurs avances listés ci-dessous restent la cible d'enrichissement progressif des phases suivantes.
 
 Objectif:
 Remplacer Elliott par un moteur technique auditable base sur structure, indicateurs, niveaux, volatilite et confirmations inter-marches.
@@ -729,7 +729,7 @@ Definition de termine:
 
 ### Phase 30A - UX Product Split + Noise Gate
 
-Statut: ajoutee le 2026-05-08, a valider avant implementation.
+Statut: livree.
 
 Objectif:
 Restructurer l'interface autour de ce que l'utilisateur veut vraiment voir, en gardant la complexite moteur dans l'Inspector ou invisible.
@@ -781,7 +781,7 @@ Definition de termine:
 
 ### Phase 30 - Trade Tracker v3 / Shadow Terminal
 
-Statut: implementation lancee.
+Statut: livree.
 
 Objectif:
 Apprendre des signaux precedents.
@@ -824,6 +824,8 @@ Definition de termine:
 
 ### Phase 31 - Backtest / Replay v3
 
+Statut: livree.
+
 Objectif:
 Verifier les regles sur historique.
 
@@ -852,6 +854,8 @@ Definition de termine:
 
 ### Phase 32 - Settings et controle utilisateur
 
+Statut: livree.
+
 Objectif:
 Permettre de regler le terminal sans modifier le code.
 
@@ -879,6 +883,8 @@ Definition de termine:
 
 ### Phase 33 - Reports v3
 
+Statut: livree.
+
 Objectif:
 Produire des rapports utiles.
 
@@ -905,6 +911,8 @@ Definition de termine:
 
 ### Phase 34 - QA finale v3.0
 
+Statut: livree.
+
 Objectif:
 Stabiliser la version.
 
@@ -929,12 +937,19 @@ Livrables:
 Definition de termine:
 - v3.0 livrable et documentee.
 
-## 5. Ordre recommande
+Implementation livree:
+- `--replay` genere `reports/v3/replay_report.md`;
+- `--init-settings` cree `config/aureum_settings.json`;
+- Reports v3 genere daily/signal/trade/post-mortem/news/source-quality/replay;
+- tests unitaires couvrent replay, settings et reports;
+- dashboard verifie localement sur les 5 pages actives.
 
-Ne pas commencer par Elliott.
-Decision mise a jour v1.1: Elliott n'est plus une phase prioritaire de v3.0. La prochaine etape est de le retirer du produit visible, puis de construire un moteur technique plus fiable.
+## 5. Ordre livre
 
-Ordre recommande:
+Ne pas reintroduire Elliott.
+Decision mise a jour v1.1: Elliott n'est plus une phase prioritaire de v3.0 et a ete retire du produit actif.
+
+Ordre livre:
 1. Phase 19 - documentation;
 2. Phase 20 - audit editorial;
 3. Phase 21 - explanation layer;
@@ -976,15 +991,16 @@ La v3.0 est reussie si:
 - les sources faibles degradent le signal de maniere explicite;
 - l'Inspector permet d'auditer chaque decision.
 
-## 7. Passation pour Claude
+## 7. Passation pour reprise future
 
-Claude doit commencer par:
+Toute reprise doit commencer par:
 1. lire ce document;
-2. lire `README.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES_AND_SCORING.md` et `docs/USER_GUIDE.md`;
+2. lire `README.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES_AND_SCORING.md`, `docs/USER_GUIDE.md` et `docs/V3_QA_CHECKLIST.md`;
 3. verifier `git status`;
-4. confirmer avec l'utilisateur avant Phase 19.
+4. verifier que le dashboard local lance encore les 5 pages actives;
+5. confirmer avec l'utilisateur avant toute nouvelle phase post-v3.0.
 
-Claude ne doit pas:
+La reprise ne doit pas:
 - reintroduire Elliott dans le raisonnement utilisateur sans validation explicite;
 - ajouter une source OHLC sans Chart Store;
 - remplacer TradingView par une charte interne principale;

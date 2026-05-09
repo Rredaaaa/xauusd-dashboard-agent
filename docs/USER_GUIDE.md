@@ -182,8 +182,13 @@ Vue exports:
 
 - rapport Markdown;
 - payload JSON;
-- inventaire agents;
-- Source Registry;
+- daily report v3;
+- signal report;
+- trade report;
+- post-mortem report;
+- replay report;
+- news audit;
+- source quality audit;
 - Trade Ledger;
 - Inspector.
 
@@ -245,6 +250,45 @@ Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou
 
 ElliottWaveAgent est supprime du produit actif. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
 
+## Replay v3
+
+Le replay permet de relire les TradePlan avec les snapshots de prix historiques du terminal:
+
+```bash
+python xauusd_agent.py --replay --replay-output reports/v3/replay_report.md
+```
+
+Il compare chaque TradePlan aux prix stockes dans `reports/audit_log.jsonl` et produit:
+
+- outcome rejoue;
+- prix apres 1h/2h/4h/24h si les snapshots existent;
+- R favorable/adverse maximal;
+- raison du resultat.
+
+Le replay ne cree pas de trade. Il sert a mesurer si le terminal s'ameliore.
+
+## Settings locaux
+
+Le comportement peut etre ajuste sans modifier le code:
+
+```bash
+python xauusd_agent.py --init-settings
+```
+
+Le fichier local est:
+
+```text
+config/aureum_settings.json
+```
+
+Parametres importants:
+
+- `scoring_mode`: `aggressive_controlled` ou `conservative`;
+- `trade_threshold`: score minimum pour verrouiller un TradePlan;
+- `minimum_risk_reward`: RR minimum;
+- `cooldown_minutes`: evite de creer plusieurs trades similaires;
+- `active_agents`: agents decisionnels actifs.
+
 ## Outcomes possibles
 
 - `open`: trade encore ouvert.
@@ -277,8 +321,8 @@ Ce fichier trace:
 - `BUY` ou `SELL` ne veut pas dire entrer au marche sans verification.
 - `WAIT` veut dire que le terminal refuse de valider une direction exploitable.
 - `DEGRADED` ne veut pas toujours dire trade impossible: cela peut vouloir dire trade possible avec confiance reduite si le prix principal et le RR sont exploitables.
-- La v3.0 ajoutera des statuts intermediaires `WATCH_BUY` et `WATCH_SELL` pour afficher les setups a surveiller sans forcer un trade.
-- Elliott ne doit pas etre utilise comme argument de trade tant qu'il n'est pas refonde et revalide explicitement.
+- `WATCH_BUY` et `WATCH_SELL` affichent des setups a surveiller sans forcer un trade.
+- Elliott ne doit pas etre utilise comme argument de trade: il est supprime du produit actif.
 - Un regime Hormuz/Oil Shock peut inverser la lecture classique geopolitique -> gold.
 - Si le petrole capte la liquidite et que le dollar monte, gold peut baisser malgre le risque geopolitique.
 - Le spread, l'heure, la volatilite et le calendrier macro doivent etre verifies avant toute decision.

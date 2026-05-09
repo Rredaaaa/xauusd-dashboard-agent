@@ -38,10 +38,14 @@ La suite est v3.0:
 - Phase 26: Elliott quarantine;
 - Phase 27A: Elliott Removal + TradingView Chart, livree;
 - Phase 27B: Technical Decision Engine v1, livree;
-- Phase 28: Scenario Engine v3, livree v1;
-- Phase 29: Orchestrator v3 dynamique, livree v1;
-- Phase 30A: UX Product Split + Noise Gate, documentee, a valider avant implementation;
-- Phase 30-34: Trade Tracker, Replay, Settings, Reports, QA.
+- Phase 28: Scenario Engine v3, livree;
+- Phase 29: Orchestrator v3 dynamique, livree;
+- Phase 30A: UX Product Split + Noise Gate, livree;
+- Phase 30: Trade Tracker v3, livree;
+- Phase 31: Replay v3, livree;
+- Phase 32: Settings locaux, livree;
+- Phase 33: Reports v3, livree;
+- Phase 34: QA finale v3.0, livree.
 
 ## Regles non negociables
 
@@ -172,7 +176,7 @@ Servir de contexte de reprise global avant toute phase v3.0.
 ### Methodologie
 
 1. Lire le plan v3.
-2. Verifier phase courante.
+2. Verifier que v3.0 est toujours livree jusqu'a Phase 34.
 3. Verifier Git/GitHub.
 4. Identifier la prochaine action autorisee.
 5. Ne jamais sauter une phase sans accord explicite.
@@ -185,8 +189,8 @@ Servir de contexte de reprise global avant toute phase v3.0.
 
 ### Bons exemples
 
-- `Phase 24 peut commencer seulement apres validation de Phase 23, git clean et origin/main sync.`
-- `Phase 27A peut commencer seulement apres validation utilisateur et doit supprimer Elliott visible avant tout nouveau moteur technique.`
+- `Toute phase post-v3.0 commence seulement apres git clean, origin/main sync et accord utilisateur.`
+- `Une evolution du scoring doit conserver Replay, Settings, Reports v3 et Trade Ledger.`
 
 ### Mauvais exemples
 

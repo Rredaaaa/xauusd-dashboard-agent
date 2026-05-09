@@ -59,6 +59,40 @@ http://127.0.0.1:8787/
 python xauusd_agent.py --quiet --save reports/xauusd_report.md --data-json reports/xauusd_data.json --dashboard reports/xauusd_dashboard.html
 ```
 
+## Settings locaux
+
+Creer le fichier de configuration local:
+
+```bash
+python xauusd_agent.py --init-settings
+```
+
+Le fichier cree est:
+
+```text
+config/aureum_settings.json
+```
+
+Il est ignore par Git. Le modele suivi est `config/aureum_settings.example.json`.
+
+Parametres principaux:
+
+- `scoring_mode`: `aggressive_controlled` ou `conservative`;
+- `trade_threshold`: score minimal pour transformer un signal en TradePlan;
+- `minimum_risk_reward`: RR minimal sur TP1;
+- `cooldown_minutes`: anti-doublon Trade Ledger;
+- `active_agents`: agents decisionnels pris en compte par le Trade Gate.
+
+## Replay v3
+
+Generer le replay depuis les snapshots locaux:
+
+```bash
+python xauusd_agent.py --replay --replay-output reports/v3/replay_report.md
+```
+
+Le replay utilise `reports/trade_ledger.jsonl` et `reports/audit_log.jsonl`.
+
 ## Tests
 
 ```bash
@@ -75,5 +109,6 @@ Le dossier `reports/` contient les exports locaux:
 - `xauusd_dashboard.html`
 - `trade_ledger.jsonl`
 - `audit_log.jsonl`
+- `v3/`: rapports v3 generes localement.
 
 Ces fichiers ne sont pas pousses sur GitHub.

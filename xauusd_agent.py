@@ -104,6 +104,8 @@ CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-ap
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
 AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
 CHART_STORE_CACHE_PATH = Path("reports") / "chart_store_cache.json"
+SETTINGS_PATH = Path("config") / "aureum_settings.json"
+REPORTS_V3_DIR = Path("reports") / "v3"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -773,6 +775,68 @@ class TradeLedgerSummary:
 
 
 @dataclass
+class UserSettings:
+    active_agents: list[str]
+    scoring_mode: str = "aggressive_controlled"
+    minimum_agent_confidence: int = 50
+    watch_threshold: int = 50
+    trade_threshold: int = 55
+    cooldown_minutes: int = 90
+    minimum_risk_reward: float = 0.65
+    notifications_enabled: bool = False
+
+
+@dataclass
+class SettingsValidation:
+    path: str
+    status: str
+    warnings: list[str] = field(default_factory=list)
+    created_default: bool = False
+
+
+@dataclass
+class ReplayPriceSnapshot:
+    timestamp: str
+    price: float
+    decision_status: str = ""
+    decision_score: int = 0
+
+
+@dataclass
+class ReplayTradeResult:
+    trade_id: str
+    direction: str
+    created_at: str
+    replay_status: str
+    replay_outcome: str
+    replay_reason: str
+    price_after_1h: float | None = None
+    price_after_2h: float | None = None
+    price_after_4h: float | None = None
+    price_after_24h: float | None = None
+    max_favorable_r: float = 0.0
+    max_adverse_r: float = 0.0
+
+
+@dataclass
+class ReplayReport:
+    generated_at: str
+    ledger_path: str
+    audit_log_path: str
+    snapshots: int
+    trades_replayed: int
+    results: list[ReplayTradeResult] = field(default_factory=list)
+    summary: str = ""
+
+
+@dataclass
+class ReportExport:
+    label: str
+    path: str
+    description: str
+
+
+@dataclass
 class AgentEvidence:
     label: str
     value: str
@@ -1050,6 +1114,79 @@ DECISION_AGENT_NAMES = {
     "CorrelationAgent",
     "FlowPositioningAgent",
 }
+
+
+def default_user_settings() -> UserSettings:
+    return UserSettings(active_agents=sorted(DECISION_AGENT_NAMES))
+
+
+def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, created_default: bool = False) -> SettingsValidation:
+    warnings: list[str] = []
+    allowed_modes = {"conservative", "aggressive_controlled"}
+    if settings.scoring_mode not in allowed_modes:
+        warnings.append(f"scoring_mode inconnu: {settings.scoring_mode}; fallback aggressive_controlled.")
+        settings.scoring_mode = "aggressive_controlled"
+    settings.minimum_agent_confidence = max(0, min(100, int(settings.minimum_agent_confidence)))
+    settings.watch_threshold = max(0, min(100, int(settings.watch_threshold)))
+    settings.trade_threshold = max(0, min(100, int(settings.trade_threshold)))
+    settings.cooldown_minutes = max(0, min(1440, int(settings.cooldown_minutes)))
+    settings.minimum_risk_reward = max(0.1, min(5.0, float(settings.minimum_risk_reward)))
+    unknown_agents = [agent for agent in settings.active_agents if agent not in DECISION_AGENT_NAMES]
+    if unknown_agents:
+        warnings.append("agents inconnus ignores: " + ", ".join(sorted(unknown_agents)))
+        settings.active_agents = [agent for agent in settings.active_agents if agent in DECISION_AGENT_NAMES]
+    if not settings.active_agents:
+        warnings.append("aucun agent actif valide; fallback agents decisionnels par defaut.")
+        settings.active_agents = sorted(DECISION_AGENT_NAMES)
+    if settings.scoring_mode == "conservative":
+        settings.trade_threshold = max(settings.trade_threshold, 60)
+        settings.minimum_risk_reward = max(settings.minimum_risk_reward, 0.8)
+    return SettingsValidation(
+        path=str(path),
+        status="OK" if not warnings else "WARN",
+        warnings=warnings,
+        created_default=created_default,
+    )
+
+
+def parse_user_settings(data: dict[str, Any] | None) -> UserSettings:
+    defaults = default_user_settings()
+    if not isinstance(data, dict):
+        return defaults
+    return UserSettings(
+        active_agents=[str(item) for item in data.get("active_agents", defaults.active_agents)],
+        scoring_mode=str(data.get("scoring_mode", defaults.scoring_mode)),
+        minimum_agent_confidence=int(data.get("minimum_agent_confidence", defaults.minimum_agent_confidence) or defaults.minimum_agent_confidence),
+        watch_threshold=int(data.get("watch_threshold", defaults.watch_threshold) or defaults.watch_threshold),
+        trade_threshold=int(data.get("trade_threshold", defaults.trade_threshold) or defaults.trade_threshold),
+        cooldown_minutes=int(data.get("cooldown_minutes", defaults.cooldown_minutes) or defaults.cooldown_minutes),
+        minimum_risk_reward=float(data.get("minimum_risk_reward", defaults.minimum_risk_reward) or defaults.minimum_risk_reward),
+        notifications_enabled=bool(data.get("notifications_enabled", defaults.notifications_enabled)),
+    )
+
+
+def load_user_settings(path: Path = SETTINGS_PATH, create_if_missing: bool = False) -> tuple[UserSettings, SettingsValidation]:
+    created_default = False
+    if not path.exists():
+        settings = default_user_settings()
+        if create_if_missing:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(asdict(settings), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            created_default = True
+        validation = validate_user_settings(settings, path=path, created_default=created_default)
+        if not created_default:
+            validation.warnings.append("settings local absent; defaults utilises en memoire.")
+            validation.status = "WARN"
+        return settings, validation
+    try:
+        settings = parse_user_settings(json.loads(path.read_text(encoding="utf-8")))
+    except Exception as exc:
+        settings = default_user_settings()
+        validation = validate_user_settings(settings, path=path)
+        validation.status = "WARN"
+        validation.warnings.append(f"settings illisible; defaults utilises: {exc}")
+        return settings, validation
+    return settings, validate_user_settings(settings, path=path)
 
 
 def source_registry_entries() -> list[SourceRegistryEntry]:
@@ -1480,16 +1617,25 @@ def build_trade_quality_gate(
     data_quality: DataQualitySnapshot | None,
     agent_results: list[AgentResult],
     market_regime: MarketRegimeAnalysis | None,
+    settings: UserSettings | None = None,
 ) -> tuple[bool, list[str], list[str], list[str]]:
     hard_reasons: list[str] = []
     advisory_reasons: list[str] = []
+    active_settings = settings or default_user_settings()
+    validation = validate_user_settings(active_settings)
+    if validation.warnings:
+        advisory_reasons.extend(validation.warnings[:3])
+    trade_threshold = active_settings.trade_threshold
+    min_rr = active_settings.minimum_risk_reward
+    min_confidence = active_settings.minimum_agent_confidence
+    active_agent_names = set(active_settings.active_agents)
     if global_recommendation.verdict not in {"BUY", "SELL"}:
         hard_reasons.append(f"Verdict {global_recommendation.verdict}: aucun trade verrouille sans direction BUY/SELL.")
-    decision_agents = [agent for agent in agent_results if agent.name in DECISION_AGENT_NAMES]
+    decision_agents = [agent for agent in agent_results if agent.name in DECISION_AGENT_NAMES and agent.name in active_agent_names]
     validating = [
         agent.name
         for agent in decision_agents
-        if agent.bias == global_recommendation.verdict and agent.confidence >= 50
+        if agent.bias == global_recommendation.verdict and agent.confidence >= min_confidence
     ]
     contradicting = [
         agent.name
@@ -1498,9 +1644,9 @@ def build_trade_quality_gate(
     ]
     aggressive_majority = len(validating) >= 3 and len(contradicting) <= 1
 
-    if global_recommendation.score < 55:
-        hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 55.")
-    elif global_recommendation.score < 58:
+    if global_recommendation.score < trade_threshold:
+        hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < {trade_threshold}.")
+    elif global_recommendation.score < trade_threshold + 3:
         advisory_reasons.append(
             f"Score global agressif: {global_recommendation.score}/100; trade autorise seulement si les autres garde-fous restent valides."
         )
@@ -1531,9 +1677,9 @@ def build_trade_quality_gate(
         global_recommendation.stop_loss,
         global_recommendation.take_profit_1,
     )
-    if rr1 < 0.65:
-        hard_reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.65R.")
-    elif rr1 < 0.8:
+    if rr1 < min_rr:
+        hard_reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < {min_rr:.2f}R.")
+    elif rr1 < min_rr + 0.15:
         advisory_reasons.append(f"Risk/reward TP1 agressif: {rr1:.2f}R; TP2/TP3 doivent compenser.")
     if global_recommendation.stop_loss == global_recommendation.take_profit_1:
         hard_reasons.append("SL/TP non exploitables.")
@@ -1541,7 +1687,9 @@ def build_trade_quality_gate(
     allowed = not hard_reasons
     reasons = [*hard_reasons, *advisory_reasons]
     if allowed:
-        reasons.append("Quality Gate agressif valide: score, data quality exploitable, majorite decisionnelle et risk/reward permettent un Trade Snapshot.")
+        reasons.append(
+            f"Quality Gate {active_settings.scoring_mode} valide: score, data quality exploitable, majorite decisionnelle et risk/reward permettent un Trade Snapshot."
+        )
     return allowed, reasons, validating, contradicting
 
 
@@ -1554,6 +1702,7 @@ def build_trade_plan_from_signal(
     event_facts: list[EventFact],
     technical_readings: list[TechnicalReading],
     now: datetime | None = None,
+    settings: UserSettings | None = None,
 ) -> tuple[TradePlan | None, list[str]]:
     reference = now or datetime.now(timezone.utc)
     allowed, reasons, validating, contradicting = build_trade_quality_gate(
@@ -1562,6 +1711,7 @@ def build_trade_plan_from_signal(
         data_quality,
         agent_results,
         market_regime,
+        settings=settings,
     )
     if not allowed:
         return None, reasons
@@ -1679,6 +1829,7 @@ def build_trade_ledger_summary(
     path: Path = TRADE_LEDGER_PATH,
     now: datetime | None = None,
     allow_create: bool = True,
+    settings: UserSettings | None = None,
 ) -> TradeLedgerSummary:
     reference = now or datetime.now(timezone.utc)
     plans = update_trade_ledger_outcomes(gold.price, path=path, now=reference)
@@ -1691,9 +1842,11 @@ def build_trade_ledger_summary(
         event_facts,
         technical_readings,
         now=reference,
+        settings=settings,
     )
     if candidate is not None:
-        if has_recent_similar_trade(plans, candidate, now=reference):
+        cooldown_minutes = (settings or default_user_settings()).cooldown_minutes
+        if has_recent_similar_trade(plans, candidate, cooldown_minutes=cooldown_minutes, now=reference):
             gate_reasons = ["Cooldown actif: un trade similaire est deja actif ou trop recent."]
         elif allow_create:
             candidate = enrich_trade_plan_v3(candidate)
@@ -1730,6 +1883,149 @@ def build_trade_ledger_summary(
         stats=build_trade_ledger_stats(plans),
         post_mortems=post_mortems,
     )
+
+
+def load_replay_price_snapshots(path: Path = AUDIT_LOG_PATH) -> list[ReplayPriceSnapshot]:
+    if not path.exists():
+        return []
+    snapshots: list[ReplayPriceSnapshot] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            data = json.loads(raw_line)
+        except Exception:
+            continue
+        timestamp = str(data.get("generated_at", ""))
+        price = parse_float(data.get("xauusd_price"))
+        if not timestamp or price is None:
+            continue
+        decision = data.get("decision") if isinstance(data.get("decision"), dict) else {}
+        snapshots.append(
+            ReplayPriceSnapshot(
+                timestamp=timestamp,
+                price=float(price),
+                decision_status=str(decision.get("status", "")),
+                decision_score=int(decision.get("score", 0) or 0),
+            )
+        )
+    return sorted(snapshots, key=lambda item: item.timestamp)
+
+
+def _price_after(plan: TradePlan, snapshots: list[ReplayPriceSnapshot], hours: int) -> float | None:
+    created = parse_iso_datetime(plan.created_at)
+    if created is None:
+        return None
+    target = created + timedelta(hours=hours)
+    candidates = [
+        snapshot
+        for snapshot in snapshots
+        if (parse_iso_datetime(snapshot.timestamp) is not None and parse_iso_datetime(snapshot.timestamp) >= target)
+    ]
+    return candidates[0].price if candidates else None
+
+
+def _r_distance(plan: TradePlan, price: float) -> float:
+    risk = abs(plan.reference_price - plan.stop_loss)
+    if risk <= 0:
+        return 0.0
+    if plan.direction == "BUY":
+        return (price - plan.reference_price) / risk
+    return (plan.reference_price - price) / risk
+
+
+def replay_trade_plan(plan: TradePlan, snapshots: list[ReplayPriceSnapshot]) -> ReplayTradeResult:
+    created = parse_iso_datetime(plan.created_at)
+    replay_snapshots = [
+        snapshot
+        for snapshot in snapshots
+        if created is None or (parse_iso_datetime(snapshot.timestamp) is not None and parse_iso_datetime(snapshot.timestamp) >= created)
+    ]
+    replayed = enrich_trade_plan_v3(plan)
+    for snapshot in replay_snapshots:
+        replayed = evaluate_trade_plan(replayed, snapshot.price, now=parse_iso_datetime(snapshot.timestamp))
+        if trade_plan_closed(replayed):
+            break
+    r_values = [_r_distance(plan, snapshot.price) for snapshot in replay_snapshots]
+    return ReplayTradeResult(
+        trade_id=plan.trade_id,
+        direction=plan.direction,
+        created_at=plan.created_at,
+        replay_status=replayed.status,
+        replay_outcome=replayed.outcome,
+        replay_reason=replayed.outcome_reason or "Aucun outcome final detecte dans les snapshots disponibles.",
+        price_after_1h=_price_after(plan, replay_snapshots, 1),
+        price_after_2h=_price_after(plan, replay_snapshots, 2),
+        price_after_4h=_price_after(plan, replay_snapshots, 4),
+        price_after_24h=_price_after(plan, replay_snapshots, 24),
+        max_favorable_r=round(max(r_values), 2) if r_values else 0.0,
+        max_adverse_r=round(min(r_values), 2) if r_values else 0.0,
+    )
+
+
+def build_replay_report(
+    ledger_path: Path = TRADE_LEDGER_PATH,
+    audit_log_path: Path = AUDIT_LOG_PATH,
+) -> ReplayReport:
+    plans = load_trade_ledger(ledger_path)
+    snapshots = load_replay_price_snapshots(audit_log_path)
+    results = [replay_trade_plan(plan, snapshots) for plan in plans]
+    closed = [result for result in results if result.replay_outcome in {"win", "loss", "partial", "expired", "invalidated"}]
+    wins = sum(1 for result in closed if result.replay_outcome == "win")
+    losses = sum(1 for result in closed if result.replay_outcome == "loss")
+    summary = (
+        f"Replay v3: {len(results)} trade(s) rejoue(s), {len(snapshots)} snapshot(s), "
+        f"{wins} win(s), {losses} loss(es)."
+        if results
+        else f"Replay v3: aucun trade a rejouer, {len(snapshots)} snapshot(s) disponible(s)."
+    )
+    return ReplayReport(
+        generated_at=iso_now(),
+        ledger_path=str(ledger_path),
+        audit_log_path=str(audit_log_path),
+        snapshots=len(snapshots),
+        trades_replayed=len(results),
+        results=results,
+        summary=summary,
+    )
+
+
+def render_replay_report_markdown(report: ReplayReport) -> str:
+    lines = [
+        "# Aureum Flux Replay v3",
+        "",
+        f"Genere a {report.generated_at}",
+        "",
+        report.summary,
+        "",
+        f"- Ledger: {report.ledger_path}",
+        f"- Audit log: {report.audit_log_path}",
+        f"- Snapshots: {report.snapshots}",
+        "",
+        "## Trades rejoues",
+    ]
+    if not report.results:
+        lines.append("Aucun trade historise a rejouer.")
+    for result in report.results:
+        levels = [
+            f"1h={format_number(result.price_after_1h)}",
+            f"2h={format_number(result.price_after_2h)}",
+            f"4h={format_number(result.price_after_4h)}",
+            f"24h={format_number(result.price_after_24h)}",
+        ]
+        lines.extend(
+            [
+                "",
+                f"### {result.trade_id}",
+                f"- Direction: {result.direction}",
+                f"- Cree: {result.created_at}",
+                f"- Replay outcome: {result.replay_outcome} / {result.replay_status}",
+                f"- R favorable/adverse: {result.max_favorable_r:+.2f}R / {result.max_adverse_r:+.2f}R",
+                f"- Prix apres: {', '.join(levels)}",
+                f"- Pourquoi: {result.replay_reason}",
+            ]
+        )
+    return "\n".join(lines) + "\n"
 
 
 def build_monitoring_inspector_payload(
@@ -7178,6 +7474,8 @@ def build_payload(
     trade_ledger: TradeLedgerSummary | None = None,
     orchestrator_decision: OrchestratorDecision | None = None,
     chart_store: ChartStore | None = None,
+    settings: UserSettings | None = None,
+    settings_validation: SettingsValidation | None = None,
 ) -> dict[str, Any]:
     payload = {
         "generated_at": iso_now(),
@@ -7311,6 +7609,10 @@ def build_payload(
         payload["trade_ledger"] = trade_ledger_public_dict(trade_ledger)
     if orchestrator_decision:
         payload["orchestrator_decision"] = asdict(orchestrator_decision)
+    if settings:
+        payload["settings"] = asdict(settings)
+    if settings_validation:
+        payload["settings_validation"] = asdict(settings_validation)
     payload["monitoring_inspector"] = build_monitoring_inspector_payload(
         str(payload["generated_at"]),
         data_quality,
@@ -9672,6 +9974,57 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
     """.strip()
 
 
+def render_settings_panel(settings_payload: dict[str, Any] | None, validation_payload: dict[str, Any] | None) -> str:
+    settings = parse_user_settings(settings_payload)
+    validation_status = str((validation_payload or {}).get("status", "OK"))
+    validation_warnings = [str(item) for item in (validation_payload or {}).get("warnings", [])]
+    warning_items = "".join(f"<li>{html.escape(item)}</li>" for item in validation_warnings) or "<li>Aucun warning settings.</li>"
+    active_agents = "".join(f"<span class=\"source-tag\">{html.escape(agent)}</span>" for agent in settings.active_agents)
+    return f"""
+    <section class="module-block">
+      <div class="trade-verdict {state_tone_class(validation_status)}">Settings · {html.escape(validation_status)}</div>
+      <p class="trade-summary">Les seuils utilisateur sont lus depuis {html.escape(str(SETTINGS_PATH))}. Modifier ce fichier permet d'ajuster le terminal sans toucher au code.</p>
+      <div class="metric-strip">
+        <div class="geo-stat"><strong>Mode</strong><span>{html.escape(settings.scoring_mode)}</span><small>Prudent ou agressif controle</small></div>
+        <div class="geo-stat"><strong>Trade threshold</strong><span>{settings.trade_threshold}/100</span><small>Score minimal trade</small></div>
+        <div class="geo-stat"><strong>WATCH threshold</strong><span>{settings.watch_threshold}/100</span><small>Score minimal surveillance</small></div>
+        <div class="geo-stat"><strong>Cooldown</strong><span>{settings.cooldown_minutes} min</span><small>Anti-duplicat ledger</small></div>
+        <div class="geo-stat"><strong>RR minimum</strong><span>{settings.minimum_risk_reward:.2f}R</span><small>TP1 minimal</small></div>
+        <div class="geo-stat"><strong>Notifications</strong><span>{'ON' if settings.notifications_enabled else 'OFF'}</span><small>Reserve phase notification</small></div>
+      </div>
+      <div class="tag-row">{active_agents}</div>
+      <div class="technical-decision-block"><strong>Validation</strong><ul>{warning_items}</ul></div>
+    </section>
+    """
+
+
+def render_reports_v3_links_panel(exports_payload: list[dict[str, Any]] | None) -> str:
+    exports = exports_payload if isinstance(exports_payload, list) else []
+    if not exports:
+        return '<div class="empty-state">Les exports v3 seront generes au prochain cycle complet.</div>'
+    rows = []
+    for export in exports:
+        path = str(export.get("path", ""))
+        label = str(export.get("label", Path(path).name or "rapport"))
+        description = str(export.get("description", "Export local"))
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(label)}</strong><br><span class="soft">{html.escape(description)}</span></td>
+              <td><a href="{html.escape(path)}" target="_blank" rel="noopener noreferrer">{html.escape(path)}</a></td>
+            </tr>
+            """.strip()
+        )
+    return f"""
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Rapport</th><th>Chemin local</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    """
+
+
 def render_orchestrator_decision_panel(decision: OrchestratorDecision | None) -> str:
     if decision is None:
         return '<div class="empty-state">Orchestrateur v3 indisponible sur ce snapshot.</div>'
@@ -10306,6 +10659,11 @@ def render_dashboard_clarity_v2(
     tradingview_chart = render_tradingview_chart(interval="15")
     confidence_width = max(8, min(100, analysis.confidence))
     generated_at = format_timestamp_for_humans(bundle.payload["generated_at"])
+    settings_payload = bundle.payload.get("settings") if isinstance(bundle.payload.get("settings"), dict) else None
+    settings_validation_payload = (
+        bundle.payload.get("settings_validation") if isinstance(bundle.payload.get("settings_validation"), dict) else None
+    )
+    reports_v3_payload = bundle.payload.get("reports_v3") if isinstance(bundle.payload.get("reports_v3"), list) else None
 
     fundamental = bundle.fundamental_recommendation or TradeRecommendation(
         mode="Fondamental",
@@ -11239,6 +11597,7 @@ def render_dashboard_clarity_v2(
             <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>WGC + GLD + IAU</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
             <article class="panel span-12"><div class="section-kicker">Bloc macro officiel</div><h2>FRED DGS10 | DGS2 | T10YIE | DFII10</h2>{render_official_macro_panel(official_macro_rates, us10y)}</article>
             <article class="panel span-12"><div class="section-kicker">Chart Store OHLC</div><h2>Diagnostic donnees OHLC internes</h2>{render_chart_store_panel(chart_store)}</article>
+            <article class="panel span-12"><div class="section-kicker">Settings</div><h2>Controle utilisateur</h2>{render_settings_panel(settings_payload, settings_validation_payload)}</article>
             <article class="panel span-12"><div class="section-kicker">Fondation multi-agents passive</div><h2>Inventaire agents</h2>{render_agent_department_panel(agent_results, "Market")}{render_agent_department_panel(agent_results, "Decision")}{render_agent_department_panel(agent_results, "Technical")}{render_agent_department_panel(agent_results, "Macro")}{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
           </section>
         </section>
@@ -11249,6 +11608,7 @@ def render_dashboard_clarity_v2(
             {render_ai_summary(ai_analysis)}
             <article class="panel span-6"><div class="section-kicker">Exports</div><h2>Rapports disponibles</h2><div class="decision-grid"><div class="decision-item"><strong>Markdown</strong><span>Le rapport principal est genere dans reports/xauusd_report.md.</span></div><div class="decision-item"><strong>JSON</strong><span>Le payload structure est genere dans reports/xauusd_data.json.</span></div><div class="decision-item"><strong>Dernier calcul</strong><span>{html.escape(generated_at)}</span></div></div></article>
             <article class="panel span-6"><div class="section-kicker">Avertissement</div><h2>Usage</h2><div class="footer-note">Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise. Un TradePlan historise ne doit pas etre confondu avec le signal live.</div></article>
+            <article class="panel span-12"><div class="section-kicker">Reports v3</div><h2>Rapports generes</h2>{render_reports_v3_links_panel(reports_v3_payload)}</article>
             <article class="panel span-12"><div class="section-kicker">Trade Ledger</div><h2>Historique des TradePlan verrouilles</h2>{render_trade_tracker_panel(trade_ledger)}</article>
           </section>
         </section>
@@ -11379,6 +11739,7 @@ def fetch_local_free_context(
 
 
 def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
+    user_settings, settings_validation = load_user_settings(create_if_missing=True)
     live_bundle = copy.deepcopy(base_bundle)
     gold = fetch_investing_xauusd_snapshot(include_historical=False)
     weekend_gold = fetch_ig_weekend_gold_snapshot()
@@ -11519,6 +11880,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         market_regime,
         event_facts,
         technical_readings,
+        settings=user_settings,
     )
     payload = build_payload(
         gold,
@@ -11549,6 +11911,8 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
+        settings=user_settings,
+        settings_validation=settings_validation,
     )
     payload["executive_summary"] = executive_summary
     if live_bundle.ai_analysis:
@@ -11587,6 +11951,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
 
 
 def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
+    user_settings, settings_validation = load_user_settings(create_if_missing=True)
     gold = fetch_investing_xauusd_snapshot(include_historical=True)
     weekend_gold = fetch_ig_weekend_gold_snapshot()
     dxy = fetch_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="1mo")
@@ -11730,6 +12095,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         market_regime,
         event_facts,
         technical_readings,
+        settings=user_settings,
     )
     payload = build_payload(
         gold,
@@ -11760,6 +12126,8 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
+        settings=user_settings,
+        settings_validation=settings_validation,
     )
     payload["executive_summary"] = executive_summary
     ai_analysis = call_openai_analysis(payload) if include_ai else None
@@ -11856,6 +12224,181 @@ def render_artifacts(
     return report, json_report, html_dashboard
 
 
+def render_signal_report_markdown(bundle: BriefingBundle) -> str:
+    recommendation = bundle.global_recommendation
+    decision = bundle.orchestrator_decision
+    scenario = bundle.scenario_plan
+    lines = [
+        "# Aureum Flux Signal Report",
+        "",
+        f"Genere a {iso_now()}",
+        "",
+        f"- Prix XAU/USD: {bundle.gold.price:.2f} ({bundle.gold.change_pct:+.2f}%)",
+        f"- Chef de file: {decision.status if decision else 'WAIT'} {decision.score if decision else 0}/100",
+        f"- Verdict live: {recommendation.verdict if recommendation else 'WAIT'}",
+        f"- Score live: {recommendation.score if recommendation else 0}/100",
+    ]
+    if scenario:
+        lines.extend(
+            [
+                "",
+                "## Scenario",
+                f"- Statut: {scenario.status}",
+                f"- Biais: {scenario.bias}",
+                f"- Declencheur: {scenario.trigger}",
+                f"- Invalidation: {scenario.invalidation}",
+                f"- Action: {scenario.action}",
+            ]
+        )
+    if recommendation:
+        levels_ok = recommendation_levels_are_valid(recommendation)
+        lines.extend(
+            [
+                "",
+                "## Niveaux",
+                f"- Niveaux exploitables: {'oui' if levels_ok else 'non'}",
+                f"- SL: {recommendation.stop_loss:.2f}",
+                f"- TP1: {recommendation.take_profit_1:.2f}",
+                f"- TP2: {recommendation.take_profit_2:.2f}",
+                "- Resume: " + recommendation.summary,
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_news_audit_markdown(bundle: BriefingBundle) -> str:
+    lines = [
+        "# Aureum Flux News Audit",
+        "",
+        f"Genere a {iso_now()}",
+        "",
+        "## News Flow",
+    ]
+    for item in sorted(bundle.news, key=lambda news_item: news_item.published_at, reverse=True)[:30]:
+        lines.append(f"- {item.published_at} | {item.source} | score {item.score:+d} | {item.title}")
+    lines.extend(["", "## Event Facts"])
+    if not bundle.event_facts:
+        lines.append("Aucun EventFact structure disponible.")
+    for fact in bundle.event_facts[:20]:
+        lines.append(
+            f"- {fact.published_at} | {fact.source} | {fact.impact_bias.upper()} | "
+            f"{fact.trader_action} | {fact.title}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_source_quality_audit_markdown(bundle: BriefingBundle) -> str:
+    data_quality = bundle.data_quality
+    lines = [
+        "# Aureum Flux Source Quality Audit",
+        "",
+        f"Genere a {iso_now()}",
+        "",
+    ]
+    if data_quality is None:
+        lines.append("Data Quality indisponible.")
+        return "\n".join(lines) + "\n"
+    lines.extend(
+        [
+            f"- Statut: {data_quality.status}",
+            f"- Score: {data_quality.score}/100",
+            f"- Resume: {data_quality.summary}",
+            "",
+            "## Sources",
+        ]
+    )
+    for snapshot in data_quality.snapshots:
+        lines.append(
+            f"- {snapshot.name}: {snapshot.status}, tier {snapshot.tier}, "
+            f"age {snapshot.age_minutes if snapshot.age_minutes is not None else 'n/a'} min, "
+            f"critique {'oui' if snapshot.critical else 'non'}."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_trade_report_markdown(ledger: TradeLedgerSummary | None) -> str:
+    lines = ["# Aureum Flux Trade Report", "", f"Genere a {iso_now()}", ""]
+    if ledger is None:
+        lines.append("Trade Ledger indisponible.")
+        return "\n".join(lines) + "\n"
+    lines.extend(
+        [
+            f"- Gate: {ledger.quality_gate_status}",
+            f"- Total: {ledger.total_trades}",
+            f"- Wins/Losses/Partials/Expired: {ledger.wins}/{ledger.losses}/{ledger.partials}/{ledger.expired}",
+            f"- Win rate: {ledger.stats.win_rate:.1f}%",
+            f"- Expectancy: {ledger.stats.expectancy_r:+.2f}R",
+            "",
+            "## Recent Trades",
+        ]
+    )
+    if not ledger.recent_trades:
+        lines.append("Aucun TradePlan historise.")
+    for plan in ledger.recent_trades:
+        lines.append(
+            f"- {plan.trade_id}: {plan.direction}, entry {plan.reference_price:.2f}, "
+            f"SL {plan.stop_loss:.2f}, TP {plan.tp1:.2f}/{plan.tp2:.2f}/{plan.tp3:.2f}, "
+            f"status {plan.status}, outcome {plan.outcome}."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_reports_index_html(exports: list[ReportExport]) -> str:
+    rows = "\n".join(
+        f"<li><a href=\"{html.escape(Path(export.path).name)}\">{html.escape(export.label)}</a> - {html.escape(export.description)}</li>"
+        for export in exports
+        if export.path.endswith((".md", ".json"))
+    )
+    return (
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
+        "<title>Aureum Flux Reports v3</title>"
+        "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#020617;color:#e5e7f5;padding:32px;}"
+        "a{color:#8ab4ff}li{margin:10px 0}</style></head><body>"
+        "<h1>Aureum Flux Reports v3</h1><ul>"
+        f"{rows}"
+        "</ul></body></html>"
+    )
+
+
+def write_reports_v3(
+    bundle: BriefingBundle,
+    main_report: str,
+    output_dir: Path = REPORTS_V3_DIR,
+) -> list[ReportExport]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    replay = build_replay_report()
+    files = {
+        "daily_report.md": main_report,
+        "signal_report.md": render_signal_report_markdown(bundle),
+        "trade_report.md": render_trade_report_markdown(bundle.trade_ledger),
+        "post_mortem_report.md": render_trade_report_markdown(bundle.trade_ledger),
+        "news_audit.md": render_news_audit_markdown(bundle),
+        "source_quality_audit.md": render_source_quality_audit_markdown(bundle),
+        "replay_report.md": render_replay_report_markdown(replay),
+        "replay_report.json": json.dumps(asdict(replay), ensure_ascii=False, indent=2),
+    }
+    descriptions = {
+        "daily_report.md": "Rapport complet du dernier snapshot.",
+        "signal_report.md": "Lecture du signal live et du scenario.",
+        "trade_report.md": "Historique et statistiques du Trade Ledger.",
+        "post_mortem_report.md": "Post-mortem des trades clos.",
+        "news_audit.md": "Audit des news et Event Facts.",
+        "source_quality_audit.md": "Audit de qualite et fraicheur des sources.",
+        "replay_report.md": "Replay markdown des TradePlan via audit_log.",
+        "replay_report.json": "Replay structure JSON.",
+    }
+    exports: list[ReportExport] = []
+    for filename, content in files.items():
+        path = output_dir / filename
+        write_text_file(path, content)
+        exports.append(ReportExport(label=filename, path=str(path), description=descriptions[filename]))
+    index_path = output_dir / "index.html"
+    index_export = ReportExport("index.html", str(index_path), "Index HTML local des exports v3.")
+    write_text_file(index_path, render_reports_index_html([*exports, index_export]))
+    exports.append(index_export)
+    return exports
+
+
 def persist_artifacts(
     bundle: BriefingBundle,
     save_path: Path | None,
@@ -11864,6 +12407,11 @@ def persist_artifacts(
 ) -> None:
     append_audit_log_safely(bundle)
     report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=dashboard_path is not None)
+    exports = write_reports_v3(bundle, report)
+    bundle.payload["reports_v3"] = [asdict(export) for export in exports]
+    json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
+    if dashboard_path and html_dashboard is not None:
+        html_dashboard = render_dashboard(bundle, live_client=False)
     if save_path:
         write_text_file(save_path, report)
     if data_json_path:
@@ -11898,8 +12446,9 @@ class DashboardLiveCache:
 
     def _persist_latest(self, bundle: BriefingBundle, save_report: bool) -> None:
         append_audit_log_safely(bundle)
+        report_for_exports: str | None = None
         if save_report and self.save_path:
-            report = render_report(
+            report_for_exports = render_report(
                 bundle.gold,
                 bundle.dxy,
                 bundle.us10y,
@@ -11927,7 +12476,12 @@ class DashboardLiveCache:
                 bundle.trade_ledger,
                 bundle.orchestrator_decision,
             )
-            write_text_file(self.save_path, report)
+            write_text_file(self.save_path, report_for_exports)
+
+        if report_for_exports is None:
+            report_for_exports, _, _ = render_artifacts(bundle, include_dashboard=False)
+        exports = write_reports_v3(bundle, report_for_exports)
+        bundle.payload["reports_v3"] = [asdict(export) for export in exports]
 
         if self.data_json_path:
             write_text_file(self.data_json_path, json.dumps(bundle.payload, ensure_ascii=False, indent=2))
@@ -12136,12 +12690,37 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow OpenAI summaries during live server refreshes. Disabled by default to avoid repeated API calls.",
     )
+    parser.add_argument(
+        "--init-settings",
+        action="store_true",
+        help="Create config/aureum_settings.json with safe defaults, then exit.",
+    )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help="Generate a replay report from reports/trade_ledger.jsonl and reports/audit_log.jsonl, then exit.",
+    )
+    parser.add_argument(
+        "--replay-output",
+        type=Path,
+        default=REPORTS_V3_DIR / "replay_report.md",
+        help="Output path for --replay markdown report.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     load_env_file(Path(".env"))
     args = parse_args()
+    if args.init_settings:
+        settings, validation = load_user_settings(create_if_missing=True)
+        print(json.dumps({"settings": asdict(settings), "validation": asdict(validation)}, ensure_ascii=False, indent=2))
+        return 0
+    if args.replay:
+        replay = build_replay_report()
+        write_text_file(args.replay_output, render_replay_report_markdown(replay))
+        print(json.dumps(asdict(replay), ensure_ascii=False, indent=2))
+        return 0
     if args.serve_dashboard:
         return serve_dashboard(args)
 
@@ -12163,6 +12742,11 @@ def main() -> int:
 
         append_audit_log_safely(bundle)
         report, json_report, html_dashboard = render_artifacts(bundle, include_dashboard=args.dashboard is not None)
+        exports = write_reports_v3(bundle, report)
+        bundle.payload["reports_v3"] = [asdict(export) for export in exports]
+        json_report = json.dumps(bundle.payload, ensure_ascii=False, indent=2)
+        if html_dashboard is not None:
+            html_dashboard = render_dashboard(bundle, live_client=False)
 
         if args.save:
             write_text_file(args.save, report)

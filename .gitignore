@@ -4,6 +4,6 @@ __pycache__/
 reports/*
 !reports/.gitkeep
 !reports/README.md
-!reports/editorial_audit_v3.md
+config/aureum_settings.json
 .venv/
 .pytest_cache/

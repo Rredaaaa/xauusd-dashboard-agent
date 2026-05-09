@@ -10943,11 +10943,29 @@ def render_dashboard_clarity_v2(
     locked_status = "LOCKED" if active_trades else "NO LOCK"
     locked_class = "bullish" if active_trades else "neutral"
 
-    weekend_gold_panel = (
-        f'<article class="panel span-12"><div class="section-kicker">Prix week-end</div><h2>IG Weekend Gold</h2>{render_weekend_gold_proxy(weekend_gold, gold)}</article>'
-        if weekend_gold is not None
-        else ""
-    )
+    if weekend_gold is not None:
+        weekend_delta_class = (
+            "bullish"
+            if weekend_gold.change_pct is not None and weekend_gold.change_pct > 0
+            else "bearish"
+            if weekend_gold.change_pct is not None and weekend_gold.change_pct < 0
+            else "neutral"
+        )
+        weekend_variation = (
+            f"{weekend_gold.change_abs:+.2f} / {weekend_gold.change_pct:+.2f}%"
+            if weekend_gold.change_abs is not None and weekend_gold.change_pct is not None
+            else "variation n/a"
+        )
+        weekend_gold_cell = f"""
+          <div class="live-cell weekend-live-cell">
+            <small>IG Weekend</small>
+            <strong class="{weekend_delta_class}">{weekend_gold.mid:.2f}</strong>
+            <span>Sell {weekend_gold.sell:.2f} · Buy {weekend_gold.buy:.2f} · Spread {weekend_gold.spread:.2f}</span>
+            <span class="live-cell-note">{html.escape(weekend_variation)} · ecart spot {weekend_gold.mid - gold.price:+.2f}</span>
+          </div>
+        """.strip()
+    else:
+        weekend_gold_cell = ""
 
     def nav_links(css_class: str) -> str:
         items = [
@@ -11326,7 +11344,7 @@ def render_dashboard_clarity_v2(
     .span-12 {{ grid-column: 1 / -1; }}
     .global-live-strip {{
       display: grid;
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 10px;
       margin-bottom: 12px;
       padding: 10px;
@@ -11379,6 +11397,8 @@ def render_dashboard_clarity_v2(
       line-height: 1.4;
       overflow-wrap: anywhere;
     }}
+    .live-cell-note {{ margin-top: 4px; font-size: 11px; }}
+    .weekend-live-cell {{ border-color: rgba(212, 175, 55, 0.42); background: rgba(212, 175, 55, 0.06); }}
     .state-board {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }}
     .state-card {{ border-left: 4px solid var(--blue); }}
     .state-card.bullish {{ border-left-color: var(--bull); }}
@@ -11714,6 +11734,7 @@ def render_dashboard_clarity_v2(
             <strong class="{locked_class}">{locked_status}</strong>
             <span>{active_trades} trade(s) actif(s)</span>
           </div>
+          {weekend_gold_cell}
           <div class="live-cell">
             <small>Refresh</small>
             <strong>{html.escape(generated_at)}</strong>
@@ -11749,7 +11770,6 @@ def render_dashboard_clarity_v2(
               <h2>Position historisee</h2>
               {render_signal_locked_panel(trade_ledger, global_recommendation, orchestrator_decision, scenario_plan)}
             </article>
-            {weekend_gold_panel}
             <article class="panel span-6">
               <div class="section-kicker">Charte live TradingView</div>
               <h2>XAU/USD live chart</h2>

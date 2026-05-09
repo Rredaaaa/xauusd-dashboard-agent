@@ -12667,9 +12667,14 @@ class DashboardLiveCache:
         self.latest_bundle: BriefingBundle | None = None
         self.full_refreshed_at = 0.0
         self.latest_refreshed_at = 0.0
+        self.refresh_in_progress = False
 
     def _persist_latest(self, bundle: BriefingBundle, save_report: bool) -> None:
         append_audit_log_safely(bundle)
+        if not save_report:
+            if self.data_json_path:
+                write_text_file(self.data_json_path, json.dumps(bundle.payload, ensure_ascii=False, indent=2))
+            return
         report_for_exports: str | None = None
         if save_report and self.save_path:
             report_for_exports = render_report(
@@ -12719,6 +12724,44 @@ class DashboardLiveCache:
             raise original_error
         return cached_bundle
 
+    def _start_background_refresh(self, full_refresh: bool) -> None:
+        if self.refresh_in_progress:
+            return
+        self.refresh_in_progress = True
+        thread = threading.Thread(
+            target=self._background_refresh,
+            args=(full_refresh,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _background_refresh(self, full_refresh: bool) -> None:
+        try:
+            if full_refresh:
+                bundle = build_briefing(self.top_news, include_ai=self.include_ai)
+                with self.lock:
+                    self.full_bundle = bundle
+                    self.latest_bundle = bundle
+                    self.full_refreshed_at = time.time()
+                    self.latest_refreshed_at = self.full_refreshed_at
+                self._persist_latest(bundle, save_report=True)
+                return
+
+            with self.lock:
+                base_bundle = self.full_bundle
+            if base_bundle is None:
+                return
+            bundle = build_live_bundle(base_bundle)
+            with self.lock:
+                self.latest_bundle = bundle
+                self.latest_refreshed_at = time.time()
+            self._persist_latest(bundle, save_report=False)
+        except Exception:
+            return
+        finally:
+            with self.lock:
+                self.refresh_in_progress = False
+
     def get_bundle(self) -> BriefingBundle:
         now = time.time()
         with self.lock:
@@ -12730,7 +12773,7 @@ class DashboardLiveCache:
                         self.latest_bundle = cached_bundle
                         self.full_refreshed_at = now
                         self.latest_refreshed_at = now
-                        self._persist_latest(cached_bundle, save_report=False)
+                        self._start_background_refresh(full_refresh=True)
                         return cached_bundle
                 try:
                     bundle = build_briefing(self.top_news, include_ai=self.include_ai)
@@ -12744,13 +12787,10 @@ class DashboardLiveCache:
                 return bundle
 
             if self.latest_bundle is None or (now - self.latest_refreshed_at) >= self.live_refresh_seconds:
-                try:
-                    bundle = build_live_bundle(self.full_bundle)
-                except Exception:
-                    return self.latest_bundle or self.full_bundle
-                self.latest_bundle = bundle
-                self.latest_refreshed_at = now
-                self._persist_latest(bundle, save_report=False)
+                if self.latest_bundle is not None:
+                    self._start_background_refresh(full_refresh=False)
+                    return self.latest_bundle
+                return self.full_bundle
 
             return self.latest_bundle
 

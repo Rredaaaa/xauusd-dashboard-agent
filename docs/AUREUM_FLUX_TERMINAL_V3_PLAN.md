@@ -944,6 +944,31 @@ Implementation livree:
 - tests unitaires couvrent replay, settings et reports;
 - dashboard verifie localement sur les 5 pages actives.
 
+### Phase 35 - Dashboard Control & Layout Fix
+
+Statut: livree.
+
+Objectif:
+Corriger immediatement les irritants UX critiques avant toute autre phase: controles agents visibles, affichage vertical, calendrier macro lisible et news compréhensibles.
+
+Actions:
+1. Forcer toutes les pages dashboard en lecture verticale: une rubrique sous l'autre, aucune carte metier cote a cote.
+2. Ajouter un bouton ON/OFF visible devant chaque agent dans la page Agents.
+3. Persister l'etat ON/OFF dans `config/aureum_settings.json`.
+4. Faire respecter les agents desactives par le scoring actif et le Trade Gate.
+5. Transformer le calendrier macro en cartes lisibles avec date, countdown, importance, prevision, ancien, actuel, biais gold et pourquoi.
+6. Transformer le News Flow en cartes avec titre, source, heure, resume de la news, impact XAU/USD et raison courte.
+7. Masquer le jargon interne dans la vue utilisateur; les regimes internes restent disponibles pour le moteur.
+8. Separer COT officiel et WGC/ETF flows en rubriques distinctes, l'une sous l'autre.
+9. Verifier tests unitaires, dashboard local et synchronisation GitHub.
+
+Definition de termine:
+- la page Agents affiche un toggle ON/OFF par agent;
+- les pages Desk, Agents, News Flow, Reports et Inspector sont verticales;
+- le calendrier macro affiche les valeurs disponibles ou `indisponible`;
+- chaque news affiche un resume distinct de son impact;
+- aucun changement ne casse le refresh live ni la persistance settings.
+
 ## 5. Ordre livre
 
 Ne pas reintroduire Elliott.
@@ -966,7 +991,8 @@ Ordre livre:
 14. Phase 31 - replay;
 15. Phase 32 - settings;
 16. Phase 33 - reports;
-17. Phase 34 - QA finale.
+17. Phase 34 - QA finale;
+18. Phase 35 - Dashboard Control & Layout Fix.
 
 Raison:
 - le langage utilisateur doit etre corrige avant d'ajouter plus d'intelligence;

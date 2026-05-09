@@ -35,6 +35,7 @@ from xauusd_agent import (
     UserSettings,
     WeekendGoldSnapshot,
     append_audit_log_snapshot,
+    apply_user_settings_to_agents,
     build_market_regime_analysis,
     build_monitoring_inspector_payload,
     build_cross_asset_analysis,
@@ -64,8 +65,10 @@ from xauusd_agent import (
     render_replay_report_markdown,
     write_reports_v3,
     load_user_settings,
+    macro_catalyst_gold_bias,
     resample_candles,
     score_headline,
+    set_agent_enabled,
     update_orchestrator_agent,
 )
 
@@ -2186,6 +2189,41 @@ class Phase31To34CompletionTests(unittest.TestCase):
             loaded, validation = load_user_settings(path=settings_path)
             self.assertEqual(validation.status, "OK")
             self.assertEqual(loaded.trade_threshold, 60)
+
+    def test_phase35_agent_toggle_persists_and_marks_agent_off(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "aureum_settings.json"
+            settings, validation = set_agent_enabled("TechnicalAgent", False, path=settings_path)
+            self.assertEqual(validation.status, "OK")
+            self.assertNotIn("TechnicalAgent", settings.active_agents)
+
+            agents = [
+                AgentResult("TechnicalAgent", "Technical", "BUY", 72, 80, "tech ok"),
+                AgentResult("MacroAgent", "Macro", "BUY", 62, 75, "macro ok"),
+            ]
+            updated = apply_user_settings_to_agents(agents, settings)
+            technical = next(agent for agent in updated if agent.name == "TechnicalAgent")
+            macro = next(agent for agent in updated if agent.name == "MacroAgent")
+            self.assertEqual(technical.status, "OFF")
+            self.assertEqual(technical.bias, "OFF")
+            self.assertEqual(macro.status, "PASSIVE")
+
+    def test_phase35_macro_calendar_exposes_values_and_bias(self) -> None:
+        event = MacroCatalyst(
+            title="FOMC decision",
+            event_type="FOMC",
+            scheduled_at="2026-05-10T18:00:00+00:00",
+            source_name="Federal Reserve",
+            source_url="https://example.com",
+            impact_level="HIGH",
+            gold_impact="Dovish rate path can support gold.",
+            why_it_matters="Lower yields reduce gold opportunity cost.",
+            status="scheduled",
+            forecast="4.50%",
+            previous="4.75%",
+            actual="",
+        )
+        self.assertEqual(macro_catalyst_gold_bias(event), "BULLISH")
 
     def test_phase33_reports_v3_exports_are_written(self) -> None:
         bundle = BriefingBundle(

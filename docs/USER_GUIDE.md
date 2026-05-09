@@ -287,7 +287,7 @@ Parametres importants:
 - `trade_threshold`: score minimum pour verrouiller un TradePlan;
 - `minimum_risk_reward`: RR minimum;
 - `cooldown_minutes`: evite de creer plusieurs trades similaires;
-- `active_agents`: agents decisionnels actifs.
+- `active_agents`: agents actifs dans le terminal. Depuis la Phase 35, ils peuvent etre actives/desactives depuis la page Agents avec un bouton ON/OFF devant chaque agent.
 
 ## Outcomes possibles
 

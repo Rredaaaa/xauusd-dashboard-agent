@@ -242,7 +242,7 @@ Depuis la Phase 32, ces seuils peuvent etre ajustes dans `config/aureum_settings
 
 - `scoring_mode=conservative` force au moins `60/100` et `0.80R`;
 - `scoring_mode=aggressive_controlled` garde les seuils controles `55/100` et `0.65R`;
-- `active_agents` limite les agents decisionnels pris en compte par le Trade Gate;
+- `active_agents` limite les agents actifs pris en compte par le terminal. Les agents non decisionnels restent surtout des controles/affichages, mais leur bouton ON/OFF est visible dans la page Agents depuis la Phase 35;
 - `cooldown_minutes` bloque les doublons de TradePlan similaires.
 
 Depuis la Phase 31, le replay lit `reports/trade_ledger.jsonl` et `reports/audit_log.jsonl` pour mesurer les outcomes apres coup. Depuis la Phase 33, les rapports d'audit sont exportes dans `reports/v3/`.

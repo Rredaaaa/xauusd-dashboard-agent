@@ -9,7 +9,7 @@ Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer
 Etat roadmap:
 - la reference officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
 - le dashboard actif est structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector;
-- les phases v3.0 restantes ont ajoute Replay, Settings, Reports v3 et QA finale.
+- la Phase 35 corrige l'UX prioritaire: affichage vertical, toggles ON/OFF agents, calendrier macro lisible et resumes news.
 
 ## Lancer sur Mac
 

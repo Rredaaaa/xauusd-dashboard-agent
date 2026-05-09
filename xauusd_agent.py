@@ -574,6 +574,10 @@ class MacroCatalyst:
     why_it_matters: str
     status: str
     minutes_to_event: int | None = None
+    forecast: str = ""
+    previous: str = ""
+    actual: str = ""
+    expected_gold_bias: str = "NEUTRAL"
 
 
 @dataclass
@@ -1114,10 +1118,17 @@ DECISION_AGENT_NAMES = {
     "CorrelationAgent",
     "FlowPositioningAgent",
 }
+ALL_AGENT_NAMES = {
+    *DECISION_AGENT_NAMES,
+    "EventFactsAgent",
+    "TrumpPoliticalStatementsAgent",
+    "RiskManagerAgent",
+    "OrchestratorAgent",
+}
 
 
 def default_user_settings() -> UserSettings:
-    return UserSettings(active_agents=sorted(DECISION_AGENT_NAMES))
+    return UserSettings(active_agents=sorted(ALL_AGENT_NAMES))
 
 
 def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, created_default: bool = False) -> SettingsValidation:
@@ -1131,13 +1142,13 @@ def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, c
     settings.trade_threshold = max(0, min(100, int(settings.trade_threshold)))
     settings.cooldown_minutes = max(0, min(1440, int(settings.cooldown_minutes)))
     settings.minimum_risk_reward = max(0.1, min(5.0, float(settings.minimum_risk_reward)))
-    unknown_agents = [agent for agent in settings.active_agents if agent not in DECISION_AGENT_NAMES]
+    unknown_agents = [agent for agent in settings.active_agents if agent not in ALL_AGENT_NAMES]
     if unknown_agents:
         warnings.append("agents inconnus ignores: " + ", ".join(sorted(unknown_agents)))
-        settings.active_agents = [agent for agent in settings.active_agents if agent in DECISION_AGENT_NAMES]
+        settings.active_agents = [agent for agent in settings.active_agents if agent in ALL_AGENT_NAMES]
     if not settings.active_agents:
-        warnings.append("aucun agent actif valide; fallback agents decisionnels par defaut.")
-        settings.active_agents = sorted(DECISION_AGENT_NAMES)
+        warnings.append("aucun agent actif valide; fallback agents par defaut.")
+        settings.active_agents = sorted(ALL_AGENT_NAMES)
     if settings.scoring_mode == "conservative":
         settings.trade_threshold = max(settings.trade_threshold, 60)
         settings.minimum_risk_reward = max(settings.minimum_risk_reward, 0.8)
@@ -1187,6 +1198,42 @@ def load_user_settings(path: Path = SETTINGS_PATH, create_if_missing: bool = Fal
         validation.warnings.append(f"settings illisible; defaults utilises: {exc}")
         return settings, validation
     return settings, validate_user_settings(settings, path=path)
+
+
+def save_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH) -> SettingsValidation:
+    validation = validate_user_settings(settings, path=path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(settings), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return validation
+
+
+def set_agent_enabled(agent_name: str, enabled: bool, path: Path = SETTINGS_PATH) -> tuple[UserSettings, SettingsValidation]:
+    if agent_name not in ALL_AGENT_NAMES:
+        settings, validation = load_user_settings(path=path, create_if_missing=True)
+        validation.status = "WARN"
+        validation.warnings.append(f"agent inconnu: {agent_name}")
+        return settings, validation
+    settings, _validation = load_user_settings(path=path, create_if_missing=True)
+    active = set(settings.active_agents)
+    if enabled:
+        active.add(agent_name)
+    else:
+        active.discard(agent_name)
+    settings.active_agents = sorted(active)
+    validation = save_user_settings(settings, path=path)
+    return settings, validation
+
+
+def human_regime_name(name: str | None) -> str:
+    mapping = {
+        "Hormuz / Oil Shock": "Regime politique / petrole",
+        "De-escalation / Oil Relief": "Detente politique / petrole",
+        "Dollar Liquidity Squeeze": "Stress dollar / liquidite",
+        "Safe-Haven Gold": "Refuge or",
+    }
+    if not name:
+        return "Normal Macro"
+    return mapping.get(name, name)
 
 
 def source_registry_entries() -> list[SourceRegistryEntry]:
@@ -5819,7 +5866,7 @@ def build_passive_agent_results(
 
 
 def build_agent_contradictions(agent_results: list[AgentResult]) -> list[str]:
-    scorant_agents = list(agent_results)
+    scorant_agents = [agent for agent in agent_results if agent.status != "OFF"]
     buy_agents = [agent.name for agent in scorant_agents if agent.bias == "BUY"]
     sell_agents = [agent.name for agent in scorant_agents if agent.bias == "SELL"]
     caution_agents = [agent.name for agent in scorant_agents if agent.bias == "CAUTION"]
@@ -5841,6 +5888,8 @@ def agent_by_name(agent_results: list[AgentResult], name: str) -> AgentResult | 
 def agent_bullish_score(agent: AgentResult | None, direct_score: bool = False) -> int:
     if agent is None:
         return 50
+    if agent.status == "OFF":
+        return 50
     if direct_score:
         return clamp_score(agent.score)
     if agent.bias == "BUY":
@@ -5848,6 +5897,30 @@ def agent_bullish_score(agent: AgentResult | None, direct_score: bool = False) -
     if agent.bias == "SELL":
         return clamp_score(100 - agent.score)
     return 50
+
+
+def apply_user_settings_to_agents(agent_results: list[AgentResult], settings: UserSettings | None) -> list[AgentResult]:
+    active_names = set((settings or default_user_settings()).active_agents)
+    updated: list[AgentResult] = []
+    for agent in agent_results:
+        if agent.name in active_names:
+            updated.append(agent)
+            continue
+        updated.append(
+            AgentResult(
+                name=agent.name,
+                department=agent.department,
+                bias="OFF",
+                score=50,
+                confidence=0,
+                summary="Agent desactive dans les reglages locaux; il ne participe pas au scoring actif.",
+                evidence=agent.evidence[:2],
+                risks=[],
+                status="OFF",
+                experimental=agent.experimental,
+            )
+        )
+    return updated
 
 
 def component_bias(score: int) -> str:
@@ -7777,6 +7850,10 @@ def build_macro_catalyst_from_payload(data: dict[str, Any]) -> MacroCatalyst:
         why_it_matters=str(data.get("why_it_matters", "Pourquoi macro indisponible.")),
         status=str(data.get("status", "a venir")),
         minutes_to_event=int(data["minutes_to_event"]) if data.get("minutes_to_event") is not None else None,
+        forecast=str(data.get("forecast", "")),
+        previous=str(data.get("previous", "")),
+        actual=str(data.get("actual", "")),
+        expected_gold_bias=str(data.get("expected_gold_bias", "NEUTRAL")).upper(),
     )
 
 
@@ -9304,6 +9381,25 @@ def render_etf_flows_panel(analysis: ETFFlowsAnalysis | None) -> str:
     """.strip()
 
 
+def macro_catalyst_gold_bias(event: MacroCatalyst) -> str:
+    explicit = (event.expected_gold_bias or "").upper()
+    if explicit in {"BULLISH", "BEARISH"}:
+        return explicit
+    text = f"{event.gold_impact} {event.why_it_matters} {event.title}".lower()
+    bullish_terms = ["baisse de taux", "dovish", "lower yields", "dollar weaker", "support gold", "bullish"]
+    bearish_terms = ["higher for longer", "hawkish", "strong dollar", "higher yields", "bearish"]
+    if any(term in text for term in bullish_terms):
+        return "BULLISH"
+    if any(term in text for term in bearish_terms):
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def empty_macro_value(value: str | None) -> str:
+    value = (value or "").strip()
+    return value if value else "indisponible"
+
+
 def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
     if calendar is None:
         return (
@@ -9323,16 +9419,29 @@ def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
     )
     rows = []
     for event in calendar.catalysts[:8]:
-        status_class = "bearish" if event.impact_level == "HIGH" else "neutral"
+        bias = macro_catalyst_gold_bias(event)
+        status_class = "bullish" if bias == "BULLISH" else "bearish" if bias == "BEARISH" else "neutral"
         rows.append(
             f"""
-            <tr>
-              <td><strong>{html.escape(event.event_type)}</strong><br><span class="soft">{html.escape(event.source_name)}</span></td>
-              <td>{html.escape(event.title)}</td>
-              <td>{html.escape(format_timestamp_for_humans(event.scheduled_at))}<br><span class="soft">{html.escape(format_macro_countdown(event.minutes_to_event))}</span></td>
-              <td class="{status_class}">{html.escape(event.impact_level)}</td>
-              <td>{html.escape(event.gold_impact)}</td>
-            </tr>
+            <article class="macro-event-row">
+              <div class="headline-meta">
+                <span>{html.escape(event.source_name)}</span>
+                <span>{html.escape(format_timestamp_for_humans(event.scheduled_at))} · {html.escape(format_macro_countdown(event.minutes_to_event))}</span>
+              </div>
+              <h3>{html.escape(event.title)}</h3>
+              <div class="tag-row">
+                <span class="source-tag">{html.escape(event.event_type)}</span>
+                <span class="source-tag {status_class}">{html.escape(bias)}</span>
+                <span class="source-tag">{html.escape(event.impact_level)}</span>
+              </div>
+              <div class="macro-values">
+                <div><strong>Prevision</strong><span>{html.escape(empty_macro_value(event.forecast))}</span></div>
+                <div><strong>Ancien</strong><span>{html.escape(empty_macro_value(event.previous))}</span></div>
+                <div><strong>Actuel</strong><span>{html.escape(empty_macro_value(event.actual))}</span></div>
+              </div>
+              <p class="trade-summary"><strong>Impact attendu:</strong> {html.escape(event.gold_impact)}</p>
+              <p class="footer-note"><strong>Pourquoi:</strong> {html.escape(event.why_it_matters)}</p>
+            </article>
             """.strip()
         )
     fedwatch_link = (
@@ -9349,12 +9458,7 @@ def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
       <div class="geo-stat"><strong>FedWatch</strong><span>{html.escape(calendar.fedwatch_status)}</span></div>
       <div class="geo-stat"><strong>Refresh</strong><span>{html.escape(format_timestamp_for_humans(calendar.generated_at))}</span></div>
     </div>
-    <div class="table-wrap">
-      <table class="technical-table">
-        <thead><tr><th>Event</th><th>Titre</th><th>Date / countdown</th><th>Impact</th><th>Pourquoi gold</th></tr></thead>
-        <tbody>{''.join(rows) or '<tr><td colspan="5">Aucun catalyseur macro disponible.</td></tr>'}</tbody>
-      </table>
-    </div>
+    <div class="macro-event-list">{''.join(rows) or '<div class="empty-state">Aucun catalyseur macro disponible.</div>'}</div>
     <div class="metric-footnote">
       {html.escape(calendar.source_note)} {fedwatch_link}. {html.escape(calendar.fedwatch_note)}
     </div>
@@ -9765,6 +9869,30 @@ def news_impact_from_score(score: float | int | None, fallback: str = "NEUTRAL")
     return fallback.upper()
 
 
+def summarize_headline_for_user(title: str, source: str, category: str = "") -> str:
+    clean_title = compact_whitespace(title)
+    clean_source = compact_whitespace(source)
+    clean_category = compact_whitespace(category)
+    if not clean_title:
+        return "Résumé indisponible: le flux ne fournit pas de titre exploitable."
+    prefix = f"{clean_source} rapporte" if clean_source else "Le flux rapporte"
+    if clean_category:
+        return f"{prefix}: {clean_title}. Sujet detecte: {clean_category}."
+    return f"{prefix}: {clean_title}."
+
+
+def news_reason_for_user(item: dict[str, Any]) -> str:
+    detail = str(item.get("detail") or "").strip()
+    if detail:
+        return detail
+    impact = str(item.get("impact", "NEUTRAL")).upper()
+    if impact == "BULLISH":
+        return "Impact XAU/USD: le titre contient un facteur qui peut soutenir l'or, mais il reste a confirmer par le prix et les agents."
+    if impact == "BEARISH":
+        return "Impact XAU/USD: le titre contient un facteur qui peut peser sur l'or, mais il reste a confirmer par le prix et les agents."
+    return "Impact XAU/USD: aucune direction exploitable detectee."
+
+
 def render_news_flow_panel(
     news: list[NewsItem],
     event_facts: list[EventFact],
@@ -9785,6 +9913,8 @@ def render_news_flow_panel(
                 "url": fact.source_url,
                 "confidence": fact.confidence,
                 "kind": "Fact",
+                "summary": summarize_headline_for_user(fact.title, fact.source, ", ".join(fact.themes[:2])),
+                "detail": fact.gold_impact,
             }
         )
     for statement in political_statements:
@@ -9800,6 +9930,8 @@ def render_news_flow_panel(
                 "url": statement.source_url,
                 "confidence": statement.confidence,
                 "kind": "Political",
+                "summary": summarize_headline_for_user(statement.title, statement.source, statement.theme),
+                "detail": statement.gold_impact,
             }
         )
     for item in news:
@@ -9815,6 +9947,8 @@ def render_news_flow_panel(
                 "url": item.link,
                 "confidence": min(100, max(30, 50 + abs(item.score) * 5)),
                 "kind": item.category or "Headline",
+                "summary": summarize_headline_for_user(item.title, item.source, item.category),
+                "detail": "; ".join(item.score_reasons[:2]),
             }
         )
 
@@ -9836,6 +9970,8 @@ def render_news_flow_panel(
                 <span>{html.escape(format_timestamp_for_humans(str(item["published_at"])))}</span>
               </div>
               <h3>{html.escape(str(item["title"]))}</h3>
+              <p class="trade-summary"><strong>Résumé:</strong> {html.escape(str(item.get("summary", "")))}</p>
+              <p class="footer-note"><strong>Lecture XAU/USD:</strong> {html.escape(news_reason_for_user(item))}</p>
               <div class="tag-row">
                 <span class="source-tag {tone}">{impact}</span>
                 <span class="source-tag">Confiance {int(item["confidence"])}/100</span>
@@ -9853,15 +9989,23 @@ def render_news_flow_panel(
     """.strip()
 
 
-def render_agents_scoreboard_panel(agent_results: list[AgentResult]) -> str:
+def render_agents_scoreboard_panel(agent_results: list[AgentResult], settings_payload: dict[str, Any] | None = None) -> str:
     if not agent_results:
         return '<div class="empty-state">Aucun agent disponible sur ce snapshot.</div>'
+    settings = parse_user_settings(settings_payload)
+    active_names = set(settings.active_agents)
     rows = []
     for agent in agent_results:
         tone = recommendation_css_class(agent.bias)
+        enabled = agent.name in active_names and agent.status != "OFF"
+        toggle_label = "ON" if enabled else "OFF"
+        toggle_class = "on" if enabled else "off"
         rows.append(
             f"""
             <tr>
+              <td>
+                <button class="agent-toggle {toggle_class}" type="button" data-agent-toggle="{html.escape(agent.name)}" data-agent-enabled="{'true' if enabled else 'false'}" aria-label="Activer ou desactiver {html.escape(agent.name)}">{toggle_label}</button>
+              </td>
               <td><strong>{html.escape(agent.department)}</strong><br><span class="soft">{html.escape(agent.name)}</span></td>
               <td class="{tone}">{html.escape(agent.bias)}</td>
               <td>{agent.score}/100</td>
@@ -9873,7 +10017,7 @@ def render_agents_scoreboard_panel(agent_results: list[AgentResult]) -> str:
     return f"""
     <div class="table-wrap">
       <table class="technical-table">
-        <thead><tr><th>Departement</th><th>Position</th><th>Score</th><th>Confiance</th><th>Resume</th></tr></thead>
+        <thead><tr><th>Actif</th><th>Departement</th><th>Position</th><th>Score</th><th>Confiance</th><th>Resume</th></tr></thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
     </div>
@@ -10113,7 +10257,7 @@ def render_terminal_state_board(
         ("Trade locked", "LOCKED" if active_trades else "WAIT", f"{active_trades} trade(s) actif(s)", "bullish" if active_trades else "neutral"),
         ("Sources", "STALE" if source_alerts else source_status, source_detail, "caution" if source_alerts else state_tone_class(source_status)),
         ("Contradictions", "ACTIVE" if contradiction_count else "OK", f"{contradiction_count} contradiction(s)", "caution" if contradiction_count else "bullish"),
-        ("Quality gate", "NO_TRADE" if gate_status == "NO_TRADE" else "WAIT force" if wait_forced else gate_status, (market_regime.name if market_regime else "Normal Macro"), state_tone_class(gate_status)),
+        ("Quality gate", "NO_TRADE" if gate_status == "NO_TRADE" else "WAIT force" if wait_forced else gate_status, human_regime_name(market_regime.name if market_regime else "Normal Macro"), state_tone_class(gate_status)),
     ]
     nodes = "".join(
         f"""
@@ -10360,6 +10504,7 @@ def render_market_regime_panel(regime: MarketRegimeAnalysis | None, cross_asset:
     if regime is None:
         return '<div class="footer-note">Regime de marche indisponible.</div>'
 
+    display_name = human_regime_name(regime.name)
     badge_class = "bearish" if regime.name in {"Hormuz / Oil Shock", "Dollar Liquidity Squeeze"} else "bullish" if regime.name == "Safe-Haven Gold" else "neutral"
     reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in regime.reasons[:5]) or "<li>Aucune raison dominante.</li>"
     drivers = cross_asset.drivers if cross_asset else {}
@@ -10374,7 +10519,7 @@ def render_market_regime_panel(regime: MarketRegimeAnalysis | None, cross_asset:
         )
 
     return f"""
-    <div class="trade-verdict {badge_class}">{html.escape(regime.name)} · {regime.score}/100</div>
+    <div class="trade-verdict {badge_class}">{html.escape(display_name)} · {regime.score}/100</div>
     <p class="trade-summary">{html.escape(regime.summary)}</p>
     <div class="geo-grid">
       <div class="geo-stat"><strong>Statut</strong><span>{html.escape(regime.status)}</span></div>
@@ -10624,7 +10769,15 @@ def render_dashboard(
     fragment_endpoint: str = "/fragment",
     poll_seconds: int = 10,
 ) -> str:
-    return render_dashboard_clarity_v2(bundle, live_client, fragment_endpoint, poll_seconds)
+    document = render_dashboard_clarity_v2(bundle, live_client, fragment_endpoint, poll_seconds)
+    return (
+        document.replace("Hormuz / Oil Shock", "Regime politique / petrole")
+        .replace("Hormuz/Oil Shock", "regime politique / petrole")
+        .replace("hormuz-oil-shock", "political-oil")
+        .replace("Oil shock", "stress petrole")
+        .replace("Oil Shock", "stress petrole")
+        .replace("oil shock", "stress petrole")
+    )
 
 def render_dashboard_clarity_v2(
     bundle: BriefingBundle,
@@ -10770,11 +10923,12 @@ def render_dashboard_clarity_v2(
         geopolitical_analysis,
     )
     digest_items = build_information_digest_items(gold, dxy, us10y, bundle.news, geopolitical_analysis)
-    regime_name = market_regime.name if market_regime is not None else "Normal Macro"
+    raw_regime_name = market_regime.name if market_regime is not None else "Normal Macro"
+    regime_name = human_regime_name(raw_regime_name)
     regime_status = market_regime.status if market_regime is not None else "NORMAL"
     regime_alert = (
-        "hormuz-oil-shock"
-        if market_regime is not None and market_regime.name == "Hormuz / Oil Shock"
+        "political-oil"
+        if market_regime is not None and raw_regime_name == "Hormuz / Oil Shock"
         else "ig-weekend"
         if weekend_gold is not None
         else "none"
@@ -10849,6 +11003,12 @@ def render_dashboard_clarity_v2(
       }}
 
       document.addEventListener("click", (event) => {{
+        const agentToggle = event.target.closest("[data-agent-toggle]");
+        if (agentToggle) {{
+          event.preventDefault();
+          toggleAgent(agentToggle.dataset.agentToggle, agentToggle.dataset.agentEnabled !== "true");
+          return;
+        }}
         const trigger = event.target.closest("[data-tab-target]");
         if (!trigger) return;
         event.preventDefault();
@@ -10871,6 +11031,23 @@ def render_dashboard_clarity_v2(
         }} catch (_error) {{
         }} finally {{
           busy = false;
+        }}
+      }}
+      async function toggleAgent(agentName, enabled) {{
+        if (!agentName) return;
+        try {{
+          const response = await fetch("/api/settings", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ action: "set_agent_enabled", agent: agentName, enabled }})
+          }});
+          if (!response.ok) return;
+          if (refreshEnabled) {{
+            await refreshLive();
+          }} else {{
+            window.location.reload();
+          }}
+        }} catch (_error) {{
         }}
       }}
       applyStoredTab();
@@ -11135,21 +11312,21 @@ def render_dashboard_clarity_v2(
     .layout-inspector,
     .layout-reports {{
       display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 14px;
       align-items: start;
       min-width: 0;
     }}
-    .span-3 {{ grid-column: span 3; }}
-    .span-4 {{ grid-column: span 4; }}
-    .span-5 {{ grid-column: span 5; }}
-    .span-6 {{ grid-column: span 6; }}
-    .span-7 {{ grid-column: span 7; }}
-    .span-8 {{ grid-column: span 8; }}
-    .span-12 {{ grid-column: span 12; }}
+    .span-3,
+    .span-4,
+    .span-5,
+    .span-6,
+    .span-7,
+    .span-8,
+    .span-12 {{ grid-column: 1 / -1; }}
     .global-live-strip {{
       display: grid;
-      grid-template-columns: minmax(240px, 1.2fr) repeat(4, minmax(155px, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 10px;
       margin-bottom: 12px;
       padding: 10px;
@@ -11202,7 +11379,7 @@ def render_dashboard_clarity_v2(
       line-height: 1.4;
       overflow-wrap: anywhere;
     }}
-    .state-board {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }}
+    .state-board {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }}
     .state-card {{ border-left: 4px solid var(--blue); }}
     .state-card.bullish {{ border-left-color: var(--bull); }}
     .state-card.bearish {{ border-left-color: var(--bear); }}
@@ -11239,17 +11416,17 @@ def render_dashboard_clarity_v2(
     .headline-grid,
     .agent-grid,
     .geo-columns {{ display: grid; gap: 10px; min-width: 0; }}
-    .metric-strip {{ grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }}
-    .metrics-grid {{ grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); margin-top: 10px; }}
+    .metric-strip {{ grid-template-columns: minmax(0, 1fr); margin-top: 12px; }}
+    .metrics-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
     .trade-levels,
-    .key-levels {{ grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 10px; }}
-    .geo-grid {{ grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-top: 10px; }}
-    .geo-columns {{ grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }}
-    .scenario-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .key-levels {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
+    .geo-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
+    .geo-columns {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
+    .scenario-grid {{ grid-template-columns: minmax(0, 1fr); }}
     .scenario-stack {{ grid-template-columns: 1fr; }}
-    .digest-grid {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 10px; }}
-    .headline-grid {{ grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 10px; }}
-    .agent-grid {{ grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 12px; }}
+    .digest-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
+    .headline-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
+    .agent-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 12px; }}
     .trade-card {{
       border-left: 5px solid var(--muted);
       background: var(--panel);
@@ -11362,7 +11539,29 @@ def render_dashboard_clarity_v2(
     .scenario-plan-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.72); }}
     .scenario-plan-card.neutral {{ border-left-color: rgba(138, 180, 255, 0.72); }}
     .scenario-plan-card.caution {{ border-left-color: rgba(212, 175, 55, 0.72); }}
-    .scenario-plan-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }}
+    .scenario-plan-grid {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }}
+    .agent-toggle {{
+      min-width: 54px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.95);
+      color: var(--soft);
+      font-family: "Space Grotesk", monospace;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+    }}
+    .agent-toggle.on {{ color: var(--bull); border-color: rgba(78, 222, 163, 0.45); background: rgba(78, 222, 163, 0.08); }}
+    .agent-toggle.off {{ color: var(--bear); border-color: rgba(255, 180, 171, 0.45); background: rgba(255, 180, 171, 0.08); }}
+    .macro-event-list {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }}
+    .macro-event-row {{ padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }}
+    .macro-event-row h3 {{ margin: 8px 0; font-size: 17px; line-height: 1.35; }}
+    .macro-values {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 10px 0; }}
+    .macro-values div {{ padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: rgba(6, 14, 32, 0.6); }}
+    .macro-values strong {{ display: block; color: var(--amber); font-family: "Space Grotesk", monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }}
+    .macro-values span {{ color: var(--text); font-size: 13px; }}
     .technical-decision-head {{ display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 10px; }}
     .technical-decision-head h3 {{ margin-top: 2px; font-size: 20px; }}
     .technical-decision-block {{ margin-top: 12px; color: var(--text); }}
@@ -11567,7 +11766,7 @@ def render_dashboard_clarity_v2(
         <section class="tab-view" id="agents" data-tab-view="agents">
           <div class="view-header"><div><div class="section-kicker">Agents</div><h2>Scoring et position de chaque agent</h2><p>Cette page montre qui pousse BUY, SELL, WATCH ou WAIT. Les details techniques restent en bas ou dans Inspector.</p></div></div>
           <section class="layout-agents">
-            <article class="panel span-12"><div class="section-kicker">Scoreboard</div><h2>Positions agents</h2>{render_agents_scoreboard_panel(agent_results)}</article>
+            <article class="panel span-12"><div class="section-kicker">Scoreboard</div><h2>Positions agents</h2>{render_agents_scoreboard_panel(agent_results, settings_payload)}</article>
             <article class="panel span-12"><div class="section-kicker">Orchestrateur v3</div><h2>Vote final, poids et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
             <article class="panel span-6"><div class="section-kicker">Scenario Engine v3</div><h2>Scenario, declencheur et invalidation</h2>{render_scenario_plan_panel(scenario_plan)}</article>
             <article class="panel span-6"><div class="section-kicker">Data Feed Governance</div><h2>Qualite, fraicheur et fiabilite des sources</h2>{render_data_quality_panel(data_quality)}</article>
@@ -11579,8 +11778,9 @@ def render_dashboard_clarity_v2(
           <div class="view-header"><div><div class="section-kicker">News Flow</div><h2>Flux d'informations utiles</h2><p>Titres recents, source, heure et impact. Les headlines neutres, chaines internes et textes d'audit sont masques.</p></div></div>
           <section class="layout-news">
             <article class="panel span-12"><div class="section-kicker">Flux trie</div><h2>News avec impact XAU/USD</h2>{render_news_flow_panel(bundle.news, event_facts, political_statements)}</article>
-            <article class="panel span-6"><div class="section-kicker">Macro Catalysts</div><h2>Calendrier a surveiller</h2>{render_macro_catalysts_panel(macro_catalysts)}</article>
-            <article class="panel span-6"><div class="section-kicker">Flows officiels</div><h2>COT et ETF</h2>{render_cftc_positioning_panel(cftc_positioning)}{render_etf_flows_panel(etf_flows_analysis)}</article>
+            <article class="panel span-12"><div class="section-kicker">Macro Catalysts</div><h2>Calendrier a surveiller</h2>{render_macro_catalysts_panel(macro_catalysts)}</article>
+            <article class="panel span-12"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2>{render_cftc_positioning_panel(cftc_positioning)}</article>
+            <article class="panel span-12"><div class="section-kicker">WGC / ETF gold flows</div><h2>Flux ETF or officiels</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
           </section>
         </section>
 
@@ -11593,8 +11793,8 @@ def render_dashboard_clarity_v2(
             <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaines marche</h2>{render_event_facts_panel(event_facts)}</article>
             <article class="panel span-12"><div class="section-kicker">Political Statements</div><h2>Declarations politiques sourcees</h2>{render_political_statements_panel(political_statements)}</article>
             <article class="panel span-12"><div class="section-kicker">Confluence inter-marches</div><h2>Cross-assets, DXY, taux reels et confirmations</h2>{render_cross_asset_panel(cross_asset_analysis, real_yield)}</article>
-            <article class="panel span-6"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2>{render_cftc_positioning_panel(cftc_positioning)}</article>
-            <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>WGC + GLD + IAU</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
+            <article class="panel span-12"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2>{render_cftc_positioning_panel(cftc_positioning)}</article>
+            <article class="panel span-12"><div class="section-kicker">ETF flows officiels</div><h2>WGC + GLD + IAU</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
             <article class="panel span-12"><div class="section-kicker">Bloc macro officiel</div><h2>FRED DGS10 | DGS2 | T10YIE | DFII10</h2>{render_official_macro_panel(official_macro_rates, us10y)}</article>
             <article class="panel span-12"><div class="section-kicker">Chart Store OHLC</div><h2>Diagnostic donnees OHLC internes</h2>{render_chart_store_panel(chart_store)}</article>
             <article class="panel span-12"><div class="section-kicker">Settings</div><h2>Controle utilisateur</h2>{render_settings_panel(settings_payload, settings_validation_payload)}</article>
@@ -11851,6 +12051,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    agent_results = apply_user_settings_to_agents(agent_results, user_settings)
     legacy_global_recommendation = global_recommendation
     global_recommendation, orchestrator_decision = build_orchestrator_decision(
         gold,
@@ -11862,6 +12063,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_decision=technical_decision,
     )
     agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
+    agent_results = apply_user_settings_to_agents(agent_results, user_settings)
     scenario_plan = build_scenario_plan(
         gold,
         technical_decision,
@@ -12066,6 +12268,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         political_statements=political_statements,
     )
+    agent_results = apply_user_settings_to_agents(agent_results, user_settings)
     legacy_global_recommendation = global_recommendation
     global_recommendation, orchestrator_decision = build_orchestrator_decision(
         gold,
@@ -12077,6 +12280,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_decision=technical_decision,
     )
     agent_results = update_orchestrator_agent(agent_results, orchestrator_decision)
+    agent_results = apply_user_settings_to_agents(agent_results, user_settings)
     scenario_plan = build_scenario_plan(
         gold,
         technical_decision,
@@ -12543,6 +12747,46 @@ def serve_dashboard(args: argparse.Namespace) -> int:
     )
 
     class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            route = parsed.path or "/"
+
+            if route != "/api/settings":
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "Not Found"}).encode("utf-8"))
+                return
+
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                raw_body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                body = json.loads(raw_body or "{}")
+                action = str(body.get("action", ""))
+                if action != "set_agent_enabled":
+                    raise ValueError("action settings inconnue")
+                agent = str(body.get("agent", ""))
+                enabled = bool(body.get("enabled", False))
+                settings, validation = set_agent_enabled(agent, enabled)
+                cache.latest_bundle = None
+                payload = {
+                    "ok": True,
+                    "settings": asdict(settings),
+                    "validation": asdict(validation),
+                }
+                status_code = 200
+            except Exception as exc:
+                payload = {"ok": False, "error": str(exc)}
+                status_code = 400
+
+            encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             route = parsed.path or "/"

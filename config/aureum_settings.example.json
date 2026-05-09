@@ -1,12 +1,16 @@
 {
   "active_agents": [
     "CorrelationAgent",
+    "EventFactsAgent",
     "FlowPositioningAgent",
     "GeopoliticalOilShockAgent",
     "MacroAgent",
+    "OrchestratorAgent",
     "PriceAgent",
+    "RiskManagerAgent",
     "SentimentNewsAgent",
-    "TechnicalAgent"
+    "TechnicalAgent",
+    "TrumpPoliticalStatementsAgent"
   ],
   "scoring_mode": "aggressive_controlled",
   "minimum_agent_confidence": 50,

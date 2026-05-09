@@ -29,6 +29,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Scenario Engine v3: traduit la decision en plan trader lisible sans creer automatiquement un trade.
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
 - Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
+- Profil agressif controle: seuil trade a `55/100`, RR minimal `0.65R`, une contradiction isolee toleree si la majorite des agents est nette.
 - Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
 - Charte principale v3: TradingView dans Market/Technical, pas la charte interne.
 - Trade Ledger: signal locking append-only.

@@ -1263,6 +1263,49 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(decision.status, "WAIT")
         self.assertTrue(any("Contradiction" in reason for reason in decision.quality_gate_reasons))
 
+    def test_orchestrator_absorbs_single_contradiction_when_majority_is_clear(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        legacy = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=56,
+            summary="Ancien moteur haussier.",
+            reasons=["legacy"],
+            stop_loss=2385.0,
+            take_profit_1=2410.0,
+            take_profit_2=2440.0,
+            source_note="Test.",
+        )
+        agents = [
+            AgentResult("TechnicalAgent", "Technical", "BUY", 82, 72, "Technique haussiere."),
+            AgentResult("MacroAgent", "Macro", "SELL", 80, 76, "Macro defavorable."),
+            AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "BUY", 66, 70, "Risque favorable."),
+            AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
+        ]
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=90,
+            status="HIGH",
+            summary="Sources critiques ok.",
+            missing_sources=[],
+            stale_sources=[],
+            weak_sources=[],
+            contradictions=[],
+        )
+        recommendation, decision = build_orchestrator_decision(
+            gold,
+            legacy,
+            agents,
+            data_quality=quality,
+            market_regime=MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+            event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
+            technical_decision=self.technical_decision("BUY", gold.price),
+        )
+        self.assertEqual(recommendation.verdict, "BUY")
+        self.assertEqual(decision.status, "TRADE_BUY")
+        self.assertTrue(any("majorite nette" in reason for reason in decision.quality_gate_reasons))
+
     def test_orchestrator_allows_degraded_quality_and_soft_event_when_direction_clear(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         legacy = TradeRecommendation(
@@ -1443,6 +1486,54 @@ class AnalysisShapeTests(unittest.TestCase):
             self.assertEqual(summary.quality_gate_status, "VALIDATED")
             self.assertEqual(len(summary.active_trades), 1)
             self.assertEqual(summary.active_trades[0].agents_contradicting, [])
+
+    def test_trade_gate_aggressive_profile_locks_clear_majority(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=56,
+            summary="Signal verrouillable en profil agressif.",
+            reasons=["Majorite claire"],
+            stop_loss=2385.0,
+            take_profit_1=2410.0,
+            take_profit_2=2430.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot(
+            generated_at="2026-04-24T10:00:00+00:00",
+            score=66,
+            status="DEGRADED",
+            summary="Sources secondaires degradees.",
+            missing_sources=[],
+            stale_sources=["World Gold Council ETF flows"],
+            weak_sources=[],
+            contradictions=[],
+        )
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 60, 70, "Prix favorable."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 64, 70, "Technique valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 62, 76, "Macro valide."),
+            AgentResult("CorrelationAgent", "Market", "SELL", 58, 70, "Contre-signal isole."),
+            AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "NEUTRAL", 50, 70, "Flux neutres."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+            )
+            self.assertEqual(summary.quality_gate_status, "VALIDATED")
+            self.assertEqual(len(summary.active_trades), 1)
+            self.assertEqual(summary.active_trades[0].agents_contradicting, ["CorrelationAgent"])
+            self.assertEqual(summary.active_trades[0].global_score_at_creation, 56)
 
     def test_orchestrator_has_no_elliott_component(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)

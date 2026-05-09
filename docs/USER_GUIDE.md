@@ -201,6 +201,13 @@ Depuis la mise a jour scoring du 07/05/2026, un warning ne force plus automatiqu
 - signal exploitable: `TRADE_BUY` ou `TRADE_SELL` exige sources, confirmations, invalidation et risk/reward suffisants;
 - signal valide avec confiance reduite: `BUY` ou `SELL` reste possible dans les surfaces de synthese, mais les warnings sont visibles dans Decision/Inspector.
 
+Depuis le profil agressif controle:
+
+- le terminal accepte plus facilement `WATCH_BUY`, `WATCH_SELL` et `TRADE_*` quand la majorite des agents va clairement dans le meme sens;
+- une seule contradiction ne bloque pas automatiquement;
+- score `55-58`, data quality degradee ou RR `0.65-0.80R` deviennent des warnings de taille/confiance;
+- les vrais stop restent intacts: source critique bloquee, data quality tres faible, direction absente, SL/TP incoherents, RR sous `0.65R` ou regime extreme.
+
 ### Trade Plan
 
 Un Trade Plan est cree uniquement quand le Trade Quality Gate valide le signal. Il fige:

@@ -1496,38 +1496,52 @@ def build_trade_quality_gate(
         for agent in decision_agents
         if agent.bias in {"BUY", "SELL"} and agent.bias != global_recommendation.verdict
     ]
+    aggressive_majority = len(validating) >= 3 and len(contradicting) <= 1
 
-    if global_recommendation.score < 58:
-        hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 58.")
+    if global_recommendation.score < 55:
+        hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < 55.")
+    elif global_recommendation.score < 58:
+        advisory_reasons.append(
+            f"Score global agressif: {global_recommendation.score}/100; trade autorise seulement si les autres garde-fous restent valides."
+        )
     if data_quality is None:
         hard_reasons.append("Data quality indisponible.")
     elif data_quality.preflight and data_quality.preflight.trade_blocked:
         hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
-    elif data_quality.score < 55:
-        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 55.")
-    elif data_quality.score < 70:
+    elif data_quality.score < 52:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 52.")
+    elif data_quality.score < 68:
         advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; taille et confiance a reduire.")
     if len(validating) < 2:
         hard_reasons.append("Moins de deux agents decisionnels valident la direction.")
-    if len(contradicting) >= 3:
+    if len(contradicting) >= 3 and not aggressive_majority:
         hard_reasons.append("Trop de contradictions entre agents decisionnels.")
-    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock" and market_regime.score >= 75:
-        hard_reasons.append("Regime Hormuz/Oil Shock fort: trade locking suspendu sans validation manuelle.")
+    elif contradicting and aggressive_majority:
+        advisory_reasons.append(
+            f"Contradiction absorbee par majorite nette: {len(validating)} agent(s) valident, {len(contradicting)} contredit."
+        )
+    if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
+        if market_regime.score >= 85:
+            hard_reasons.append("Regime geopolitique/petrole extreme: trade locking suspendu sans validation manuelle.")
+        elif market_regime.score >= 75:
+            advisory_reasons.append("Regime geopolitique/petrole fort: trade autorise en taille reduite si le signal reste confirme.")
     rr1 = compute_risk_reward(
         global_recommendation.verdict,
         gold.price,
         global_recommendation.stop_loss,
         global_recommendation.take_profit_1,
     )
-    if rr1 < 0.8:
-        hard_reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.80R.")
+    if rr1 < 0.65:
+        hard_reasons.append(f"Risk/reward TP1 insuffisant: {rr1:.2f}R < 0.65R.")
+    elif rr1 < 0.8:
+        advisory_reasons.append(f"Risk/reward TP1 agressif: {rr1:.2f}R; TP2/TP3 doivent compenser.")
     if global_recommendation.stop_loss == global_recommendation.take_profit_1:
         hard_reasons.append("SL/TP non exploitables.")
 
     allowed = not hard_reasons
     reasons = [*hard_reasons, *advisory_reasons]
     if allowed:
-        reasons.append("Quality Gate valide: score, data quality exploitable, agents decisionnels et regime permettent un Trade Snapshot.")
+        reasons.append("Quality Gate agressif valide: score, data quality exploitable, majorite decisionnelle et risk/reward permettent un Trade Snapshot.")
     return allowed, reasons, validating, contradicting
 
 
@@ -5860,8 +5874,19 @@ def build_orchestrator_quality_gate(
         if (direction == "BUY" and component.score >= 56)
         or (direction == "SELL" and component.score <= 44)
     ]
-    if strong_buy and strong_sell:
+    opposing_components = [
+        component
+        for component in directional_components
+        if (direction == "BUY" and component.score <= 44)
+        or (direction == "SELL" and component.score >= 56)
+    ]
+    clear_component_majority = direction in {"BUY", "SELL"} and len(supporting_components) >= 3 and len(opposing_components) <= 1
+    if strong_buy and strong_sell and not clear_component_majority:
         hard_reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
+    elif strong_buy and strong_sell:
+        advisory_reasons.append(
+            f"Contradiction forte absorbee par majorite nette: {len(supporting_components)} soutien(s), {len(opposing_components)} opposition."
+        )
     directional_contradictions = [item for item in contradictions if item.startswith("BUY vs SELL")]
     if directional_contradictions:
         advisory_reasons.extend(directional_contradictions[:2])
@@ -5873,9 +5898,9 @@ def build_orchestrator_quality_gate(
         hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
     elif data_quality.score < 50:
         hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 50.")
-    elif data_quality.score < 62:
+    elif data_quality.score < 56:
         trade_blockers.append(f"Source quality limitee: {data_quality.score}/100; trade bloque mais setup surveillable.")
-    elif data_quality.score < 70:
+    elif data_quality.score < 68:
         advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; signal autorise mais confiance reduite.")
     if event_mode is not None and event_mode.active:
         if event_mode.score >= 75:
@@ -5883,12 +5908,16 @@ def build_orchestrator_quality_gate(
         else:
             advisory_reasons.append(f"Mode event surveille ({event_mode.score}/100): confirmation d'entree exigee.")
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
-        if market_regime.score >= 75:
-            trade_blockers.append("Regime Hormuz/Oil Shock fort: setup seulement, validation manuelle requise.")
+        if market_regime.score >= 85:
+            trade_blockers.append("Regime geopolitique/petrole extreme: setup seulement, validation manuelle requise.")
+        elif market_regime.score >= 75:
+            advisory_reasons.append("Regime geopolitique/petrole fort: signal autorise avec taille reduite.")
         else:
-            advisory_reasons.append("Regime Hormuz/Oil Shock surveille: reduire confiance et taille.")
-    if verdict in {"BUY", "SELL"} and score < 58:
-        trade_blockers.append(f"Score orchestrateur insuffisant pour TRADE_*: {score}/100 < 58.")
+            advisory_reasons.append("Regime geopolitique/petrole surveille: reduire confiance et taille.")
+    if verdict in {"BUY", "SELL"} and score < 55:
+        trade_blockers.append(f"Score orchestrateur insuffisant pour TRADE_*: {score}/100 < 55.")
+    elif verdict in {"BUY", "SELL"} and score < 58:
+        advisory_reasons.append(f"Score orchestrateur agressif: {score}/100; validation maintenue seulement avec confirmations.")
     if direction in {"BUY", "SELL"} and len(supporting_components) < 2:
         trade_blockers.append("Confirmation insuffisante: moins de deux composants decisionnels soutiennent la direction.")
     if technical_decision is None:
@@ -5901,8 +5930,10 @@ def build_orchestrator_quality_gate(
             trade_blockers.append("Setup sans invalidation technique claire.")
     rr, rr_reason = estimate_orchestrator_risk_reward(gold, verdict, legacy_recommendation, technical_decision)
     if direction in {"BUY", "SELL"}:
-        if rr < 0.80:
-            trade_blockers.append(f"Risk/reward minimum non atteint: {rr:.2f} < 0.80.")
+        if rr < 0.65:
+            trade_blockers.append(f"Risk/reward minimum non atteint: {rr:.2f} < 0.65.")
+        elif rr < 0.80:
+            advisory_reasons.append(f"Risk/reward agressif: {rr:.2f}; trade plus petit ou TP2 necessaire.")
         else:
             advisory_reasons.append(rr_reason)
     if verdict == "WAIT":

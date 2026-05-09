@@ -228,15 +228,22 @@ Une news peut devenir:
 Un Trade Plan n'est cree que si:
 
 - verdict `BUY` ou `SELL`;
-- score global suffisant ou statut v3 `TRADE_BUY` / `TRADE_SELL`;
+- score global suffisant: seuil agressif controle a `55/100`, warning entre `55` et `58`;
 - Preflight non bloquant;
-- data quality exploitable, meme degradee si elle n'est pas bloquante;
+- data quality exploitable: blocage sous `52/100`, warning sous `68/100`;
 - au moins deux agents decisionnels valident la direction;
-- contradictions directionnelles limitees;
-- risk/reward exploitable;
+- contradictions directionnelles limitees: une contradiction isolee ne bloque plus si au moins trois agents valident la direction;
+- risk/reward exploitable: blocage sous `0.65R`, warning entre `0.65R` et `0.80R`;
 - pas de regime special bloquant.
 
 Sinon, le Trade Tracker affiche `WAIT` et explique pourquoi.
+
+Profil agressif controle:
+
+- objectif: reduire les faux `WAIT` quand la majorite des agents est claire;
+- un seul agent contre ne suffit pas a bloquer un trade si la direction est validee par une majorite nette;
+- les warnings reduisent la confiance et la taille, mais ne bloquent plus automatiquement;
+- les blocages durs restent: Preflight bloquant, source critique absente/stale, data quality tres faible, verdict sans direction, SL/TP incoherents, RR < `0.65R`, regime geopolitique/petrole extreme.
 
 Agents decisionnels utilises pour compter confirmations/contradictions de TradePlan:
 

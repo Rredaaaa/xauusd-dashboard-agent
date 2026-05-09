@@ -718,6 +718,14 @@ Livraison v1:
 - les warnings non bloquants restent visibles sans forcer `WAIT`;
 - l'affichage Decision expose les raisons de poids dynamiques par composant.
 
+Mise a jour agressive controlee:
+- seuil orchestrateur `TRADE_*`: `55/100` minimum, warning entre `55` et `58`;
+- data quality: blocage sous `52/100`, warning sous `68/100`;
+- risk/reward: blocage sous `0.65R`, warning entre `0.65R` et `0.80R`;
+- une contradiction isolee ne force plus `WAIT` si la majorite directionnelle est nette;
+- les regimes geopolitique/petrole forts passent en warning; seuls les regimes extremes bloquent automatiquement;
+- les blocages durs restent actifs: Preflight bloquant, source critique absente/stale, setup sans invalidation, direction absente ou SL/TP incoherents.
+
 Definition de termine:
 - le terminal peut donner un setup surveille sans verrouiller un trade.
 

@@ -1,6 +1,22 @@
 # Phase 30A - UX Product Split + Noise Gate
 
-Statut: a valider avant implementation.
+Statut: implementation lancee.
+
+Derniere mise a jour: Phase 30A appliquee dans le dashboard local.
+
+Ce qui est implemente:
+- navigation principale reduite a `Desk`, `Agents`, `News Flow`, `Reports`, `Inspector`;
+- `Desk` recentre sur prix, chef de file, biais, TradingView, scenario et signal locked;
+- `Agents` affiche le scoreboard des agents, l'orchestrateur, les contradictions et la qualite source;
+- `News Flow` trie les informations par heure et masque les headlines neutres par defaut;
+- `Reports` garde exports et Trade Ledger;
+- `Inspector` recupere la plomberie moteur: source registry, regime interne, event facts, declarations politiques, inventaire agents;
+- SL/TP Gate cote UI: les niveaux ne sont plus affiches comme trade exploitable si le statut n'est pas `TRADE_BUY` ou `TRADE_SELL`.
+
+Reste a valider:
+- screenshots desktop/mobile;
+- audit visuel fin de largeur, typographie et densite;
+- suppression progressive du HTML legacy cache quand le split 5 pages sera confirme.
 
 Skill UX installe:
 - `ui-ux-pro-max`
@@ -186,4 +202,3 @@ Phase 30A est terminee quand:
 - aucun terme interne interdit n'apparait hors Inspector;
 - les niveaux SL/TP incoherents ne peuvent plus apparaitre comme trade exploitable;
 - screenshots desktop et mobile valident la lisibilite.
-

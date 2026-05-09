@@ -8596,22 +8596,34 @@ def render_technical_decision_panel(decision: TechnicalDecision | None) -> str:
         if contradictions
         else '<div class="technical-decision-block"><strong>Contradictions</strong><p>Aucune contradiction technique bloquante.</p></div>'
     )
+    is_trade_signal = decision.status in {"TRADE_BUY", "TRADE_SELL"} and trade_direction_from_text(decision.direction)
+    if is_trade_signal:
+        levels_html = f"""
+        <div class="trade-levels">
+          <div><span>Zone entree</span><strong>{decision.entry_zone_low:.2f} / {decision.entry_zone_high:.2f}</strong></div>
+          <div><span>SL</span><strong>{decision.stop_loss:.2f}</strong></div>
+          <div><span>TP1</span><strong>{decision.tp1:.2f}</strong></div>
+          <div><span>TP2</span><strong>{decision.tp2:.2f}</strong></div>
+          <div><span>TP3</span><strong>{decision.tp3:.2f}</strong></div>
+        </div>
+        """.strip()
+    else:
+        levels_html = """
+        <div class="decision-item">
+          <strong>Niveaux non affiches comme trade</strong>
+          <span>Le moteur technique est en surveillance. Les SL/TP ne sont publies que lorsque le statut devient TRADE_BUY ou TRADE_SELL.</span>
+        </div>
+        """.strip()
     return f"""
     <div class="technical-decision-card {tone}">
       <div class="technical-decision-head">
         <div>
           <div class="section-kicker">TechnicalDecisionEngine</div>
-          <h3>{html.escape(decision.direction)} · {html.escape(decision.structure)}</h3>
+          <h3>{html.escape(decision.status)} · {html.escape(decision.structure)}</h3>
         </div>
         <div class="global-score">{decision.score}<small>/100</small></div>
       </div>
-      <div class="trade-levels">
-        <div><span>Zone entree</span><strong>{decision.entry_zone_low:.2f} / {decision.entry_zone_high:.2f}</strong></div>
-        <div><span>SL</span><strong>{decision.stop_loss:.2f}</strong></div>
-        <div><span>TP1</span><strong>{decision.tp1:.2f}</strong></div>
-        <div><span>TP2</span><strong>{decision.tp2:.2f}</strong></div>
-        <div><span>TP3</span><strong>{decision.tp3:.2f}</strong></div>
-      </div>
+      {levels_html}
       <div class="technical-decision-block"><strong>Trigger</strong><p>{html.escape(decision.trigger)}</p></div>
       <div class="technical-decision-block"><strong>Invalidation</strong><p>{html.escape(decision.invalidation)}</p></div>
       <div class="technical-decision-block"><strong>Raisons</strong><ul>{reasons}</ul></div>
@@ -9163,6 +9175,260 @@ def trade_status_class(status: str) -> str:
     if status in {"sl_hit", "invalidated"}:
         return "bearish"
     return "neutral"
+
+
+def trade_direction_from_text(value: str) -> str:
+    upper = (value or "").upper()
+    if "BUY" in upper:
+        return "BUY"
+    if "SELL" in upper:
+        return "SELL"
+    return ""
+
+
+def recommendation_levels_are_valid(recommendation: TradeRecommendation | None) -> bool:
+    if recommendation is None:
+        return False
+    direction = trade_direction_from_text(recommendation.verdict)
+    entry = recommendation.take_profit_1
+    if direction == "BUY":
+        return recommendation.stop_loss < entry < recommendation.take_profit_2
+    if direction == "SELL":
+        return recommendation.stop_loss > entry > recommendation.take_profit_2
+    return False
+
+
+def trade_plan_levels_are_valid(plan: TradePlan | None) -> bool:
+    if plan is None:
+        return False
+    direction = trade_direction_from_text(plan.direction)
+    entry = plan.reference_price
+    if direction == "BUY":
+        return plan.stop_loss < entry <= plan.tp1 < plan.tp2 < plan.tp3
+    if direction == "SELL":
+        return plan.stop_loss > entry >= plan.tp1 > plan.tp2 > plan.tp3
+    return False
+
+
+def visible_lead_status(
+    global_recommendation: TradeRecommendation,
+    orchestrator_decision: OrchestratorDecision | None,
+) -> tuple[str, int, str]:
+    if orchestrator_decision is not None:
+        return orchestrator_decision.status, orchestrator_decision.score, orchestrator_decision.verdict
+    return global_recommendation.verdict, global_recommendation.score, global_recommendation.verdict
+
+
+def render_desk_position_summary(
+    global_recommendation: TradeRecommendation,
+    orchestrator_decision: OrchestratorDecision | None,
+    scenario_plan: ScenarioPlan | None,
+) -> str:
+    lead_status, lead_score, lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
+    tone = state_tone_class(lead_status)
+    trigger = scenario_plan.trigger if scenario_plan else "Attendre une confirmation prix + agents."
+    invalidation = scenario_plan.invalidation if scenario_plan else "Signal invalide si les confirmations disparaissent."
+    is_trade = lead_status in {"TRADE_BUY", "TRADE_SELL"}
+    levels_ok = is_trade and recommendation_levels_are_valid(global_recommendation)
+    if levels_ok:
+        level_html = f"""
+        <div class="trade-levels">
+          <div><span>SL</span><strong>{global_recommendation.stop_loss:.2f}</strong></div>
+          <div><span>TP1</span><strong>{global_recommendation.take_profit_1:.2f}</strong></div>
+          <div><span>TP2</span><strong>{global_recommendation.take_profit_2:.2f}</strong></div>
+        </div>
+        """.strip()
+    else:
+        level_html = f"""
+        <div class="decision-item">
+          <strong>Aucun trade verrouille</strong>
+          <span>Statut actuel: {html.escape(lead_status)}. Le Desk affiche une surveillance, pas une position exploitable avec SL/TP.</span>
+        </div>
+        """.strip()
+    return f"""
+    <div class="global-position">
+      <strong class="{tone}">{html.escape(lead_status)}</strong>
+      <span>Chef de file: {html.escape(lead_bias)} · Score {lead_score}/100</span>
+    </div>
+    <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
+    {level_html}
+    <div class="scenario-plan-grid">
+      <div class="technical-decision-block"><strong>Declencheur attendu</strong><p>{html.escape(trigger)}</p></div>
+      <div class="technical-decision-block"><strong>Invalidation</strong><p>{html.escape(invalidation)}</p></div>
+    </div>
+    """.strip()
+
+
+def render_signal_locked_panel(
+    trade_ledger: TradeLedgerSummary | None,
+    global_recommendation: TradeRecommendation,
+    orchestrator_decision: OrchestratorDecision | None,
+    scenario_plan: ScenarioPlan | None,
+) -> str:
+    active_valid = [
+        plan for plan in (trade_ledger.active_trades if trade_ledger else []) if trade_plan_levels_are_valid(plan)
+    ]
+    if active_valid:
+        plan = active_valid[0]
+        return f"""
+        <div class="trade-verdict bullish">Signal locked · {html.escape(plan.direction)}</div>
+        <div class="trade-levels">
+          <div><span>Entry</span><strong>{plan.reference_price:.2f}</strong></div>
+          <div><span>SL</span><strong>{plan.stop_loss:.2f}</strong></div>
+          <div><span>TP1</span><strong>{plan.tp1:.2f}</strong></div>
+          <div><span>TP2</span><strong>{plan.tp2:.2f}</strong></div>
+          <div><span>TP3</span><strong>{plan.tp3:.2f}</strong></div>
+        </div>
+        <p class="trade-summary">TradePlan historise: les niveaux restent fixes meme si le signal live change.</p>
+        """.strip()
+    lead_status, lead_score, _lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
+    action = scenario_plan.action if scenario_plan else "Attendre."
+    return f"""
+    <div class="trade-verdict {state_tone_class(lead_status)}">Pas de signal locked</div>
+    <div class="decision-grid">
+      <div class="decision-item"><strong>Signal live</strong><span>{html.escape(lead_status)} · {lead_score}/100</span></div>
+      <div class="decision-item"><strong>Prochaine action</strong><span>{html.escape(action)}</span></div>
+    </div>
+    <p class="trade-summary">Le terminal ne transforme pas une surveillance en trade tant que le Quality Gate ne valide pas une entree exploitable.</p>
+    """.strip()
+
+
+def parse_news_sort_key(value: str) -> float:
+    if not value:
+        return 0.0
+    try:
+        return parsedate_to_datetime(value).timestamp()
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def news_impact_from_score(score: float | int | None, fallback: str = "NEUTRAL") -> str:
+    if score is None:
+        return fallback.upper()
+    if score > 0:
+        return "BULLISH"
+    if score < 0:
+        return "BEARISH"
+    return fallback.upper()
+
+
+def render_news_flow_panel(
+    news: list[NewsItem],
+    event_facts: list[EventFact],
+    political_statements: list[PoliticalStatement],
+    limit: int = 12,
+) -> str:
+    entries: list[dict[str, Any]] = []
+    for fact in event_facts:
+        impact = getattr(fact, "impact_bias", "NEUTRAL").upper()
+        if impact == "NEUTRAL":
+            continue
+        entries.append(
+            {
+                "title": fact.title,
+                "source": fact.source,
+                "published_at": fact.published_at,
+                "impact": impact,
+                "url": fact.source_url,
+                "confidence": fact.confidence,
+                "kind": "Fact",
+            }
+        )
+    for statement in political_statements:
+        impact = news_impact_from_score(statement.score)
+        if impact == "NEUTRAL":
+            continue
+        entries.append(
+            {
+                "title": statement.title,
+                "source": statement.source,
+                "published_at": statement.published_at,
+                "impact": impact,
+                "url": statement.source_url,
+                "confidence": statement.confidence,
+                "kind": "Political",
+            }
+        )
+    for item in news:
+        impact = news_impact_from_score(item.score)
+        if impact == "NEUTRAL":
+            continue
+        entries.append(
+            {
+                "title": item.title,
+                "source": item.source,
+                "published_at": item.published_at,
+                "impact": impact,
+                "url": item.link,
+                "confidence": min(100, max(30, 50 + abs(item.score) * 5)),
+                "kind": item.category or "Headline",
+            }
+        )
+
+    entries.sort(key=lambda item: parse_news_sort_key(str(item["published_at"])), reverse=True)
+    cards = []
+    for item in entries[:limit]:
+        impact = str(item["impact"])
+        tone = "bullish" if impact == "BULLISH" else "bearish" if impact == "BEARISH" else "neutral"
+        link = (
+            f'<a href="{html.escape(str(item["url"]))}" target="_blank" rel="noopener noreferrer">Ouvrir</a>'
+            if item.get("url")
+            else ""
+        )
+        cards.append(
+            f"""
+            <article class="headline-card {tone}">
+              <div class="headline-meta">
+                <span>{html.escape(str(item["source"]))}</span>
+                <span>{html.escape(format_timestamp_for_humans(str(item["published_at"])))}</span>
+              </div>
+              <h3>{html.escape(str(item["title"]))}</h3>
+              <div class="tag-row">
+                <span class="source-tag {tone}">{impact}</span>
+                <span class="source-tag">Confiance {int(item["confidence"])}/100</span>
+                <span class="source-tag">{html.escape(str(item["kind"]))}</span>
+              </div>
+              {link}
+            </article>
+            """.strip()
+        )
+    if not cards:
+        return '<div class="empty-state">Aucune news bullish ou bearish recente avec impact exploitable. Les headlines neutres restent masquees.</div>'
+    return f"""
+    <div class="footer-note">Flux trie par heure de publication. Les headlines neutres et le bruit interne sont masques par defaut.</div>
+    <div class="headline-grid">{''.join(cards)}</div>
+    """.strip()
+
+
+def render_agents_scoreboard_panel(agent_results: list[AgentResult]) -> str:
+    if not agent_results:
+        return '<div class="empty-state">Aucun agent disponible sur ce snapshot.</div>'
+    rows = []
+    for agent in agent_results:
+        tone = recommendation_css_class(agent.bias)
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(agent.department)}</strong><br><span class="soft">{html.escape(agent.name)}</span></td>
+              <td class="{tone}">{html.escape(agent.bias)}</td>
+              <td>{agent.score}/100</td>
+              <td>{agent.confidence}/100</td>
+              <td>{html.escape(agent.summary[:170])}</td>
+            </tr>
+            """.strip()
+        )
+    return f"""
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Departement</th><th>Position</th><th>Score</th><th>Confiance</th><th>Resume</th></tr></thead>
+        <tbody>{''.join(rows)}</tbody>
+      </table>
+    </div>
+    """.strip()
 
 
 def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
@@ -10863,7 +11129,8 @@ def render_dashboard_clarity(
     (() => {{
       const app = document.getElementById("dashboard-app");
       const storageKey = "aureumFlux.activeTab";
-      const defaultTab = "dashboard";
+      const defaultTab = "desk";
+      const allowedTabs = new Set(["desk", "agents", "news", "reports", "inspector"]);
       const refreshEnabled = {refresh_enabled};
       let busy = false;
 
@@ -10874,7 +11141,7 @@ def render_dashboard_clarity(
       }}
 
       function setActiveTab(tab, persist = true) {{
-        const requestedTab = tab || defaultTab;
+        const requestedTab = allowedTabs.has(tab || "") ? tab : defaultTab;
         const view = document.querySelector(`[data-tab-view="${{requestedTab}}"]`);
         const activeTab = view ? requestedTab : defaultTab;
         document.querySelectorAll("[data-tab-view]").forEach((element) => {{
@@ -12156,20 +12423,21 @@ def render_dashboard_clarity_v2(
     active_trades = len(trade_ledger.active_trades) if trade_ledger else 0
     data_quality_score = data_quality.score if data_quality else 0
     data_quality_status = data_quality.status if data_quality else "N/A"
+    lead_status, lead_score, lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
+    lead_class = state_tone_class(lead_status)
+    locked_status = "LOCKED" if active_trades else "NO LOCK"
+    locked_class = "bullish" if active_trades else "neutral"
 
     def nav_links(css_class: str) -> str:
         items = [
-            ("dashboard", "Dashboard"),
-            ("market", "Market"),
-            ("decision", "Decision"),
-            ("technical", "Technical"),
-            ("macro", "Macro"),
-            ("geopolitics", "Geopolitics & Flows"),
-            ("inspector", "Inspector"),
+            ("desk", "Desk"),
+            ("agents", "Agents"),
+            ("news", "News Flow"),
             ("reports", "Reports"),
+            ("inspector", "Inspector"),
         ]
         return "".join(
-            f'<a class="{css_class}{" active" if key == "dashboard" else ""}" href="#{key}" data-tab-target="{key}" aria-selected="{"true" if key == "dashboard" else "false"}">{html.escape(label)}</a>'
+            f'<a class="{css_class}{" active" if key == "desk" else ""}" href="#{key}" data-tab-target="{key}" aria-selected="{"true" if key == "desk" else "false"}">{html.escape(label)}</a>'
             for key, label in items
         )
 
@@ -12180,18 +12448,20 @@ def render_dashboard_clarity_v2(
     (() => {{
       const app = document.getElementById("dashboard-app");
       const storageKey = "aureumFlux.activeTab";
-      const defaultTab = "dashboard";
+      const defaultTab = "desk";
+      const allowedTabs = new Set(["desk", "agents", "news", "reports", "inspector"]);
       const refreshEnabled = {refresh_enabled};
       let busy = false;
 
       function getRequestedTab() {{
         const hashTab = window.location.hash ? window.location.hash.replace("#", "") : "";
         const storedTab = window.localStorage.getItem(storageKey) || "";
-        return hashTab || storedTab || defaultTab;
+        const requested = hashTab || storedTab || defaultTab;
+        return allowedTabs.has(requested) ? requested : defaultTab;
       }}
 
       function setActiveTab(tab, persist = true) {{
-        const requestedTab = tab || defaultTab;
+        const requestedTab = allowedTabs.has(tab || "") ? tab : defaultTab;
         const view = document.querySelector(`[data-tab-view="${{requestedTab}}"]`);
         const activeTab = view ? requestedTab : defaultTab;
         document.querySelectorAll("[data-tab-view]").forEach((element) => {{
@@ -12492,6 +12762,9 @@ def render_dashboard_clarity_v2(
     .summary-box {{ padding: 16px; }}
     .panel h2,
     .summary-box h2 {{ color: var(--text); font-size: 22px; line-height: 1.18; margin-top: 4px; margin-bottom: 8px; }}
+    .layout-desk,
+    .layout-agents,
+    .layout-news,
     .layout-dashboard,
     .layout-decision,
     .layout-market,
@@ -12845,8 +13118,8 @@ def render_dashboard_clarity_v2(
           </nav>
           <div class="top-status">
             <span class="status-pill {price_class}">XAU {gold.price:.2f} / {gold.change_pct:+.2f}%</span>
-            <span class="status-pill {recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)} {global_recommendation.score}/100</span>
-            <span class="status-pill caution">{html.escape(regime_name[:28])}</span>
+            <span class="status-pill {lead_class}">Chef de file {html.escape(lead_status)} {lead_score}/100</span>
+            <span class="status-pill {locked_class}">{locked_status}</span>
             <span class="status-pill">{html.escape(generated_at)}</span>
           </div>
         </header>
@@ -12854,46 +13127,45 @@ def render_dashboard_clarity_v2(
         <section class="terminal-header">
           <div>
             <div class="section-kicker">Institutional analytics package</div>
-            <h1>XAU/USD Market Dashboard</h1>
-            <p>Scoring global, plan BUY/SELL, niveaux de risque et contexte marche live.</p>
+            <h1>Aureum Flux Trading Desk</h1>
+            <p>Prix, chef de file, biais, charte live et signal locked. Les details internes restent dans Inspector.</p>
           </div>
           <div class="sync-pill">Ready for export</div>
         </section>
 
-        <section class="global-live-strip {banner_class}" data-verdict="{html.escape(global_recommendation.verdict)}" data-regime="{html.escape(regime_name)}" data-alert="{html.escape(regime_alert)}">
+        <section class="global-live-strip {banner_class}" data-verdict="{html.escape(lead_status)}" data-regime="{html.escape(regime_name)}" data-alert="{html.escape(regime_alert)}">
           <div class="live-cell">
             <small>XAU/USD live</small>
             <strong class="{price_class}">{gold.price:.2f}</strong>
             <span>{gold.change_abs:+.2f} / {gold.change_pct:+.2f}%</span>
           </div>
           <div class="live-cell">
-            <small>Decision</small>
-            <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)} {global_recommendation.score}/100</strong>
-            <span>SL {global_recommendation.stop_loss:.2f} · TP1 {global_recommendation.take_profit_1:.2f} · TP2 {global_recommendation.take_profit_2:.2f}</span>
+            <small>Chef de file</small>
+            <strong class="{lead_class}">{html.escape(lead_status)}</strong>
+            <span>{html.escape(lead_bias)} · {lead_score}/100</span>
           </div>
           <div class="live-cell">
-            <small>Regime</small>
-            <strong>{html.escape(regime_name)}</strong>
-            <span>{html.escape(regime_status)}</span>
+            <small>Biais</small>
+            <strong>{html.escape(format_bias_label(analysis.bias))}</strong>
+            <span>Confiance {analysis.confidence}/100</span>
           </div>
           <div class="live-cell">
-            <small>Confiance</small>
-            <strong>{analysis.confidence}/100</strong>
-            <span>{html.escape(format_bias_label(analysis.bias))}</span>
+            <small>Signal locked</small>
+            <strong class="{locked_class}">{locked_status}</strong>
+            <span>{active_trades} trade(s) actif(s)</span>
           </div>
           <div class="live-cell">
-            <small>Alerte</small>
-            <strong>{html.escape('IG Weekend' if regime_alert == 'ig-weekend' else 'Hormuz/Oil' if regime_alert == 'hormuz-oil-shock' else 'Normal')}</strong>
-            <span>{html.escape(regime_summary[:92])}</span>
+            <small>Refresh</small>
+            <strong>{html.escape(generated_at)}</strong>
+            <span>Sources {data_quality_score}/100 · {html.escape(data_quality_status)}</span>
           </div>
         </section>
-        {render_terminal_state_board(global_recommendation, trade_ledger, data_quality, orchestrator_decision, market_regime)}
 
-        <section class="tab-view active" id="dashboard" data-tab-view="dashboard">
+        <section class="tab-view active" id="desk" data-tab-view="desk">
           <div class="view-header">
-            <div><div class="section-kicker">Dashboard</div><h2>Signal live et risque immediat</h2><p>Lecture rapide: prix, decision, gate et trade locking.</p></div>
+            <div><div class="section-kicker">Desk</div><h2>Decision exploitable et charte live</h2><p>La premiere page ne montre que ce qui sert a decider: prix, chef de file, biais, TradingView et signal locked.</p></div>
           </div>
-          <section class="layout-dashboard">
+          <section class="layout-desk">
             <article class="decision-hero span-8">
               <div class="ticker-symbol">XAU/USD spot | live</div>
               <div class="ticker-row">
@@ -12904,48 +13176,28 @@ def render_dashboard_clarity_v2(
                 Mis a jour {html.escape(generated_at)} · Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
                 Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
               </div>
-              <div class="global-position">
-                <strong class="{recommendation_css_class(global_recommendation.verdict)}">{html.escape(global_recommendation.verdict)}</strong>
-                <span>SL {global_recommendation.stop_loss:.2f} · TP1 {global_recommendation.take_profit_1:.2f} · TP2 {global_recommendation.take_profit_2:.2f}</span>
-              </div>
-              <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
-              {render_trade_levels(global_recommendation)}
+              {render_desk_position_summary(global_recommendation, orchestrator_decision, scenario_plan)}
               <div class="metric-strip">
-                <div class="metric-chip"><strong>Biais</strong><span class="{price_class}">{format_bias_label(analysis.bias)}</span><small>{heuristic_decision_sentence(analysis)}</small></div>
+                <div class="metric-chip"><strong>Biais</strong><span class="{price_class}">{format_bias_label(analysis.bias)}</span><small>Lecture globale du moment</small></div>
                 <div class="metric-chip"><strong>Confiance</strong><span>{analysis.confidence}/100</span><div class="confidence-bar"><span></span></div></div>
                 <div class="metric-chip"><strong>DXY</strong><span class="{dxy_class}">{dxy.price:.2f}</span><small>{dxy.change_pct:+.2f}% aujourd'hui</small></div>
                 <div class="metric-chip"><strong>10Y US</strong><span class="{us10y_class}">{us10y.price:.2f}%</span><small>{us10y.change_abs * 100:+.1f} bps aujourd'hui</small></div>
               </div>
             </article>
             <article class="panel span-4">
-              <div class="section-kicker">Risk banner</div>
-              <h2>{html.escape(regime_name)}</h2>
-              <div class="trade-verdict {state_tone_class(regime_status)}">{html.escape(regime_status)}</div>
-              <p class="trade-summary">{html.escape(regime_summary)}</p>
-              <div class="geo-grid">
-                <div class="geo-stat"><strong>Data quality</strong><span>{data_quality_score}/100</span><small>{html.escape(data_quality_status)}</small></div>
-                <div class="geo-stat"><strong>Trades actifs</strong><span>{active_trades}</span><small>Signal live separe du ledger</small></div>
-              </div>
+              <div class="section-kicker">Signal locked</div>
+              <h2>Position historisee</h2>
+              {render_signal_locked_panel(trade_ledger, global_recommendation, orchestrator_decision, scenario_plan)}
             </article>
             <article class="panel span-6">
-              <div class="section-kicker">Orchestrateur v3</div>
-              <h2>Decision multi-agents</h2>
-              {render_orchestrator_decision_panel(orchestrator_decision)}
+              <div class="section-kicker">Charte live TradingView</div>
+              <h2>XAU/USD live chart</h2>
+              {tradingview_chart}
             </article>
             <article class="panel span-6">
-              <div class="section-kicker">Trade Tracker</div>
-              <h2>Signal locking et suivi des recommandations</h2>
-              {render_trade_tracker_panel(trade_ledger)}
-            </article>
-            <article class="panel span-6">
-              <div class="section-kicker">Fondamental</div>
-              <h2>Lecture macro/fondamentale</h2>
-              {render_trade_card(fundamental)}
-            </article>
-            <article class="panel span-6">
-              <div class="section-kicker">Technique</div>
-              <h2>TechnicalDecisionEngine</h2>
-              {render_technical_decision_panel(technical_decision)}
+              <div class="section-kicker">Scenario</div>
+              <h2>Ce qu'il faut attendre</h2>
+              {render_scenario_plan_panel(scenario_plan)}
             </article>
           </section>
         </section>
@@ -12981,25 +13233,14 @@ def render_dashboard_clarity_v2(
           </section>
         </section>
 
-        <section class="tab-view" id="decision" data-tab-view="decision">
-          <div class="view-header"><div><div class="section-kicker">Decision</div><h2>Pourquoi le terminal attend, achete ou vend</h2><p>Orchestrateur, gates, contradictions et separation du signal live avec les trades historises.</p></div></div>
-          <section class="layout-decision">
-            <article class="summary-box span-7"><div class="section-kicker">Synthese prioritaire</div><h2>Ce qui compte maintenant</h2><p class="lead">{html.escape(executive_summary)}</p>{render_what_happens_now(story_lines)}</article>
-            <article class="summary-box span-5">
-              <div class="section-kicker">Decision & validation</div><h2>Lecture des scores</h2>
-              <div class="decision-grid">
-                <div class="decision-item"><strong class="{recommendation_css_class(global_recommendation.verdict)}">Global: {html.escape(global_recommendation.verdict)} / {global_recommendation.score}/100</strong><span>{html.escape(global_recommendation.summary)}</span></div>
-                <div class="decision-item"><strong class="{recommendation_css_class(fundamental.verdict)}">Macro/Fondamental: {html.escape(fundamental.verdict)} / {fundamental.score}/100</strong><span>{html.escape(fundamental.summary)}</span></div>
-                <div class="decision-item"><strong class="{recommendation_css_class(technical_decision.direction)}">Technique: {html.escape(technical_decision.direction)} / {technical_decision.score}/100</strong><span>{html.escape(technical_decision.trigger)}</span></div>
-                <div class="decision-item"><strong class="{geo_class}">Geopolitics & Flows: {f'{geopolitical_analysis.score}/100' if geopolitical_analysis else 'indisponible'}</strong><span>{html.escape(geopolitical_analysis.summary if geopolitical_analysis else 'Lecture geopolitique indisponible.')}</span></div>
-                <div class="decision-item"><strong>Ce que cela veut dire pour vous</strong><span>Le mot BUY ou SELL ne veut pas dire acheter maintenant a tout prix. Il veut dire que, dans le contexte actuel, le scenario dominant penche de ce cote tant que le prix respecte le SL et les TP affiches.</span></div>
-              </div>
-            </article>
-            <article class="panel span-12"><div class="section-kicker">Scenario Engine v3</div><h2>Scenario principal, declencheur et invalidation</h2>{render_scenario_plan_panel(scenario_plan)}</article>
-            <article class="panel span-12"><div class="section-kicker">Orchestrateur v3</div><h2>Poids dynamiques, preuves et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
-            <article class="panel span-6"><div class="section-kicker">Regime decisionnel</div><h2>WTI/Brent + Hormuz/Oil Shock</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
+        <section class="tab-view" id="agents" data-tab-view="agents">
+          <div class="view-header"><div><div class="section-kicker">Agents</div><h2>Scoring et position de chaque agent</h2><p>Cette page montre qui pousse BUY, SELL, WATCH ou WAIT. Les details techniques restent en bas ou dans Inspector.</p></div></div>
+          <section class="layout-agents">
+            <article class="panel span-12"><div class="section-kicker">Scoreboard</div><h2>Positions agents</h2>{render_agents_scoreboard_panel(agent_results)}</article>
+            <article class="panel span-12"><div class="section-kicker">Orchestrateur v3</div><h2>Vote final, poids et contre-signaux</h2>{render_orchestrator_decision_panel(orchestrator_decision)}</article>
+            <article class="panel span-6"><div class="section-kicker">Scenario Engine v3</div><h2>Scenario, declencheur et invalidation</h2>{render_scenario_plan_panel(scenario_plan)}</article>
             <article class="panel span-6"><div class="section-kicker">Data Feed Governance</div><h2>Qualite, fraicheur et fiabilite des sources</h2>{render_data_quality_panel(data_quality)}</article>
-            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Decision agents & contradictions</h2>{render_agent_department_panel(agent_results, "Decision")}<div class="module-block"><div class="section-kicker">Contradictions entre agents</div>{render_agent_contradictions(agent_results)}</div></article>
+            <article class="panel span-12"><div class="section-kicker">Contradictions</div><h2>Conflits entre agents</h2>{render_agent_contradictions(agent_results)}</article>
           </section>
         </section>
 
@@ -13026,24 +13267,25 @@ def render_dashboard_clarity_v2(
           </section>
         </section>
 
-        <section class="tab-view" id="geopolitics" data-tab-view="geopolitics">
-          <div class="view-header"><div><div class="section-kicker">Geopolitics & Flows</div><h2>Faits concrets, politique et flux</h2><p>La vue separe les faits, les declarations politiques, le regime oil/dollar et les flows.</p></div></div>
-          <section class="layout-geopolitics">
-            <article class="panel span-8"><div class="section-kicker">Geopolitics & Flows</div><h2>Risque externe qui soutient ou freine l'or</h2>{render_geopolitical_panel(geopolitical_analysis)}</article>
-            <article class="panel span-4"><div class="section-kicker">Regime de volatilite</div><h2>Mode event et risque execution</h2>{render_event_mode_panel(event_mode)}</article>
-            <article class="panel span-12"><div class="section-kicker">Regime politique / petrole</div><h2>Safe-haven gold | Hormuz oil shock | dollar squeeze</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
-            <article class="panel span-6"><div class="section-kicker">ETF flows officiels</div><h2>Demande papier institutionnelle</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
-            <article class="panel span-6"><div class="section-kicker">Catalyseurs du jour</div><h2>Messages qui expliquent le mouvement</h2><p class="footer-note">Chaque bloc explique ce qui se passe reellement et pourquoi cela compte pour l'or maintenant.</p><div class="digest-grid">{render_information_digest(digest_items)}</div></article>
-            <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaine marche</h2><p class="footer-note">Chaque conclusion geopolitique doit pouvoir pointer vers un fait concret, une source, un niveau de confirmation et une transmission marche.</p>{render_event_facts_panel(event_facts)}</article>
-            <article class="panel span-12"><div class="section-kicker">Trump / White House</div><h2>Declarations politiques sourcees</h2><p class="footer-note">L'agent separe source officielle, agence fiable et rumeur. Une declaration politique ne devient importante que si sa source et sa chaine marche sont explicites.</p>{render_political_statements_panel(political_statements)}</article>
-            <article class="panel span-12"><div class="section-kicker">Headlines expliquees</div><h2>Titres sources et impact probable sur l'or</h2><p class="footer-note">Chaque titre ci-dessous est traduit en langage clair avec son impact probable sur l'or, au lieu d'etre affiche brut.</p><div class="headline-grid">{render_headline_reason_cards(bundle.news, limit=6)}</div></article>
-            <article class="panel span-12"><div class="section-kicker">Agents passifs experimentaux</div><h2>Geopolitics & Flows agents</h2>{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
+        <section class="tab-view" id="news" data-tab-view="news">
+          <div class="view-header"><div><div class="section-kicker">News Flow</div><h2>Flux d'informations utiles</h2><p>Titres recents, source, heure et impact. Les headlines neutres, chaines internes et textes d'audit sont masques.</p></div></div>
+          <section class="layout-news">
+            <article class="panel span-12"><div class="section-kicker">Flux trie</div><h2>News avec impact XAU/USD</h2>{render_news_flow_panel(bundle.news, event_facts, political_statements)}</article>
+            <article class="panel span-6"><div class="section-kicker">Macro Catalysts</div><h2>Calendrier a surveiller</h2>{render_macro_catalysts_panel(macro_catalysts)}</article>
+            <article class="panel span-6"><div class="section-kicker">Flows officiels</div><h2>COT et ETF</h2>{render_cftc_positioning_panel(cftc_positioning)}{render_etf_flows_panel(etf_flows_analysis)}</article>
           </section>
         </section>
 
         <section class="tab-view" id="inspector" data-tab-view="inspector">
           <div class="view-header"><div><div class="section-kicker">Inspector</div><h2>Audit sources, agents, gates et trades</h2><p>Tout ce qui explique pourquoi une decision ou un trade existe.</p></div></div>
-          <section class="layout-inspector"><article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article></section>
+          <section class="layout-inspector">
+            <article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article>
+            <article class="panel span-12"><div class="section-kicker">Source Registry</div><h2>Gouvernance des flux d'information</h2>{render_data_quality_panel(data_quality)}</article>
+            <article class="panel span-12"><div class="section-kicker">Regime interne</div><h2>Mode politique / petrole / dollar</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
+            <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaines marche</h2>{render_event_facts_panel(event_facts)}</article>
+            <article class="panel span-12"><div class="section-kicker">Political Statements</div><h2>Declarations politiques sourcees</h2>{render_political_statements_panel(political_statements)}</article>
+            <article class="panel span-12"><div class="section-kicker">Fondation multi-agents passive</div><h2>Inventaire agents</h2>{render_agent_department_panel(agent_results, "Market")}{render_agent_department_panel(agent_results, "Decision")}{render_agent_department_panel(agent_results, "Technical")}{render_agent_department_panel(agent_results, "Macro")}{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
+          </section>
         </section>
 
         <section class="tab-view" id="reports" data-tab-view="reports">
@@ -13052,10 +13294,7 @@ def render_dashboard_clarity_v2(
             {render_ai_summary(ai_analysis)}
             <article class="panel span-6"><div class="section-kicker">Exports</div><h2>Rapports disponibles</h2><div class="decision-grid"><div class="decision-item"><strong>Markdown</strong><span>Le rapport principal est genere dans reports/xauusd_report.md.</span></div><div class="decision-item"><strong>JSON</strong><span>Le payload structure est genere dans reports/xauusd_data.json.</span></div><div class="decision-item"><strong>Dernier calcul</strong><span>{html.escape(generated_at)}</span></div></div></article>
             <article class="panel span-6"><div class="section-kicker">Avertissement</div><h2>Usage</h2><div class="footer-note">Ce dashboard aide a lire le marche rapidement. Il ne constitue pas un conseil financier personnalise. Un TradePlan historise ne doit pas etre confondu avec le signal live.</div></article>
-            <article class="panel span-12"><div class="section-kicker">Fondation multi-agents passive</div><h2>Inventaire agents Phase 5</h2>{render_agent_department_panel(agent_results, "Market")}{render_agent_department_panel(agent_results, "Decision")}{render_agent_department_panel(agent_results, "Technical")}{render_agent_department_panel(agent_results, "Macro")}{render_agent_department_panel(agent_results, "Geopolitics & Flows")}</article>
-            <article class="panel span-12"><div class="section-kicker">Source Registry</div><h2>Gouvernance des flux d'information</h2>{render_data_quality_panel(data_quality)}</article>
             <article class="panel span-12"><div class="section-kicker">Trade Ledger</div><h2>Historique des TradePlan verrouilles</h2>{render_trade_tracker_panel(trade_ledger)}</article>
-            <article class="panel span-12"><div class="section-kicker">Monitoring Inspector</div><h2>Audit sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article>
           </section>
         </section>
       </div>

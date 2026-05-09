@@ -243,7 +243,7 @@ Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou
 - CorrelationAgent;
 - FlowPositioningAgent.
 
-ElliottWaveAgent est archive et absent du produit actif. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
+ElliottWaveAgent est supprime du produit actif. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
 
 ## Outcomes possibles
 

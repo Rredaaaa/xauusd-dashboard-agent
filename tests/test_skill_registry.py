@@ -21,7 +21,6 @@ REQUIRED_SKILLS = [
     "aureum-scenario-orchestrator",
     "aureum-trade-quality-gate",
     "aureum-replay-shadow-terminal",
-    "aureum-elliott-wave",
 ]
 
 REQUIRED_SECTIONS = [

@@ -193,7 +193,7 @@ Objectif:
 Verifier la documentation existante et figer la roadmap v3.0 avant codage.
 
 Actions:
-1. Verifier `README.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES_AND_SCORING.md`, `docs/USER_GUIDE.md`, `docs/SETUP.md`, `docs/UI_REDESIGN_PHASE_18.md`.
+1. Verifier `README.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES_AND_SCORING.md`, `docs/USER_GUIDE.md`, `docs/SETUP.md`.
 2. Corriger les statuts obsoletes: Phase 18 doit etre marquee terminee.
 3. Ajouter ce document v3.0 comme reference officielle.
 4. Ajouter un lien depuis `README.md` vers le plan v3.0.
@@ -244,7 +244,6 @@ Actions:
    - priorite.
 
 Livrables:
-- `reports/editorial_audit_v3.md`;
 - liste des composants a modifier;
 - dictionnaire des phrases interdites.
 
@@ -352,7 +351,6 @@ Actions:
 2. Ajouter au minimum:
    - `skills/aureum-editorial-style/SKILL.md`;
    - `skills/aureum-news-engine/SKILL.md`;
-   - `skills/aureum-elliott-wave/SKILL.md`;
    - `skills/aureum-chart-store/SKILL.md`;
    - `skills/aureum-data-preflight/SKILL.md`;
    - `skills/aureum-gold-macro/SKILL.md`;
@@ -982,10 +980,9 @@ La v3.0 est reussie si:
 
 Claude doit commencer par:
 1. lire ce document;
-2. lire `docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md`;
-3. lire `docs/UI_REDESIGN_PHASE_18.md`;
-4. verifier `git status`;
-5. confirmer avec l'utilisateur avant Phase 19.
+2. lire `README.md`, `docs/ARCHITECTURE.md`, `docs/SOURCES_AND_SCORING.md` et `docs/USER_GUIDE.md`;
+3. verifier `git status`;
+4. confirmer avec l'utilisateur avant Phase 19.
 
 Claude ne doit pas:
 - reintroduire Elliott dans le raisonnement utilisateur sans validation explicite;

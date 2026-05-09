@@ -16,13 +16,10 @@ Ordre de lecture recommande:
 10. `aureum-scenario-orchestrator/SKILL.md`
 11. `aureum-trade-quality-gate/SKILL.md`
 12. `aureum-replay-shadow-terminal/SKILL.md`
-13. `aureum-elliott-wave/SKILL.md` archive, a ne pas utiliser sans validation explicite.
 
 Documents de reference a lire avant implementation:
 
 - `docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md`
-- `docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md`
-- `docs/UI_REDESIGN_PHASE_18.md`
 - `docs/SOURCES_AND_SCORING.md`
 - `docs/ARCHITECTURE.md`
 - `docs/USER_GUIDE.md`
@@ -37,4 +34,4 @@ Decision v3.0 active:
 - Phase 27A a retire Elliott du dashboard, payload public, Inspector et orchestrateur;
 - Phase 27A a remplace la charte interne principale par TradingView;
 - Phase 27B a cree `TechnicalDecisionEngine` v1;
-- `aureum-elliott-wave` est archive et ne doit pas guider l'implementation sans validation utilisateur explicite.
+- le skill Elliott archive a ete supprime du repo: il ne doit plus guider l'implementation.

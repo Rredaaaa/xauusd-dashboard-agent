@@ -7,9 +7,8 @@ A partir de la v3.0, `WATCH_BUY` et `WATCH_SELL` signalent les setups en surveil
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
 Etat roadmap:
-- v2.0 est stabilisee apres la Phase 18;
-- la suite officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
-- avant Phase 30, la Phase 30A restructure l'UX en 5 pages avec Noise Gate, News Gate et SL/TP Gate.
+- la reference officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
+- le dashboard actif est structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector.
 
 ## Lancer sur Mac
 
@@ -35,21 +34,9 @@ python xauusd_agent.py --serve-dashboard --quiet --host 127.0.0.1 --port 8787 \
   --dashboard reports/xauusd_dashboard.html
 ```
 
-## Lancer sur Windows / RDP
-
-```powershell
-.\Lancer-Agent-XAUUSD.bat
-```
-
-Generation sans serveur:
-
-```powershell
-python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .\reports\xauusd_data.json --dashboard .\reports\xauusd_dashboard.html
-```
-
 ## Ce que le dashboard affiche
 
-Structure cible Phase 30A:
+Structure active:
 
 - `Desk`: prix live, chef de file, biais, TradingView, signal locked.
 - `Agents`: scoring, poids et positions de tous les agents.
@@ -83,8 +70,6 @@ Les fichiers dans `reports/` restent locaux et sont ignores par Git:
 - [Guide utilisateur](docs/USER_GUIDE.md)
 - [Sources et scoring](docs/SOURCES_AND_SCORING.md)
 - [Architecture](docs/ARCHITECTURE.md)
-- [Phase 30A UX Product Split](docs/UX_PRODUCT_SPLIT_PHASE_30A.md)
-- [Plan v2.0](docs/AUREUM_FLUX_TERMINAL_V2_PLAN.md)
 - [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
 - [Skills Aureum pour reprise Claude](skills/README.md)
 
@@ -101,5 +86,5 @@ python3 -m unittest discover -s tests -v
 - Une source peut etre absente, stale ou contradictoire.
 - IG Weekend Gold est un proxy week-end, distinct du spot classique.
 - La charte principale utilisateur est TradingView; les bougies internes Chart Store restent un diagnostic de donnees.
-- Elliott est archive dans la roadmap v3.0 tant qu'il n'existe pas de moteur robuste; il n'est plus presente comme preuve de decision.
+- Elliott a ete retire du code actif et des skills; il n'est plus presente comme preuve de decision.
 - Aucun trade ne doit etre pris sans controle humain du contexte, du spread, de l'heure et du risque.

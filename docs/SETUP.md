@@ -1,6 +1,6 @@
 # Installation et lancement
 
-Ce guide explique comment lancer Aureum Flux Terminal sur Mac ou Windows/RDP.
+Ce guide explique comment lancer Aureum Flux Terminal sur Mac.
 
 ## Prerequis
 
@@ -53,41 +53,10 @@ URL locale:
 http://127.0.0.1:8787/
 ```
 
-## Installation Windows / RDP
-
-Depuis PowerShell:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
-```
-
-Lancer:
-
-```powershell
-.\Lancer-Agent-XAUUSD.bat
-```
-
-Surveillance continue:
-
-```powershell
-.\Surveiller-Agent-XAUUSD-15min.bat
-```
-
 ## Generation sans serveur
-
-Mac:
 
 ```bash
 python xauusd_agent.py --quiet --save reports/xauusd_report.md --data-json reports/xauusd_data.json --dashboard reports/xauusd_dashboard.html
-```
-
-Windows:
-
-```powershell
-python .\xauusd_agent.py --quiet --save .\reports\xauusd_report.md --data-json .\reports\xauusd_data.json --dashboard .\reports\xauusd_dashboard.html
 ```
 
 ## Tests

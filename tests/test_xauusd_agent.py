@@ -671,16 +671,14 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("applyStoredTab", dashboard)
         self.assertNotIn("ElliottWaveAgent", dashboard)
 
-        # Legacy technical modules still exist below the fold during Phase 30A,
-        # but they are no longer part of the product navigation.
-        self.assertIn("Spot classique et IG Weekend Gold", dashboard)
+        self.assertIn("IG Weekend Gold", dashboard)
         self.assertIn("TechnicalDecisionEngine", dashboard)
         self.assertIn("Confluence inter-marches", dashboard)
         self.assertIn("Bloc macro officiel", dashboard)
         self.assertIn("FRED DGS10 | DGS2 | T10YIE | DFII10", dashboard)
         self.assertIn("10Y nominal officiel", dashboard)
         self.assertIn("Controle Yahoo ^TNX", dashboard)
-        self.assertIn("FRED DGS10 prioritaire", dashboard)
+        self.assertIn("FRED prioritaire pour les taux", dashboard)
         self.assertIn("COT officiel CFTC", dashboard)
         self.assertIn("Positionnement Gold Futures COMEX", dashboard)
         self.assertIn("Managed Money acheteurs nets", dashboard)
@@ -691,7 +689,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("SPDR Gold Shares", dashboard)
         self.assertIn("iShares Gold Trust", dashboard)
         self.assertIn("Macro Catalysts", dashboard)
-        self.assertIn("Calendrier economique et Fed", dashboard)
+        self.assertIn("Calendrier a surveiller", dashboard)
         self.assertIn("Federal Reserve FOMC calendar", dashboard)
         self.assertIn("CME FedWatch officiel", dashboard)
         self.assertIn("Personal Income and Outlays", dashboard)

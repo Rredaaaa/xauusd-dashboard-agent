@@ -40,7 +40,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 Note de passation v3.0:
 - l'architecture v2 reste concentree dans `xauusd_agent.py`;
 - la v3.0 a livre l'audit editorial, News Facts, Preflight, Chart Store, Phase 27A, Phase 27B et Phase 28;
-- `ElliottWaveAgent` est archive dans la roadmap v3.0 et n'apparait plus dans les surfaces actives;
+- `ElliottWaveAgent` est supprime du code actif et n'apparait plus dans les surfaces actives;
 - Phase 27B a remplace Elliott par un `TechnicalDecisionEngine` auditable v1;
 - la charte principale est TradingView dans Market/Technical;
 - Phase 28 expose les statuts scenario `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` et `WAIT` pour montrer le prochain trigger sans forcer un trade;
@@ -63,7 +63,7 @@ Regle de decision actuelle:
 - source prix XAU/USD principale absente/stale = blocage dur;
 - data quality tres faible = blocage dur;
 - WGC ETF stale, Google News weak ou mode event modere = warning;
-- RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan; ElliottWaveAgent est absent du produit actif.
+- RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan; ElliottWaveAgent est supprime du produit actif.
 - `TRADE_*` exige TechnicalDecisionEngine confirme, invalidation claire, confirmations decisionnelles et risk/reward minimum; sinon le terminal reste en `WATCH_*`, `WAIT` ou `NO_TRADE`.
 - `TradeRecommendation`: signal live.
 

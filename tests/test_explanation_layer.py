@@ -206,20 +206,20 @@ class TemplateRefusesForbiddenContextTests(unittest.TestCase):
 class ExperimentalAgentTests(unittest.TestCase):
     def test_includes_experimental_marker_and_blocking_reason(self) -> None:
         text = render_experimental_agent(
-            agent_name="ElliottWaveAgent",
-            hypothesis="impulsion haussiere",
+            agent_name="AuditAgent",
+            hypothesis="lecture experimentale",
             blocking_reason="Aucun Chart Store OHLC disponible",
         )
         self.assertIn("experimental", text)
         self.assertIn("non scorant", text)
-        self.assertIn("ElliottWaveAgent", text)
+        self.assertIn("AuditAgent", text)
         self.assertIn("Aucun Chart Store OHLC disponible", text)
         self.assertIn("n'influence pas la decision principale", text)
 
     def test_experimental_text_does_not_use_forbidden_patterns(self) -> None:
         text = render_experimental_agent(
-            agent_name="ElliottWaveAgent",
-            hypothesis="impulsion haussiere",
+            agent_name="AuditAgent",
+            hypothesis="lecture experimentale",
             blocking_reason="Historique insuffisant pour pivots multi-timeframe",
         )
         matches = validate_phrase(text, allow_in_inspector=True)

@@ -107,7 +107,7 @@ Les poids changent selon:
 - mode event actif: execution plus prudente, sans `WAIT` automatique si les preuves restent exploitables.
 
 Decision v3.0:
-- `ElliottWaveAgent` est archive. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
+- `ElliottWaveAgent` est supprime du code actif. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.
 - Phase 27A a retire Elliott du dashboard, payload JSON public, Inspector et orchestrateur.
 - Phase 27B a introduit `TechnicalDecisionEngine` comme moteur technique actif v1.
 - Phase 28 a introduit `ScenarioEngine v3`: il transforme le signal technique, les news, la macro, les correlations et la Data Quality en scenario principal, scenario alternatif, declencheur, invalidation et confirmations requises.
@@ -257,7 +257,7 @@ Agents decisionnels utilises pour compter confirmations/contradictions de TradeP
 
 Agents exclus du comptage decisionnel:
 
-- ElliottWaveAgent, archive et absent du produit actif;
+- ElliottWaveAgent, supprime du code actif et absent du produit actif;
 - RiskManagerAgent, role de prudence;
 - OrchestratorAgent, role d'audit/synthese.
 

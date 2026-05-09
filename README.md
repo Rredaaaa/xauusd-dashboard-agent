@@ -90,7 +90,7 @@ python xauusd_agent.py --replay --replay-output reports/v3/replay_report.md
 - [Architecture](docs/ARCHITECTURE.md)
 - [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md)
 - [Checklist QA v3.0](docs/V3_QA_CHECKLIST.md)
-- [Skills Aureum pour reprise Claude](skills/README.md)
+- [Skills Aureum pour reprise assistant](skills/README.md)
 
 ## Tests
 

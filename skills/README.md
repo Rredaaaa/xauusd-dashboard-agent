@@ -1,6 +1,6 @@
-# Aureum Flux Skills - Index Claude
+# Aureum Flux Skills - Index assistant
 
-Ce dossier sert de base de reprise pour Claude et tout autre assistant qui doit continuer Aureum Flux Terminal sans reconstituer plusieurs jours de contexte.
+Ce dossier sert de base de reprise pour tout assistant qui doit continuer Aureum Flux Terminal sans reconstituer plusieurs jours de contexte.
 
 Ordre de lecture recommande:
 

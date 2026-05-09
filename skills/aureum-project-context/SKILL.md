@@ -1,6 +1,6 @@
 ---
 name: aureum-project-context
-description: Contexte complet de reprise Aureum Flux Terminal pour Claude. A lire avant toute phase v3.0.
+description: Contexte complet de reprise Aureum Flux Terminal pour assistant local. A lire avant toute phase v3.0.
 category: project
 ---
 

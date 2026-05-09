@@ -3,7 +3,7 @@
 Version du document: 1.1
 Date: 2026-05-07
 Statut: document de passation pour implementation v3.0
-Responsable execution prevu: Claude
+Responsable execution: assistant local du projet
 Base de depart: Aureum Flux Terminal 2.0 apres Phase 18 terminee
 
 ## 0. Objectif de la v3.0
@@ -211,7 +211,7 @@ Tests:
 - verification markdown manuelle.
 
 Definition de termine:
-- Claude peut reprendre sans devoir redemander ou reconstituer l'historique.
+- Un assistant peut reprendre sans devoir redemander ou reconstituer l'historique.
 
 ### Phase 20 - Audit editorial phrase par phrase
 

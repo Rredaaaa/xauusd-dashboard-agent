@@ -7,3 +7,4 @@ reports/*
 config/aureum_settings.json
 .venv/
 .pytest_cache/
+.ssh/

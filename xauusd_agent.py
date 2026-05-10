@@ -11436,9 +11436,9 @@ def render_dashboard_clarity_v2(
     .headline-grid,
     .agent-grid,
     .geo-columns {{ display: grid; gap: 10px; min-width: 0; }}
-    .metric-strip {{ grid-template-columns: minmax(0, 1fr); margin-top: 12px; }}
+    .metric-strip {{ grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); margin-top: 12px; }}
     .metrics-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
-    .trade-levels,
+    .trade-levels {{ grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 10px; }}
     .key-levels {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
     .geo-grid {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}
     .geo-columns {{ grid-template-columns: minmax(0, 1fr); margin-top: 10px; }}

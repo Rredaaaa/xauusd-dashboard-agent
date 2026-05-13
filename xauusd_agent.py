@@ -102,6 +102,7 @@ BEA_RELEASE_SCHEDULE_URL = "https://www.bea.gov/news/schedule"
 CME_FEDWATCH_TOOL_URL = "https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html"
 CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-api/fedwatch-api.html"
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
+TRADE_GATE_AUDIT_PATH = Path("reports") / "trade_gate_audit.jsonl"
 AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
 CHART_STORE_CACHE_PATH = Path("reports") / "chart_store_cache.json"
 SETTINGS_PATH = Path("config") / "aureum_settings.json"
@@ -788,6 +789,7 @@ class UserSettings:
     cooldown_minutes: int = 90
     cooldown_after_loss_minutes: int = 240
     cooldown_after_win_minutes: int = 60
+    cooldown_after_expired_minutes: int = 60
     max_trades_per_24h: int = 8
     circuit_breaker_after_n_losses: int = 3
     circuit_breaker_window_hours: int = 24
@@ -1151,6 +1153,7 @@ def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, c
     settings.cooldown_minutes = max(0, min(1440, int(settings.cooldown_minutes)))
     settings.cooldown_after_loss_minutes = max(240, min(1440, int(settings.cooldown_after_loss_minutes)))
     settings.cooldown_after_win_minutes = max(60, min(1440, int(settings.cooldown_after_win_minutes)))
+    settings.cooldown_after_expired_minutes = max(60, min(1440, int(settings.cooldown_after_expired_minutes)))
     settings.max_trades_per_24h = max(1, min(50, int(settings.max_trades_per_24h)))
     settings.circuit_breaker_after_n_losses = max(1, min(20, int(settings.circuit_breaker_after_n_losses)))
     settings.circuit_breaker_window_hours = max(1, min(168, int(settings.circuit_breaker_window_hours)))
@@ -1190,6 +1193,7 @@ def parse_user_settings(data: dict[str, Any] | None) -> UserSettings:
         cooldown_minutes=int(data.get("cooldown_minutes", defaults.cooldown_minutes) or defaults.cooldown_minutes),
         cooldown_after_loss_minutes=int(data.get("cooldown_after_loss_minutes", defaults.cooldown_after_loss_minutes) or defaults.cooldown_after_loss_minutes),
         cooldown_after_win_minutes=int(data.get("cooldown_after_win_minutes", defaults.cooldown_after_win_minutes) or defaults.cooldown_after_win_minutes),
+        cooldown_after_expired_minutes=int(data.get("cooldown_after_expired_minutes", defaults.cooldown_after_expired_minutes) or defaults.cooldown_after_expired_minutes),
         max_trades_per_24h=int(data.get("max_trades_per_24h", defaults.max_trades_per_24h) or defaults.max_trades_per_24h),
         circuit_breaker_after_n_losses=int(data.get("circuit_breaker_after_n_losses", defaults.circuit_breaker_after_n_losses) or defaults.circuit_breaker_after_n_losses),
         circuit_breaker_window_hours=int(data.get("circuit_breaker_window_hours", defaults.circuit_breaker_window_hours) or defaults.circuit_breaker_window_hours),
@@ -1490,6 +1494,50 @@ def append_trade_plan_snapshot(plan: TradePlan, path: Path = TRADE_LEDGER_PATH) 
         handle.write(json.dumps(asdict(plan), ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def trade_gate_audit_path_for_ledger(path: Path = TRADE_LEDGER_PATH) -> Path:
+    if path == TRADE_LEDGER_PATH:
+        return TRADE_GATE_AUDIT_PATH
+    return path.with_name("trade_gate_audit.jsonl")
+
+
+def append_trade_gate_audit_event(
+    action: str,
+    reasons: list[str],
+    candidate: TradePlan | None = None,
+    path: Path = TRADE_GATE_AUDIT_PATH,
+    now: datetime | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    reference = now or datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "created_at": reference.replace(microsecond=0).isoformat(),
+        "action": action,
+        "reasons": reasons[:8],
+    }
+    if candidate is not None:
+        payload.update(
+            {
+                "trade_id": candidate.trade_id,
+                "direction": candidate.direction,
+                "status": candidate.status,
+                "outcome": candidate.outcome,
+                "reference_price": candidate.reference_price,
+                "stop_loss": candidate.stop_loss,
+                "tp1": candidate.tp1,
+                "tp2": candidate.tp2,
+                "tp3": candidate.tp3,
+                "rr_tp1": candidate.risk_reward_tp1,
+                "market_regime": candidate.market_regime,
+                "valid_until": candidate.max_valid_until,
+            }
+        )
+    if extra:
+        payload.update(extra)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def trade_plan_closed(plan: TradePlan) -> bool:
     return plan.status in {"tp2_hit", "tp3_hit", "sl_hit", "expired", "invalidated", "closed_manual"}
 
@@ -1669,6 +1717,20 @@ def evaluate_trade_plan(plan: TradePlan, current_price: float, now: datetime | N
     return enrich_trade_plan_v3(updated)
 
 
+def trade_outcome_audit_action(plan: TradePlan) -> str:
+    if plan.outcome == "win":
+        return "trade_won"
+    if plan.outcome == "loss":
+        return "trade_lost"
+    if plan.outcome == "partial":
+        return "trade_partial"
+    if plan.outcome == "expired":
+        return "trade_expired"
+    if plan.outcome == "invalidated":
+        return "trade_invalidated"
+    return "trade_updated"
+
+
 def update_trade_ledger_outcomes(
     current_price: float,
     path: Path = TRADE_LEDGER_PATH,
@@ -1680,6 +1742,14 @@ def update_trade_ledger_outcomes(
         updated = evaluate_trade_plan(plan, current_price, now=now)
         if asdict(updated) != asdict(plan):
             append_trade_plan_snapshot(updated, path)
+            append_trade_gate_audit_event(
+                trade_outcome_audit_action(updated),
+                [updated.outcome_reason or updated.post_mortem or "Outcome mis a jour."],
+                candidate=updated,
+                path=trade_gate_audit_path_for_ledger(path),
+                now=now,
+                extra={"previous_status": plan.status, "previous_outcome": plan.outcome},
+            )
         updated_plans.append(updated)
     return sorted(updated_plans, key=lambda item: item.created_at, reverse=True)
 
@@ -1786,6 +1856,62 @@ def build_trade_quality_gate(
     return allowed, reasons, validating, contradicting
 
 
+def normalize_trade_timeframe(value: str) -> str | None:
+    compact = value.strip().upper().replace(" ", "")
+    aliases = {
+        "5M": "M5",
+        "M5": "M5",
+        "15M": "M15",
+        "M15": "M15",
+        "1H": "H1",
+        "H1": "H1",
+        "4H": "H4",
+        "H4": "H4",
+        "1D": "D1",
+        "D1": "D1",
+        "DAILY": "D1",
+    }
+    return aliases.get(compact)
+
+
+def infer_trade_validity_minutes(
+    technical_readings: list[TechnicalReading],
+    technical_decision: TechnicalDecision | None = None,
+    event_mode: EventModeAnalysis | None = None,
+) -> tuple[int, str]:
+    timeframe_minutes = {
+        "M5": 120,
+        "M15": 240,
+        "H1": 720,
+        "H4": 1440,
+        "D1": 4320,
+    }
+    probe = " ".join(
+        [
+            technical_decision.trigger if technical_decision else "",
+            technical_decision.invalidation if technical_decision else "",
+            technical_decision.structure if technical_decision else "",
+        ]
+    )
+    for timeframe in ("M5", "M15", "H1", "H4", "D1"):
+        if re.search(rf"(?<![A-Z0-9]){timeframe}(?![A-Z0-9])", probe.upper()):
+            minutes = timeframe_minutes[timeframe]
+            if event_mode is not None and event_mode.active:
+                minutes = max(60, round(minutes * 0.75))
+            return minutes, timeframe
+    normalized_readings = [normalize_trade_timeframe(reading.timeframe) for reading in technical_readings]
+    normalized_readings = [item for item in normalized_readings if item]
+    if normalized_readings:
+        priority = ["M5", "M15", "H1", "H4", "D1"]
+        timeframe = next((item for item in priority if item in normalized_readings), normalized_readings[0])
+    else:
+        timeframe = "M15"
+    minutes = timeframe_minutes[timeframe]
+    if event_mode is not None and event_mode.active:
+        minutes = max(60, round(minutes * 0.75))
+    return minutes, timeframe
+
+
 def build_trade_plan_from_signal(
     gold: SymbolSnapshot,
     global_recommendation: TradeRecommendation,
@@ -1796,6 +1922,8 @@ def build_trade_plan_from_signal(
     technical_readings: list[TechnicalReading],
     now: datetime | None = None,
     macro_catalysts: MacroCatalystCalendar | None = None,
+    technical_decision: TechnicalDecision | None = None,
+    event_mode: EventModeAnalysis | None = None,
     settings: UserSettings | None = None,
 ) -> tuple[TradePlan | None, list[str]]:
     reference = now or datetime.now(timezone.utc)
@@ -1825,6 +1953,11 @@ def build_trade_plan_from_signal(
         f"{reading.timeframe}:{reading.verdict}/{reading.score:+.1f}"
         for reading in technical_readings[:5]
     )
+    validity_minutes, validity_timeframe = infer_trade_validity_minutes(
+        technical_readings,
+        technical_decision=technical_decision,
+        event_mode=event_mode,
+    )
     evidence_sources = sorted({
         source
         for agent in agent_results
@@ -1849,7 +1982,7 @@ def build_trade_plan_from_signal(
         risk_reward_tp1=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_1),
         risk_reward_tp2=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_2),
         risk_reward_tp3=compute_risk_reward(direction, entry, global_recommendation.stop_loss, tp3),
-        max_valid_until=(reference + timedelta(hours=6)).replace(microsecond=0).isoformat(),
+        max_valid_until=(reference + timedelta(minutes=validity_minutes)).replace(microsecond=0).isoformat(),
         source_signal_id=signal_id,
         global_score_at_creation=global_recommendation.score,
         data_quality_score=data_quality.score if data_quality else 0,
@@ -1866,6 +1999,7 @@ def build_trade_plan_from_signal(
         invalidation_rules=[
             f"Invalidation principale si prix touche SL {global_recommendation.stop_loss:.2f}.",
             "Invalidation contextuelle si Data Quality passe sous 60/100 ou si un fait Tier 1 contredit le scenario.",
+            f"Validite dynamique: {validity_timeframe}, {validity_minutes} minutes.",
         ],
         outcome="open",
         outcome_reason="Trade Snapshot cree par Quality Gate; SL/TP figes.",
@@ -1880,6 +2014,7 @@ def has_recent_similar_trade(
     cooldown_minutes: int = 90,
     cooldown_after_loss_minutes: int = 240,
     cooldown_after_win_minutes: int = 60,
+    cooldown_after_expired_minutes: int = 60,
     now: datetime | None = None,
 ) -> bool:
     reference = now or datetime.now(timezone.utc)
@@ -1897,6 +2032,8 @@ def has_recent_similar_trade(
             cooldown = cooldown_after_loss_minutes
         elif plan.outcome == "win":
             cooldown = cooldown_after_win_minutes
+        elif plan.outcome == "expired":
+            cooldown = cooldown_after_expired_minutes
         else:
             cooldown = cooldown_minutes
         if (reference - closed_reference).total_seconds() <= cooldown * 60:
@@ -1981,10 +2118,13 @@ def build_trade_ledger_summary(
     allow_create: bool = True,
     settings: UserSettings | None = None,
     macro_catalysts: MacroCatalystCalendar | None = None,
+    technical_decision: TechnicalDecision | None = None,
+    event_mode: EventModeAnalysis | None = None,
 ) -> TradeLedgerSummary:
     reference = now or datetime.now(timezone.utc)
     active_settings = settings or default_user_settings()
     validate_user_settings(active_settings)
+    audit_path = trade_gate_audit_path_for_ledger(path)
     plans = update_trade_ledger_outcomes(gold.price, path=path, now=reference)
     candidate, gate_reasons = build_trade_plan_from_signal(
         gold,
@@ -1996,12 +2136,34 @@ def build_trade_ledger_summary(
         technical_readings,
         now=reference,
         macro_catalysts=macro_catalysts,
+        technical_decision=technical_decision,
+        event_mode=event_mode,
         settings=active_settings,
     )
+    if candidate is None and allow_create and gate_reasons and global_recommendation.verdict in {"BUY", "SELL"}:
+        append_trade_gate_audit_event(
+            "trade_refused_gate",
+            gate_reasons,
+            path=audit_path,
+            now=reference,
+            extra={
+                "verdict": global_recommendation.verdict,
+                "score": global_recommendation.score,
+                "data_quality_score": data_quality.score if data_quality else 0,
+                "market_regime": market_regime.name if market_regime else "Normal Macro",
+            },
+        )
     if candidate is not None:
         ledger_guard_reasons = build_trade_ledger_guard_reasons(plans, active_settings, reference)
         if ledger_guard_reasons:
             gate_reasons = ledger_guard_reasons
+            append_trade_gate_audit_event(
+                "trade_refused_ledger_guard",
+                gate_reasons,
+                candidate=candidate,
+                path=audit_path,
+                now=reference,
+            )
             candidate = None
         elif has_recent_similar_trade(
             plans,
@@ -2009,13 +2171,28 @@ def build_trade_ledger_summary(
             cooldown_minutes=active_settings.cooldown_minutes,
             cooldown_after_loss_minutes=active_settings.cooldown_after_loss_minutes,
             cooldown_after_win_minutes=active_settings.cooldown_after_win_minutes,
+            cooldown_after_expired_minutes=active_settings.cooldown_after_expired_minutes,
             now=reference,
         ):
             gate_reasons = ["Cooldown actif: un trade similaire est deja actif ou trop recent."]
+            append_trade_gate_audit_event(
+                "trade_refused_cooldown",
+                gate_reasons,
+                candidate=candidate,
+                path=audit_path,
+                now=reference,
+            )
             candidate = None
         elif allow_create:
             candidate = enrich_trade_plan_v3(candidate)
             append_trade_plan_snapshot(candidate, path)
+            append_trade_gate_audit_event(
+                "trade_created",
+                ["Trade Snapshot cree et verrouille dans le ledger append-only."],
+                candidate=candidate,
+                path=audit_path,
+                now=reference,
+            )
             plans = [candidate, *plans]
             gate_reasons = ["Trade Snapshot cree et verrouille dans le ledger append-only."]
 
@@ -10253,7 +10430,7 @@ def render_settings_panel(settings_payload: dict[str, Any] | None, validation_pa
         <div class="geo-stat"><strong>Trade threshold</strong><span>{settings.trade_threshold}/100</span><small>Score minimal trade</small></div>
         <div class="geo-stat"><strong>WATCH threshold</strong><span>{settings.watch_threshold}/100</span><small>Score minimal surveillance</small></div>
         <div class="geo-stat"><strong>Cooldown</strong><span>{settings.cooldown_minutes} min</span><small>Anti-duplicat ledger</small></div>
-        <div class="geo-stat"><strong>Cooldown loss/win</strong><span>{settings.cooldown_after_loss_minutes}/{settings.cooldown_after_win_minutes} min</span><small>Pause directionnelle</small></div>
+        <div class="geo-stat"><strong>Cooldown loss/win/expired</strong><span>{settings.cooldown_after_loss_minutes}/{settings.cooldown_after_win_minutes}/{settings.cooldown_after_expired_minutes} min</span><small>Pause directionnelle</small></div>
         <div class="geo-stat"><strong>Max trades 24h</strong><span>{settings.max_trades_per_24h}</span><small>Circuit breaker</small></div>
         <div class="geo-stat"><strong>Data quality min</strong><span>{settings.min_data_quality}/100</span><small>Blocage trade</small></div>
         <div class="geo-stat"><strong>RR minimum</strong><span>{settings.minimum_risk_reward:.2f}R</span><small>TP1 minimal</small></div>
@@ -12227,6 +12404,8 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_readings,
         settings=user_settings,
         macro_catalysts=live_bundle.macro_catalysts,
+        technical_decision=technical_decision,
+        event_mode=event_mode,
     )
     payload = build_payload(
         gold,
@@ -12444,6 +12623,9 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts,
         technical_readings,
         settings=user_settings,
+        macro_catalysts=macro_catalysts,
+        technical_decision=technical_decision,
+        event_mode=event_mode,
     )
     payload = build_payload(
         gold,

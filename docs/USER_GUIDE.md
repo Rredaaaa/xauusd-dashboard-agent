@@ -288,7 +288,7 @@ Parametres importants:
 - `minimum_risk_reward`: RR minimum;
 - `minimum_agent_confidence`: confiance minimale d'un agent validant;
 - `min_data_quality`: seuil minimum pour autoriser un TradePlan;
-- `cooldown_minutes`, `cooldown_after_loss_minutes`, `cooldown_after_win_minutes`: evite de creer plusieurs trades similaires ou de reprendre trop vite apres outcome;
+- `cooldown_minutes`, `cooldown_after_loss_minutes`, `cooldown_after_win_minutes`, `cooldown_after_expired_minutes`: evite de creer plusieurs trades similaires ou de reprendre trop vite apres outcome;
 - `max_trades_per_24h`, `circuit_breaker_after_n_losses`: limites de securite;
 - `active_agents`: agents actifs dans le terminal. Depuis la Phase 35, ils peuvent etre actives/desactives depuis la page Agents avec un bouton ON/OFF devant chaque agent.
 
@@ -300,6 +300,8 @@ Parametres importants:
 - `loss`: SL touche.
 - `expired`: validite depassee.
 - `invalidated`: invalidation contextuelle ou manuelle future.
+
+Depuis la Phase 2 v4, la validite d'un trade est dynamique: M5 = 2h, M15 = 4h, H1 = 12h, H4 = 24h, D1 = 72h. En regime event actif, cette duree est reduite de 25%. Le terminal garde aussi un audit append-only dans `reports/trade_gate_audit.jsonl` pour expliquer les creations, refus, expirations et outcomes.
 
 ## Audit log
 

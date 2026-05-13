@@ -1128,6 +1128,122 @@ class AnalysisShapeTests(unittest.TestCase):
             self.assertEqual(summary.stats.average_duration_minutes, 420)
             self.assertIn("Expired", summary.post_mortems[0].summary)
 
+    def test_trade_ledger_phase2_uses_dynamic_validity_from_trigger(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=72,
+            summary="Signal test.",
+            reasons=["Test"],
+            stop_loss=2380.0,
+            take_profit_1=2432.0,
+            take_profit_2=2450.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
+        ]
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            summary = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+                technical_decision=self.technical_decision("BUY", price=2400.0),
+            )
+            plan = summary.active_trades[0]
+            self.assertEqual(plan.max_valid_until, "2026-04-24T14:00:00+00:00")
+            self.assertTrue(any("Validite dynamique: M15, 240 minutes" in item for item in plan.invalidation_rules))
+
+    def test_trade_ledger_phase2_expired_cooldown_and_audit(self) -> None:
+        gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
+        recommendation = TradeRecommendation(
+            mode="Global",
+            verdict="BUY",
+            score=72,
+            summary="Signal test.",
+            reasons=["Test"],
+            stop_loss=2380.0,
+            take_profit_1=2432.0,
+            take_profit_2=2450.0,
+            source_note="Test.",
+        )
+        quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
+        agents = [
+            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
+        ]
+        settings = UserSettings(
+            active_agents=[
+                "PriceAgent",
+                "MacroAgent",
+                "TechnicalAgent",
+                "RiskManagerAgent",
+            ],
+            cooldown_after_expired_minutes=60,
+        )
+        with TemporaryDirectory() as tmpdir:
+            ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
+            audit_path = Path(tmpdir) / "trade_gate_audit.jsonl"
+            build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
+                settings=settings,
+                technical_decision=self.technical_decision("BUY", price=2400.0),
+            )
+            expired = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 14, 10, tzinfo=timezone.utc),
+                allow_create=False,
+                settings=settings,
+                technical_decision=self.technical_decision("BUY", price=2400.0),
+            )
+            self.assertEqual(expired.recent_trades[0].outcome, "expired")
+
+            blocked = build_trade_ledger_summary(
+                gold,
+                recommendation,
+                quality,
+                agents,
+                MarketRegimeAnalysis("Normal Macro", "NORMAL", 0, "neutre", "Normal.", []),
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 4, 24, 14, 30, tzinfo=timezone.utc),
+                settings=settings,
+                technical_decision=self.technical_decision("BUY", price=2400.0),
+            )
+            self.assertIn("Cooldown actif", blocked.quality_gate_reasons[0])
+            actions = [json.loads(line)["action"] for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            self.assertIn("trade_created", actions)
+            self.assertIn("trade_expired", actions)
+            self.assertIn("trade_refused_cooldown", actions)
+
     def test_passive_agents_do_not_replace_official_scoring(self) -> None:
         points = [PricePoint(timestamp=index, close=100 + index) for index in range(1, 15)]
         gold = SymbolSnapshot(

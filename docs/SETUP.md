@@ -82,7 +82,7 @@ Parametres principaux:
 - `minimum_risk_reward`: RR minimal sur TP1;
 - `minimum_agent_confidence`: confiance minimale d'un agent pour valider une direction;
 - `min_data_quality`: seuil minimum de qualite de donnees pour autoriser un TradePlan;
-- `cooldown_minutes`, `cooldown_after_loss_minutes`, `cooldown_after_win_minutes`: anti-doublon et pauses apres outcome;
+- `cooldown_minutes`, `cooldown_after_loss_minutes`, `cooldown_after_win_minutes`, `cooldown_after_expired_minutes`: anti-doublon et pauses apres outcome;
 - `max_trades_per_24h`, `circuit_breaker_after_n_losses`: limite d'emballement;
 - `active_agents`: agents decisionnels pris en compte par le Trade Gate.
 

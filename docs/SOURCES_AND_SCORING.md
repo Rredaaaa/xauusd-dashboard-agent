@@ -245,8 +245,10 @@ Depuis la Phase 32, ces seuils peuvent etre ajustes dans `config/aureum_settings
 - `scoring_mode=aggressive_controlled` reste accepte pour compatibilite, mais les planchers v4 restent `65/100`, `65/100` agent confidence, data quality `60/100` et `1.50R`;
 - `active_agents` limite les agents actifs pris en compte par le terminal. Les agents non decisionnels restent surtout des controles/affichages, mais leur bouton ON/OFF est visible dans la page Agents depuis la Phase 35;
 - `cooldown_minutes` bloque les doublons de TradePlan similaires;
-- `cooldown_after_loss_minutes=240` et `cooldown_after_win_minutes=60` bloquent la meme direction apres outcome;
+- `cooldown_after_loss_minutes=240`, `cooldown_after_win_minutes=60` et `cooldown_after_expired_minutes=60` bloquent la meme direction apres outcome;
 - `max_trades_per_24h` et le circuit breaker stoppent l'emballement du ledger.
+
+Depuis la Phase 2 v4, la validite d'un TradePlan n'est plus fixe a 6h. Elle depend du timeframe technique detecte: M5 = 2h, M15 = 4h, H1 = 12h, H4 = 24h, D1 = 72h. En mode event actif, cette validite est reduite de 25% pour limiter les vieux signaux. Chaque creation, refus, expiration, win, loss, partial ou invalidation est journalise dans `reports/trade_gate_audit.jsonl`.
 
 Depuis la Phase 31, le replay lit `reports/trade_ledger.jsonl` et `reports/audit_log.jsonl` pour mesurer les outcomes apres coup. Depuis la Phase 33, les rapports d'audit sont exportes dans `reports/v3/`.
 

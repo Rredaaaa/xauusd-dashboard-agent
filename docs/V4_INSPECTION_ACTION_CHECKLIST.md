@@ -253,7 +253,7 @@ Statuts autorises:
 
 - [x] Appliquer cooldown meme direction apres LOSS: 240 min.
 - [x] Appliquer cooldown meme direction apres WIN: 60 min.
-- [ ] Appliquer cooldown apres EXPIRED: 60 min.
+- [x] Appliquer cooldown apres EXPIRED: 60 min.
 - [x] Bloquer si trade ouvert meme direction/regime.
 - [x] Ajouter cooldown global: max trades / 24h.
 - [x] Ajouter pause 6h apres 3 losses dans la fenetre configuree.
@@ -261,14 +261,14 @@ Statuts autorises:
 
 ## 19. Validity
 
-- [ ] Remplacer validite fixe 6h.
-- [ ] M5 -> 2h.
-- [ ] M15 -> 4h.
-- [ ] H1 -> 12h.
-- [ ] H4 -> 24h.
-- [ ] D1 -> 72h.
-- [ ] Ajuster selon volatilite.
-- [ ] Documenter validite dans payload.
+- [x] Remplacer validite fixe 6h.
+- [x] M5 -> 2h.
+- [x] M15 -> 4h.
+- [x] H1 -> 12h.
+- [x] H4 -> 24h.
+- [x] D1 -> 72h.
+- [x] Ajuster selon volatilite.
+- [x] Documenter validite dans payload.
 
 ## 20. Event Mode
 

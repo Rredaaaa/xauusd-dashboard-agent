@@ -140,9 +140,9 @@ class AnalysisShapeTests(unittest.TestCase):
             entry_zone_low=price - 2.0,
             entry_zone_high=price + 2.0,
             stop_loss=price - 12.0 if is_buy else price + 12.0,
-            tp1=price + 14.0 if is_buy else price - 14.0,
-            tp2=price + 28.0 if is_buy else price - 28.0,
-            tp3=price + 42.0 if is_buy else price - 42.0,
+            tp1=price + 20.0 if is_buy else price - 20.0,
+            tp2=price + 36.0 if is_buy else price - 36.0,
+            tp3=price + 54.0 if is_buy else price - 54.0,
             reasons=["Structure technique valide."],
             contradictions=[],
         )
@@ -639,7 +639,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Scoring et position de chaque agent", dashboard)
         self.assertIn("Positions agents", dashboard)
         self.assertIn("PriceAgent", dashboard)
-        self.assertIn("OrchestratorAgent", dashboard)
+        self.assertNotIn("OrchestratorAgent", dashboard)
         self.assertIn("Contradictions", dashboard)
         self.assertIn("Flux d'informations utiles", dashboard)
         self.assertIn("News avec impact XAU/USD", dashboard)
@@ -966,7 +966,7 @@ class AnalysisShapeTests(unittest.TestCase):
             summary="Signal test verrouillable.",
             reasons=["Score global fort", "Agents alignes"],
             stop_loss=2380.0,
-            take_profit_1=2425.0,
+            take_profit_1=2432.0,
             take_profit_2=2450.0,
             source_note="Test.",
         )
@@ -1004,7 +1004,7 @@ class AnalysisShapeTests(unittest.TestCase):
             plan = summary.active_trades[0]
             self.assertEqual(plan.reference_price, 2400.0)
             self.assertEqual(plan.stop_loss, 2380.0)
-            self.assertEqual(plan.tp1, 2425.0)
+            self.assertEqual(plan.tp1, 2432.0)
 
             second = build_trade_ledger_summary(
                 gold,
@@ -1030,7 +1030,7 @@ class AnalysisShapeTests(unittest.TestCase):
             summary="Signal test.",
             reasons=["Test"],
             stop_loss=2380.0,
-            take_profit_1=2425.0,
+            take_profit_1=2432.0,
             take_profit_2=2450.0,
             source_note="Test.",
         )
@@ -1038,6 +1038,7 @@ class AnalysisShapeTests(unittest.TestCase):
         agents = [
             AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
         with TemporaryDirectory() as tmpdir:
             ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
@@ -1084,7 +1085,7 @@ class AnalysisShapeTests(unittest.TestCase):
             summary="Signal test.",
             reasons=["Test"],
             stop_loss=2380.0,
-            take_profit_1=2425.0,
+            take_profit_1=2432.0,
             take_profit_2=2450.0,
             source_note="Test.",
         )
@@ -1092,6 +1093,7 @@ class AnalysisShapeTests(unittest.TestCase):
         agents = [
             AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
+            AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
         with TemporaryDirectory() as tmpdir:
             ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
@@ -1174,7 +1176,7 @@ class AnalysisShapeTests(unittest.TestCase):
             analysis,
             global_recommendation=official,
         )
-        self.assertEqual(len(agents), 11)
+        self.assertEqual(len(agents), 10)
         self.assertTrue(all(agent.experimental for agent in agents))
         self.assertFalse(any(agent.name == "ElliottWaveAgent" for agent in agents))
         self.assertEqual(official.verdict, "BUY")
@@ -1198,7 +1200,6 @@ class AnalysisShapeTests(unittest.TestCase):
             AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
             AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
             AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
-            AgentResult("OrchestratorAgent", "Decision", "BUY", 66, 74, "Ancien orchestrateur passif."),
         ]
         quality = DataQualitySnapshot(
             generated_at="2026-04-24T10:00:00+00:00",
@@ -1224,9 +1225,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertGreaterEqual(decision.score, 60)
         self.assertEqual(decision.engine, "orchestrator_v3_dynamic")
         updated_agents = update_orchestrator_agent(agents, decision)
-        active_orchestrator = next(agent for agent in updated_agents if agent.name == "OrchestratorAgent")
-        self.assertEqual(active_orchestrator.status, "ACTIVE")
-        self.assertFalse(active_orchestrator.experimental)
+        self.assertFalse(any(agent.name == "OrchestratorAgent" for agent in updated_agents))
 
     def test_orchestrator_v3_forces_wait_on_strong_contradiction(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
@@ -1246,7 +1245,6 @@ class AnalysisShapeTests(unittest.TestCase):
             AgentResult("MacroAgent", "Macro", "SELL", 80, 76, "Macro defavorable."),
             AgentResult("CorrelationAgent", "Market", "BUY", 70, 70, "Cross-assets favorables."),
             AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "SELL", 35, 75, "Flux defavorables."),
-            AgentResult("OrchestratorAgent", "Decision", "BUY", 64, 74, "Ancien orchestrateur passif."),
         ]
         quality = DataQualitySnapshot(
             generated_at="2026-04-24T10:00:00+00:00",
@@ -1310,9 +1308,9 @@ class AnalysisShapeTests(unittest.TestCase):
             event_mode=EventModeAnalysis(False, 0, "NORMAL", "standard", 1.0, []),
             technical_decision=self.technical_decision("BUY", gold.price),
         )
-        self.assertEqual(recommendation.verdict, "BUY")
-        self.assertEqual(decision.status, "TRADE_BUY")
-        self.assertTrue(any("majorite nette" in reason for reason in decision.quality_gate_reasons))
+        self.assertEqual(recommendation.verdict, "WAIT")
+        self.assertEqual(decision.status, "WAIT")
+        self.assertTrue(any("Contradiction forte" in reason for reason in decision.quality_gate_reasons))
 
     def test_orchestrator_allows_degraded_quality_and_soft_event_when_direction_clear(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
@@ -1353,9 +1351,9 @@ class AnalysisShapeTests(unittest.TestCase):
             event_mode=EventModeAnalysis(True, 35, "ACTIF", "surveillance", 1.5, ["volume eleve"]),
             technical_decision=self.technical_decision("SELL", gold.price),
         )
-        self.assertEqual(recommendation.verdict, "SELL")
-        self.assertEqual(decision.status, "TRADE_SELL")
-        self.assertTrue(any("Data quality degradee" in reason for reason in decision.quality_gate_reasons))
+        self.assertEqual(recommendation.verdict, "WATCH_SELL")
+        self.assertEqual(decision.status, "WATCH_SELL")
+        self.assertTrue(any("Source quality limitee" in reason for reason in decision.quality_gate_reasons))
         self.assertTrue(any("Mode event surveille" in reason for reason in decision.quality_gate_reasons))
 
     def test_orchestrator_v3_watches_when_technical_trigger_missing(self) -> None:
@@ -1449,7 +1447,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(decision.status, "NO_TRADE")
         self.assertTrue(any("Preflight bloquant" in reason for reason in decision.quality_gate_reasons))
 
-    def test_trade_gate_ignores_audit_agents_for_locking(self) -> None:
+    def test_trade_gate_blocks_weak_score_even_without_audit_agents(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         recommendation = TradeRecommendation(
             mode="Global",
@@ -1476,7 +1474,6 @@ class AnalysisShapeTests(unittest.TestCase):
             AgentResult("TechnicalAgent", "Technical", "BUY", 64, 70, "Technique valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 62, 76, "Macro valide."),
             AgentResult("RiskManagerAgent", "Decision", "CAUTION", 55, 72, "Risque surveille."),
-            AgentResult("OrchestratorAgent", "Decision", "CAUTION", 55, 64, "Audit."),
         ]
         with TemporaryDirectory() as tmpdir:
             ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
@@ -1491,11 +1488,11 @@ class AnalysisShapeTests(unittest.TestCase):
                 path=ledger_path,
                 now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
             )
-            self.assertEqual(summary.quality_gate_status, "VALIDATED")
-            self.assertEqual(len(summary.active_trades), 1)
-            self.assertEqual(summary.active_trades[0].agents_contradicting, [])
+            self.assertEqual(summary.quality_gate_status, "WAIT")
+            self.assertFalse(summary.active_trades)
+            self.assertTrue(any("Score global insuffisant" in reason for reason in summary.quality_gate_reasons))
 
-    def test_trade_gate_aggressive_profile_locks_clear_majority(self) -> None:
+    def test_trade_gate_blocks_legacy_aggressive_profile_below_v4_threshold(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
         recommendation = TradeRecommendation(
             mode="Global",
@@ -1538,10 +1535,9 @@ class AnalysisShapeTests(unittest.TestCase):
                 path=ledger_path,
                 now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
             )
-            self.assertEqual(summary.quality_gate_status, "VALIDATED")
-            self.assertEqual(len(summary.active_trades), 1)
-            self.assertEqual(summary.active_trades[0].agents_contradicting, ["CorrelationAgent"])
-            self.assertEqual(summary.active_trades[0].global_score_at_creation, 56)
+            self.assertEqual(summary.quality_gate_status, "WAIT")
+            self.assertFalse(summary.active_trades)
+            self.assertTrue(any("Score global insuffisant" in reason for reason in summary.quality_gate_reasons))
 
     def test_orchestrator_has_no_elliott_component(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
@@ -1562,7 +1558,6 @@ class AnalysisShapeTests(unittest.TestCase):
             AgentResult("GeopoliticalOilShockAgent", "Geopolitics & Flows", "NEUTRAL", 50, 65, "Pas de choc oil."),
             AgentResult("CorrelationAgent", "Market", "BUY", 68, 70, "Cross-assets favorables."),
             AgentResult("FlowPositioningAgent", "Geopolitics & Flows", "BUY", 62, 75, "Flux favorables."),
-            AgentResult("OrchestratorAgent", "Decision", "BUY", 66, 74, "Ancien orchestrateur passif."),
         ]
         quality = DataQualitySnapshot(
             generated_at="2026-04-24T10:00:00+00:00",
@@ -2188,7 +2183,8 @@ class Phase31To34CompletionTests(unittest.TestCase):
             )
             loaded, validation = load_user_settings(path=settings_path)
             self.assertEqual(validation.status, "OK")
-            self.assertEqual(loaded.trade_threshold, 60)
+            self.assertEqual(loaded.trade_threshold, 70)
+            self.assertGreaterEqual(loaded.minimum_risk_reward, 1.8)
 
     def test_phase35_agent_toggle_persists_and_marks_agent_off(self) -> None:
         with TemporaryDirectory() as tmp:

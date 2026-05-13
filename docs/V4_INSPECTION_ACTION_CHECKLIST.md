@@ -24,16 +24,16 @@ Statuts autorises:
 
 ## 1. Settings critiques
 
-- [ ] Passer `minimum_risk_reward` de `0.65` a `1.5`.
-- [ ] Passer `trade_threshold` de `55` a `65`.
-- [ ] Passer `minimum_agent_confidence` de `50` a `65`.
-- [ ] Passer `scoring_mode` de `aggressive_controlled` a `balanced` ou `conservative`.
-- [ ] Ajouter `cooldown_after_loss_minutes = 240`.
-- [ ] Ajouter `cooldown_after_win_minutes = 60`.
-- [ ] Ajouter `max_trades_per_24h`.
-- [ ] Ajouter `circuit_breaker_after_n_losses`.
-- [ ] Ajouter `circuit_breaker_window_hours`.
-- [ ] Ajouter `circuit_breaker_pause_hours`.
+- [x] Passer `minimum_risk_reward` de `0.65` a `1.5`.
+- [x] Passer `trade_threshold` de `55` a `65`.
+- [x] Passer `minimum_agent_confidence` de `50` a `65`.
+- [x] Passer `scoring_mode` de `aggressive_controlled` a `balanced` ou `conservative`.
+- [x] Ajouter `cooldown_after_loss_minutes = 240`.
+- [x] Ajouter `cooldown_after_win_minutes = 60`.
+- [x] Ajouter `max_trades_per_24h`.
+- [x] Ajouter `circuit_breaker_after_n_losses`.
+- [x] Ajouter `circuit_breaker_window_hours`.
+- [x] Ajouter `circuit_breaker_pause_hours`.
 - [ ] Ajouter `min_data_quality = 60`.
 - [ ] Ajouter `no_trade_window_minutes_before_high_macro = 30`.
 - [ ] Ajouter `no_trade_window_minutes_after_high_macro = 15`.
@@ -55,7 +55,7 @@ Statuts autorises:
 
 ## 3. TechnicalAgent
 
-- [ ] Plafonner confidence a `85/100`.
+- [x] Plafonner confidence a `85/100`.
 - [ ] Calibrer poids multi-timeframe sur backtest.
 - [ ] Exiger trigger reel avant conversion WATCH -> TRADE.
 - [ ] Verifier cloture M15 au-dessus/sous trigger.
@@ -69,7 +69,7 @@ Statuts autorises:
 - [ ] Inclure fraicheur effective FRED dans confidence.
 - [ ] Ponderer DGS10, DXY, DFII10, T10YIE.
 - [ ] Ajouter macro surprise: reel - consensus.
-- [ ] Ajouter veto HIGH-impact dans les 30 min.
+- [x] Ajouter veto HIGH-impact dans les 30 min.
 - [ ] Exposer trajectoire sur 3 dernieres publications.
 - [ ] Ajouter DGS3M.
 - [ ] Ajouter 30Y.
@@ -87,14 +87,14 @@ Statuts autorises:
 - [ ] Documenter score brut par composant.
 - [ ] Rendre confidence dynamique selon WTI/Brent/headlines.
 - [ ] Ajouter cooldown de changement de regime sur 4h.
-- [ ] Elever seuil Hormuz a 70.
+- [x] Elever seuil Hormuz a 70.
 - [ ] Ajouter regime Risk-On / Carry Trade.
 
 ## 6. SentimentNewsAgent
 
-- [ ] Desactiver scoring si sources tier > 2.
-- [ ] Desactiver scoring si age median news > 60 min.
-- [ ] Mettre score a 50 et confidence a 0 si news faibles.
+- [x] Desactiver scoring si sources tier > 2.
+- [x] Desactiver scoring si age median news > 60 min.
+- [x] Mettre score a 50 et confidence a 0 si news faibles.
 - [ ] Ponderer par tier source.
 - [ ] Ponderer par fraicheur.
 - [ ] Remplacer keyword scoring par tone analysis.
@@ -167,12 +167,12 @@ Statuts autorises:
 
 ## 12. OrchestratorAgent legacy
 
-- [ ] Supprimer OrchestratorAgent legacy.
-- [ ] Conserver uniquement OrchestratorDecision v3.
+- [x] Supprimer OrchestratorAgent legacy.
+- [x] Conserver uniquement OrchestratorDecision v3.
 - [ ] Nettoyer mentions "ancien moteur".
 - [ ] Corriger duplication `RISK [high] Gate:`.
-- [ ] Mettre a jour tests qui reference OrchestratorAgent.
-- [ ] Verifier que les contradictions ne comptent plus cet agent legacy.
+- [x] Mettre a jour tests qui reference OrchestratorAgent.
+- [x] Verifier que les contradictions ne comptent plus cet agent legacy.
 
 ## 13. TradeQualityGate
 
@@ -251,13 +251,13 @@ Statuts autorises:
 
 ## 18. Cooldown
 
-- [ ] Appliquer cooldown meme direction apres LOSS: 240 min.
-- [ ] Appliquer cooldown meme direction apres WIN: 60 min.
+- [x] Appliquer cooldown meme direction apres LOSS: 240 min.
+- [x] Appliquer cooldown meme direction apres WIN: 60 min.
 - [ ] Appliquer cooldown apres EXPIRED: 60 min.
-- [ ] Bloquer si trade ouvert meme direction/regime.
-- [ ] Ajouter cooldown global: max trades / 24h.
-- [ ] Ajouter pause 6h apres 2 losses consecutives.
-- [ ] Documenter cooldown dans RiskManagerAgent.
+- [x] Bloquer si trade ouvert meme direction/regime.
+- [x] Ajouter cooldown global: max trades / 24h.
+- [x] Ajouter pause 6h apres 3 losses dans la fenetre configuree.
+- [x] Documenter cooldown dans Settings/Risk Gate.
 
 ## 19. Validity
 

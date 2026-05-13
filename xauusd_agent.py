@@ -781,12 +781,21 @@ class TradeLedgerSummary:
 @dataclass
 class UserSettings:
     active_agents: list[str]
-    scoring_mode: str = "aggressive_controlled"
-    minimum_agent_confidence: int = 50
+    scoring_mode: str = "balanced"
+    minimum_agent_confidence: int = 65
     watch_threshold: int = 50
-    trade_threshold: int = 55
+    trade_threshold: int = 65
     cooldown_minutes: int = 90
-    minimum_risk_reward: float = 0.65
+    cooldown_after_loss_minutes: int = 240
+    cooldown_after_win_minutes: int = 60
+    max_trades_per_24h: int = 8
+    circuit_breaker_after_n_losses: int = 3
+    circuit_breaker_window_hours: int = 24
+    circuit_breaker_pause_hours: int = 6
+    minimum_risk_reward: float = 1.5
+    min_data_quality: int = 60
+    no_trade_window_minutes_before_high_macro: int = 30
+    no_trade_window_minutes_after_high_macro: int = 15
     notifications_enabled: bool = False
 
 
@@ -1091,7 +1100,7 @@ def iso_now() -> str:
 
 
 SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
-    "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceAgent", "RiskManagerAgent", "OrchestratorAgent"]),
+    "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceAgent", "RiskManagerAgent"]),
     "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 2, 120, False, IG_WEEKEND_GOLD_URL, ["PriceAgent", "RiskManagerAgent"]),
     "fred_dgs10": SourceRegistryEntry("fred_dgs10", "FRED DGS10", "rates", 1, 10080, True, FRED_CSV_URL_TEMPLATE.format(series_id="DGS10"), ["MacroAgent", "RiskManagerAgent"]),
     "fred_dgs2": SourceRegistryEntry("fred_dgs2", "FRED DGS2", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS2"), ["MacroAgent"]),
@@ -1123,7 +1132,6 @@ ALL_AGENT_NAMES = {
     "EventFactsAgent",
     "TrumpPoliticalStatementsAgent",
     "RiskManagerAgent",
-    "OrchestratorAgent",
 }
 
 
@@ -1133,15 +1141,24 @@ def default_user_settings() -> UserSettings:
 
 def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, created_default: bool = False) -> SettingsValidation:
     warnings: list[str] = []
-    allowed_modes = {"conservative", "aggressive_controlled"}
+    allowed_modes = {"conservative", "balanced", "aggressive_controlled"}
     if settings.scoring_mode not in allowed_modes:
-        warnings.append(f"scoring_mode inconnu: {settings.scoring_mode}; fallback aggressive_controlled.")
-        settings.scoring_mode = "aggressive_controlled"
-    settings.minimum_agent_confidence = max(0, min(100, int(settings.minimum_agent_confidence)))
+        warnings.append(f"scoring_mode inconnu: {settings.scoring_mode}; fallback balanced.")
+        settings.scoring_mode = "balanced"
+    settings.minimum_agent_confidence = max(65, min(100, int(settings.minimum_agent_confidence)))
     settings.watch_threshold = max(0, min(100, int(settings.watch_threshold)))
-    settings.trade_threshold = max(0, min(100, int(settings.trade_threshold)))
+    settings.trade_threshold = max(65, min(100, int(settings.trade_threshold)))
     settings.cooldown_minutes = max(0, min(1440, int(settings.cooldown_minutes)))
-    settings.minimum_risk_reward = max(0.1, min(5.0, float(settings.minimum_risk_reward)))
+    settings.cooldown_after_loss_minutes = max(240, min(1440, int(settings.cooldown_after_loss_minutes)))
+    settings.cooldown_after_win_minutes = max(60, min(1440, int(settings.cooldown_after_win_minutes)))
+    settings.max_trades_per_24h = max(1, min(50, int(settings.max_trades_per_24h)))
+    settings.circuit_breaker_after_n_losses = max(1, min(20, int(settings.circuit_breaker_after_n_losses)))
+    settings.circuit_breaker_window_hours = max(1, min(168, int(settings.circuit_breaker_window_hours)))
+    settings.circuit_breaker_pause_hours = max(1, min(72, int(settings.circuit_breaker_pause_hours)))
+    settings.minimum_risk_reward = max(1.5, min(5.0, float(settings.minimum_risk_reward)))
+    settings.min_data_quality = max(60, min(100, int(settings.min_data_quality)))
+    settings.no_trade_window_minutes_before_high_macro = max(0, min(240, int(settings.no_trade_window_minutes_before_high_macro)))
+    settings.no_trade_window_minutes_after_high_macro = max(0, min(240, int(settings.no_trade_window_minutes_after_high_macro)))
     unknown_agents = [agent for agent in settings.active_agents if agent not in ALL_AGENT_NAMES]
     if unknown_agents:
         warnings.append("agents inconnus ignores: " + ", ".join(sorted(unknown_agents)))
@@ -1150,8 +1167,8 @@ def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, c
         warnings.append("aucun agent actif valide; fallback agents par defaut.")
         settings.active_agents = sorted(ALL_AGENT_NAMES)
     if settings.scoring_mode == "conservative":
-        settings.trade_threshold = max(settings.trade_threshold, 60)
-        settings.minimum_risk_reward = max(settings.minimum_risk_reward, 0.8)
+        settings.trade_threshold = max(settings.trade_threshold, 70)
+        settings.minimum_risk_reward = max(settings.minimum_risk_reward, 1.8)
     return SettingsValidation(
         path=str(path),
         status="OK" if not warnings else "WARN",
@@ -1171,7 +1188,16 @@ def parse_user_settings(data: dict[str, Any] | None) -> UserSettings:
         watch_threshold=int(data.get("watch_threshold", defaults.watch_threshold) or defaults.watch_threshold),
         trade_threshold=int(data.get("trade_threshold", defaults.trade_threshold) or defaults.trade_threshold),
         cooldown_minutes=int(data.get("cooldown_minutes", defaults.cooldown_minutes) or defaults.cooldown_minutes),
+        cooldown_after_loss_minutes=int(data.get("cooldown_after_loss_minutes", defaults.cooldown_after_loss_minutes) or defaults.cooldown_after_loss_minutes),
+        cooldown_after_win_minutes=int(data.get("cooldown_after_win_minutes", defaults.cooldown_after_win_minutes) or defaults.cooldown_after_win_minutes),
+        max_trades_per_24h=int(data.get("max_trades_per_24h", defaults.max_trades_per_24h) or defaults.max_trades_per_24h),
+        circuit_breaker_after_n_losses=int(data.get("circuit_breaker_after_n_losses", defaults.circuit_breaker_after_n_losses) or defaults.circuit_breaker_after_n_losses),
+        circuit_breaker_window_hours=int(data.get("circuit_breaker_window_hours", defaults.circuit_breaker_window_hours) or defaults.circuit_breaker_window_hours),
+        circuit_breaker_pause_hours=int(data.get("circuit_breaker_pause_hours", defaults.circuit_breaker_pause_hours) or defaults.circuit_breaker_pause_hours),
         minimum_risk_reward=float(data.get("minimum_risk_reward", defaults.minimum_risk_reward) or defaults.minimum_risk_reward),
+        min_data_quality=int(data.get("min_data_quality", defaults.min_data_quality) or defaults.min_data_quality),
+        no_trade_window_minutes_before_high_macro=int(data.get("no_trade_window_minutes_before_high_macro", defaults.no_trade_window_minutes_before_high_macro) or defaults.no_trade_window_minutes_before_high_macro),
+        no_trade_window_minutes_after_high_macro=int(data.get("no_trade_window_minutes_after_high_macro", defaults.no_trade_window_minutes_after_high_macro) or defaults.no_trade_window_minutes_after_high_macro),
         notifications_enabled=bool(data.get("notifications_enabled", defaults.notifications_enabled)),
     )
 
@@ -1658,12 +1684,32 @@ def update_trade_ledger_outcomes(
     return sorted(updated_plans, key=lambda item: item.created_at, reverse=True)
 
 
+def build_macro_trade_window_reasons(
+    macro_catalysts: MacroCatalystCalendar | None,
+    settings: UserSettings,
+) -> list[str]:
+    if macro_catalysts is None:
+        return []
+    before = settings.no_trade_window_minutes_before_high_macro
+    after = settings.no_trade_window_minutes_after_high_macro
+    reasons: list[str] = []
+    for event in macro_catalysts.catalysts:
+        if event.impact_level != "HIGH" or event.minutes_to_event is None:
+            continue
+        if -after <= event.minutes_to_event <= before:
+            reasons.append(
+                f"Fenetre macro HIGH: {event.event_type} dans {format_macro_countdown(event.minutes_to_event)}; nouveau trade bloque."
+            )
+    return reasons[:2]
+
+
 def build_trade_quality_gate(
     gold: SymbolSnapshot,
     global_recommendation: TradeRecommendation,
     data_quality: DataQualitySnapshot | None,
     agent_results: list[AgentResult],
     market_regime: MarketRegimeAnalysis | None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
     settings: UserSettings | None = None,
 ) -> tuple[bool, list[str], list[str], list[str]]:
     hard_reasons: list[str] = []
@@ -1689,7 +1735,6 @@ def build_trade_quality_gate(
         for agent in decision_agents
         if agent.bias in {"BUY", "SELL"} and agent.bias != global_recommendation.verdict
     ]
-    aggressive_majority = len(validating) >= 3 and len(contradicting) <= 1
 
     if global_recommendation.score < trade_threshold:
         hard_reasons.append(f"Score global insuffisant: {global_recommendation.score}/100 < {trade_threshold}.")
@@ -1701,23 +1746,24 @@ def build_trade_quality_gate(
         hard_reasons.append("Data quality indisponible.")
     elif data_quality.preflight and data_quality.preflight.trade_blocked:
         hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
-    elif data_quality.score < 52:
-        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 52.")
+    elif data_quality.score < active_settings.min_data_quality:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < {active_settings.min_data_quality}.")
     elif data_quality.score < 68:
         advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; taille et confiance a reduire.")
-    if len(validating) < 2:
-        hard_reasons.append("Moins de deux agents decisionnels valident la direction.")
-    if len(contradicting) >= 3 and not aggressive_majority:
+    if len(validating) < 3:
+        hard_reasons.append("Moins de trois agents decisionnels valident la direction avec confiance suffisante.")
+    if len(contradicting) >= 3:
         hard_reasons.append("Trop de contradictions entre agents decisionnels.")
-    elif contradicting and aggressive_majority:
-        advisory_reasons.append(
-            f"Contradiction absorbee par majorite nette: {len(validating)} agent(s) valident, {len(contradicting)} contredit."
-        )
+    elif contradicting:
+        advisory_reasons.append(f"Contradiction presente: {len(contradicting)} agent(s) contre la direction.")
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
-        if market_regime.score >= 85:
-            hard_reasons.append("Regime geopolitique/petrole extreme: trade locking suspendu sans validation manuelle.")
-        elif market_regime.score >= 75:
-            advisory_reasons.append("Regime geopolitique/petrole fort: trade autorise en taille reduite si le signal reste confirme.")
+        if market_regime.score >= 70:
+            hard_reasons.append("Regime geopolitique/petrole actif >= 70/100: nouveau trade bloque.")
+        if global_recommendation.verdict == "BUY":
+            hard_reasons.append("Direction BUY contraire au regime petrole/dollar actif: attendre neutralisation du regime.")
+    elif market_regime is not None and market_regime.name == "Safe-Haven Gold" and global_recommendation.verdict == "SELL":
+        hard_reasons.append("Direction SELL contraire au regime refuge gold: attendre neutralisation du regime.")
+    hard_reasons.extend(build_macro_trade_window_reasons(macro_catalysts, active_settings))
     rr1 = compute_risk_reward(
         global_recommendation.verdict,
         gold.price,
@@ -1749,6 +1795,7 @@ def build_trade_plan_from_signal(
     event_facts: list[EventFact],
     technical_readings: list[TechnicalReading],
     now: datetime | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
     settings: UserSettings | None = None,
 ) -> tuple[TradePlan | None, list[str]]:
     reference = now or datetime.now(timezone.utc)
@@ -1758,6 +1805,7 @@ def build_trade_plan_from_signal(
         data_quality,
         agent_results,
         market_regime,
+        macro_catalysts=macro_catalysts,
         settings=settings,
     )
     if not allowed:
@@ -1817,7 +1865,7 @@ def build_trade_plan_from_signal(
         elliott_wave_snapshot="",
         invalidation_rules=[
             f"Invalidation principale si prix touche SL {global_recommendation.stop_loss:.2f}.",
-            "Invalidation contextuelle si Data Quality passe sous 55/100 ou si un fait Tier 1 contredit le scenario.",
+            "Invalidation contextuelle si Data Quality passe sous 60/100 ou si un fait Tier 1 contredit le scenario.",
         ],
         outcome="open",
         outcome_reason="Trade Snapshot cree par Quality Gate; SL/TP figes.",
@@ -1830,18 +1878,73 @@ def has_recent_similar_trade(
     plans: list[TradePlan],
     candidate: TradePlan,
     cooldown_minutes: int = 90,
+    cooldown_after_loss_minutes: int = 240,
+    cooldown_after_win_minutes: int = 60,
     now: datetime | None = None,
 ) -> bool:
     reference = now or datetime.now(timezone.utc)
     for plan in plans:
-        if plan.direction != candidate.direction or plan.market_regime != candidate.market_regime:
+        if plan.direction != candidate.direction:
             continue
         if not trade_plan_closed(plan):
-            return True
-        created = parse_iso_datetime(plan.created_at)
-        if created is not None and (reference - created).total_seconds() <= cooldown_minutes * 60:
+            if plan.market_regime == candidate.market_regime:
+                return True
+            continue
+        closed_reference = parse_iso_datetime(plan.closed_at or plan.updated_at or plan.created_at)
+        if closed_reference is None:
+            continue
+        if plan.outcome == "loss":
+            cooldown = cooldown_after_loss_minutes
+        elif plan.outcome == "win":
+            cooldown = cooldown_after_win_minutes
+        else:
+            cooldown = cooldown_minutes
+        if (reference - closed_reference).total_seconds() <= cooldown * 60:
             return True
     return False
+
+
+def count_recent_trade_records(plans: list[TradePlan], reference: datetime, hours: int) -> int:
+    window_seconds = hours * 3600
+    count = 0
+    for plan in plans:
+        if trade_record_type(plan) == "setup_surveille":
+            continue
+        created = parse_iso_datetime(plan.created_at)
+        if created is not None and 0 <= (reference - created).total_seconds() <= window_seconds:
+            count += 1
+    return count
+
+
+def count_recent_losses(plans: list[TradePlan], reference: datetime, hours: int) -> int:
+    window_seconds = hours * 3600
+    count = 0
+    for plan in plans:
+        if plan.outcome != "loss" or trade_record_type(plan) == "setup_surveille":
+            continue
+        closed_reference = parse_iso_datetime(plan.closed_at or plan.updated_at or plan.created_at)
+        if closed_reference is not None and 0 <= (reference - closed_reference).total_seconds() <= window_seconds:
+            count += 1
+    return count
+
+
+def build_trade_ledger_guard_reasons(
+    plans: list[TradePlan],
+    settings: UserSettings,
+    reference: datetime,
+) -> list[str]:
+    reasons: list[str] = []
+    recent_trade_count = count_recent_trade_records(plans, reference, 24)
+    if recent_trade_count >= settings.max_trades_per_24h:
+        reasons.append(
+            f"Limite journaliere atteinte: {recent_trade_count} trade(s) sur 24h >= {settings.max_trades_per_24h}."
+        )
+    recent_losses = count_recent_losses(plans, reference, settings.circuit_breaker_window_hours)
+    if recent_losses >= settings.circuit_breaker_after_n_losses:
+        reasons.append(
+            f"Circuit breaker actif: {recent_losses} loss sur {settings.circuit_breaker_window_hours}h; pause {settings.circuit_breaker_pause_hours}h."
+        )
+    return reasons
 
 
 def build_trade_ledger_stats(plans: list[TradePlan]) -> TradeLedgerStats:
@@ -1877,8 +1980,11 @@ def build_trade_ledger_summary(
     now: datetime | None = None,
     allow_create: bool = True,
     settings: UserSettings | None = None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
 ) -> TradeLedgerSummary:
     reference = now or datetime.now(timezone.utc)
+    active_settings = settings or default_user_settings()
+    validate_user_settings(active_settings)
     plans = update_trade_ledger_outcomes(gold.price, path=path, now=reference)
     candidate, gate_reasons = build_trade_plan_from_signal(
         gold,
@@ -1889,12 +1995,24 @@ def build_trade_ledger_summary(
         event_facts,
         technical_readings,
         now=reference,
-        settings=settings,
+        macro_catalysts=macro_catalysts,
+        settings=active_settings,
     )
     if candidate is not None:
-        cooldown_minutes = (settings or default_user_settings()).cooldown_minutes
-        if has_recent_similar_trade(plans, candidate, cooldown_minutes=cooldown_minutes, now=reference):
+        ledger_guard_reasons = build_trade_ledger_guard_reasons(plans, active_settings, reference)
+        if ledger_guard_reasons:
+            gate_reasons = ledger_guard_reasons
+            candidate = None
+        elif has_recent_similar_trade(
+            plans,
+            candidate,
+            cooldown_minutes=active_settings.cooldown_minutes,
+            cooldown_after_loss_minutes=active_settings.cooldown_after_loss_minutes,
+            cooldown_after_win_minutes=active_settings.cooldown_after_win_minutes,
+            now=reference,
+        ):
             gate_reasons = ["Cooldown actif: un trade similaire est deja actif ou trop recent."]
+            candidate = None
         elif allow_create:
             candidate = enrich_trade_plan_v3(candidate)
             append_trade_plan_snapshot(candidate, path)
@@ -4369,7 +4487,7 @@ def build_technical_decision(
 
     strength = abs(weighted_score)
     score = clamp_score(50 + strength * 35 + (alignment_score - 50) * 0.22)
-    confidence = clamp_score(48 + alignment_score * 0.30 + min(strength * 45, 22))
+    confidence = min(85, clamp_score(48 + alignment_score * 0.30 + min(strength * 45, 22)))
     contradictions: list[str] = []
     reasons = [
         alignment_note,
@@ -5466,6 +5584,30 @@ def top_news_titles(news: list[NewsItem], categories: set[str] | None = None, li
     return " | ".join(selected) if selected else "aucun titre exploitable"
 
 
+def sentiment_news_scoring_status(
+    news: list[NewsItem],
+    now: datetime | None = None,
+) -> tuple[bool, str, int]:
+    if not news:
+        return False, "SentimentNewsAgent neutralise: aucune headline exploitable.", 0
+    reference = now or datetime.now(timezone.utc)
+    ages: list[float] = []
+    tiers: list[int] = []
+    for item in news:
+        published = parse_iso_datetime(item.published_at)
+        if published is not None:
+            ages.append(max(0.0, (reference - published).total_seconds() / 60))
+        tiers.append(political_source_tier(item))
+    median_age = sorted(ages)[len(ages) // 2] if ages else None
+    best_tier = min(tiers) if tiers else 4
+    if best_tier > 2:
+        return False, "SentimentNewsAgent neutralise: aucune source Tier 1-2 recente dans le flux.", 0
+    if median_age is None or median_age > 60:
+        age_label = "inconnue" if median_age is None else f"{median_age:.0f} min"
+        return False, f"SentimentNewsAgent neutralise: age median du flux {age_label} > 60 min.", 0
+    return True, f"Flux news scorant: meilleure source Tier {best_tier}, age median {median_age:.0f} min.", 65
+
+
 def build_passive_agent_results(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
@@ -5551,7 +5693,7 @@ def build_passive_agent_results(
             department="Technical",
             bias=normalize_agent_bias(technical_bias),
             score=technical_score,
-            confidence=technical_decision.confidence if technical_decision else (70 if readings else 45),
+            confidence=min(85, technical_decision.confidence if technical_decision else (70 if readings else 45)),
             summary=technical_summary,
             evidence=[
                 AgentEvidence("Timeframes", f"{len(readings)} lectures EMA/RSI/MACD/volume", "GC=F proxy + spot XAU/USD"),
@@ -5623,18 +5765,20 @@ def build_passive_agent_results(
         )
     )
 
-    sentiment_score = clamp_score(50 + analysis.score * 5)
+    sentiment_scorable, sentiment_status_reason, sentiment_confidence_floor = sentiment_news_scoring_status(news)
+    sentiment_score = clamp_score(50 + analysis.score * 5) if sentiment_scorable else 50
+    sentiment_confidence = max(analysis.confidence, sentiment_confidence_floor) if sentiment_scorable else 0
     agents.append(
         AgentResult(
             name="SentimentNewsAgent",
             department="Geopolitics & Flows",
             bias=score_to_bias(sentiment_score),
             score=sentiment_score,
-            confidence=analysis.confidence,
-            summary=heuristic_decision_sentence(analysis),
+            confidence=sentiment_confidence,
+            summary=heuristic_decision_sentence(analysis) if sentiment_scorable else sentiment_status_reason,
             evidence=[
                 AgentEvidence("Headlines", top_news_titles(news, limit=2), "RSS/Google News"),
-                AgentEvidence("Score headlines", str(analysis.score), "Moteur heuristique local"),
+                AgentEvidence("Score headlines", str(analysis.score) if sentiment_scorable else "neutralise", "Moteur heuristique local"),
                 AgentEvidence("Faits structures", str(len(event_facts or [])), "EventFact"),
                 data_quality_evidence,
             ],
@@ -5840,25 +5984,6 @@ def build_passive_agent_results(
                 data_quality_evidence,
             ],
             risks=[AgentRisk("Execution", "La lecture agent ne constitue pas un ordre; elle surveille les risques autour du plan.", "high")] + data_quality_risks,
-        )
-    )
-
-    contradictions = build_agent_contradictions(agents)
-    orchestrator_risks = [AgentRisk("Contradictions", item, "medium") for item in contradictions[:3]]
-    agents.append(
-        AgentResult(
-            name="OrchestratorAgent",
-            department="Decision",
-            bias=normalize_agent_bias(global_recommendation.verdict if global_recommendation else "NEUTRAL"),
-            score=risk_score,
-            confidence=74,
-            summary="Orchestrateur passif: compare les agents, signale les contradictions, mais ne remplace pas le verdict officiel.",
-            evidence=[
-                AgentEvidence("Verdict officiel conserve", global_recommendation.verdict if global_recommendation else "indisponible", "Moteur actuel"),
-                AgentEvidence("Agents actifs", f"{len(agents) + 1} lectures passives", "Fondation Phase 5"),
-                AgentEvidence("SourceRegistry", f"{data_quality_score}/100", "Phase 12"),
-            ],
-            risks=orchestrator_risks + data_quality_risks or [AgentRisk("Contradictions", "Aucune contradiction majeure entre agents passifs.", "low")],
         )
     )
 
@@ -6157,13 +6282,8 @@ def build_orchestrator_quality_gate(
         if (direction == "BUY" and component.score <= 44)
         or (direction == "SELL" and component.score >= 56)
     ]
-    clear_component_majority = direction in {"BUY", "SELL"} and len(supporting_components) >= 3 and len(opposing_components) <= 1
-    if strong_buy and strong_sell and not clear_component_majority:
+    if strong_buy and strong_sell:
         hard_reasons.append(f"Contradiction forte: {', '.join(strong_buy[:3])} contre {', '.join(strong_sell[:3])}.")
-    elif strong_buy and strong_sell:
-        advisory_reasons.append(
-            f"Contradiction forte absorbee par majorite nette: {len(supporting_components)} soutien(s), {len(opposing_components)} opposition."
-        )
     directional_contradictions = [item for item in contradictions if item.startswith("BUY vs SELL")]
     if directional_contradictions:
         advisory_reasons.extend(directional_contradictions[:2])
@@ -6173,30 +6293,30 @@ def build_orchestrator_quality_gate(
         hard_reasons.append("Data quality indisponible: NO_TRADE.")
     elif data_quality.preflight and data_quality.preflight.trade_blocked:
         hard_reasons.append(f"Preflight bloquant: {data_quality.preflight.status}.")
-    elif data_quality.score < 50:
-        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 50.")
-    elif data_quality.score < 56:
-        trade_blockers.append(f"Source quality limitee: {data_quality.score}/100; trade bloque mais setup surveillable.")
+    elif data_quality.score < 60:
+        hard_reasons.append(f"Data quality trop faible: {data_quality.score}/100 < 60.")
     elif data_quality.score < 68:
-        advisory_reasons.append(f"Data quality degradee: {data_quality.score}/100; signal autorise mais confiance reduite.")
+        trade_blockers.append(f"Source quality limitee: {data_quality.score}/100; trade bloque mais setup surveillable.")
     if event_mode is not None and event_mode.active:
         if event_mode.score >= 75:
             trade_blockers.append(f"Mode event extreme ({event_mode.score}/100): pas de TRADE_* automatique.")
         else:
             advisory_reasons.append(f"Mode event surveille ({event_mode.score}/100): confirmation d'entree exigee.")
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
-        if market_regime.score >= 85:
-            trade_blockers.append("Regime geopolitique/petrole extreme: setup seulement, validation manuelle requise.")
-        elif market_regime.score >= 75:
-            advisory_reasons.append("Regime geopolitique/petrole fort: signal autorise avec taille reduite.")
-        else:
+        if market_regime.score >= 70:
+            trade_blockers.append("Regime geopolitique/petrole >= 70/100: setup seulement, pas de TRADE_* automatique.")
+        elif market_regime.score >= 60:
             advisory_reasons.append("Regime geopolitique/petrole surveille: reduire confiance et taille.")
-    if verdict in {"BUY", "SELL"} and score < 55:
-        trade_blockers.append(f"Score orchestrateur insuffisant pour TRADE_*: {score}/100 < 55.")
-    elif verdict in {"BUY", "SELL"} and score < 58:
+        if direction == "BUY":
+            trade_blockers.append("BUY contraire au regime petrole/dollar actif.")
+    elif market_regime is not None and market_regime.name == "Safe-Haven Gold" and direction == "SELL":
+        trade_blockers.append("SELL contraire au regime refuge gold actif.")
+    if verdict in {"BUY", "SELL"} and score < 65:
+        trade_blockers.append(f"Score orchestrateur insuffisant pour TRADE_*: {score}/100 < 65.")
+    elif verdict in {"BUY", "SELL"} and score < 68:
         advisory_reasons.append(f"Score orchestrateur agressif: {score}/100; validation maintenue seulement avec confirmations.")
-    if direction in {"BUY", "SELL"} and len(supporting_components) < 2:
-        trade_blockers.append("Confirmation insuffisante: moins de deux composants decisionnels soutiennent la direction.")
+    if direction in {"BUY", "SELL"} and len(supporting_components) < 3:
+        trade_blockers.append("Confirmation insuffisante: moins de trois composants decisionnels soutiennent la direction.")
     if technical_decision is None:
         trade_blockers.append("TechnicalDecisionEngine absent: pas de trigger/invalidation exploitable.")
     elif direction in {"BUY", "SELL"}:
@@ -6207,9 +6327,9 @@ def build_orchestrator_quality_gate(
             trade_blockers.append("Setup sans invalidation technique claire.")
     rr, rr_reason = estimate_orchestrator_risk_reward(gold, verdict, legacy_recommendation, technical_decision)
     if direction in {"BUY", "SELL"}:
-        if rr < 0.65:
-            trade_blockers.append(f"Risk/reward minimum non atteint: {rr:.2f} < 0.65.")
-        elif rr < 0.80:
+        if rr < 1.50:
+            trade_blockers.append(f"Risk/reward minimum non atteint: {rr:.2f} < 1.50.")
+        elif rr < 1.65:
             advisory_reasons.append(f"Risk/reward agressif: {rr:.2f}; trade plus petit ou TP2 necessaire.")
         else:
             advisory_reasons.append(rr_reason)
@@ -10133,6 +10253,9 @@ def render_settings_panel(settings_payload: dict[str, Any] | None, validation_pa
         <div class="geo-stat"><strong>Trade threshold</strong><span>{settings.trade_threshold}/100</span><small>Score minimal trade</small></div>
         <div class="geo-stat"><strong>WATCH threshold</strong><span>{settings.watch_threshold}/100</span><small>Score minimal surveillance</small></div>
         <div class="geo-stat"><strong>Cooldown</strong><span>{settings.cooldown_minutes} min</span><small>Anti-duplicat ledger</small></div>
+        <div class="geo-stat"><strong>Cooldown loss/win</strong><span>{settings.cooldown_after_loss_minutes}/{settings.cooldown_after_win_minutes} min</span><small>Pause directionnelle</small></div>
+        <div class="geo-stat"><strong>Max trades 24h</strong><span>{settings.max_trades_per_24h}</span><small>Circuit breaker</small></div>
+        <div class="geo-stat"><strong>Data quality min</strong><span>{settings.min_data_quality}/100</span><small>Blocage trade</small></div>
         <div class="geo-stat"><strong>RR minimum</strong><span>{settings.minimum_risk_reward:.2f}R</span><small>TP1 minimal</small></div>
         <div class="geo-stat"><strong>Notifications</strong><span>{'ON' if settings.notifications_enabled else 'OFF'}</span><small>Reserve phase notification</small></div>
       </div>
@@ -12103,6 +12226,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts,
         technical_readings,
         settings=user_settings,
+        macro_catalysts=live_bundle.macro_catalysts,
     )
     payload = build_payload(
         gold,

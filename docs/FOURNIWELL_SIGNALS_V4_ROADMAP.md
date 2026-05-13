@@ -102,6 +102,8 @@ Livrable:
 - trades mediocres filtres;
 - systeme plus prudent avant la refonte complete.
 
+Statut: livre le 2026-05-13 dans `docs/FOURNIWELL_SIGNALS_V4_PHASE_1.md`.
+
 ### Phase 2 - Quality Gate, cooldown et ledger
 
 Objectif: rendre la validation des trades stricte, auditable et dependante de l'historique recent.

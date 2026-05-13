@@ -206,12 +206,12 @@ Depuis la mise a jour scoring du 07/05/2026, un warning ne force plus automatiqu
 - signal exploitable: `TRADE_BUY` ou `TRADE_SELL` exige sources, confirmations, invalidation et risk/reward suffisants;
 - signal valide avec confiance reduite: `BUY` ou `SELL` reste possible dans les surfaces de synthese, mais les warnings sont visibles dans Decision/Inspector.
 
-Depuis le profil agressif controle:
+Depuis Fourniwell Signals v4 Phase 1:
 
-- le terminal accepte plus facilement `WATCH_BUY`, `WATCH_SELL` et `TRADE_*` quand la majorite des agents va clairement dans le meme sens;
-- une seule contradiction ne bloque pas automatiquement;
-- score `55-58`, data quality degradee ou RR `0.65-0.80R` deviennent des warnings de taille/confiance;
-- les vrais stop restent intacts: source critique bloquee, data quality tres faible, direction absente, SL/TP incoherents, RR sous `0.65R` ou regime extreme.
+- le terminal verrouille moins de trades et bloque les signaux moyens;
+- `TRADE_*` exige score >= `65/100`, trois agents decisionnels valides, confidence agent >= `65/100`, data quality >= `60/100` et RR TP1 >= `1.50R`;
+- une contradiction isolee devient un warning, trois contradictions bloquent;
+- les vrais stop restent intacts: source critique bloquee, data quality faible, direction absente, SL/TP incoherents, RR sous `1.50R`, regime geopolitique/petrole fort ou macro HIGH proche.
 
 ### Trade Plan
 
@@ -248,7 +248,7 @@ Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou
 - CorrelationAgent;
 - FlowPositioningAgent.
 
-ElliottWaveAgent est supprime du produit actif. RiskManagerAgent et OrchestratorAgent servent a l'audit et a la prudence; ils ne doivent pas bloquer seuls une position verrouillable.
+ElliottWaveAgent est supprime du produit actif. OrchestratorAgent legacy est retire du scoring. RiskManagerAgent sert a la prudence; OrchestratorDecision v3 reste la structure de synthese.
 
 ## Replay v3
 
@@ -283,10 +283,13 @@ config/aureum_settings.json
 
 Parametres importants:
 
-- `scoring_mode`: `aggressive_controlled` ou `conservative`;
+- `scoring_mode`: `balanced` par defaut, `conservative` possible;
 - `trade_threshold`: score minimum pour verrouiller un TradePlan;
 - `minimum_risk_reward`: RR minimum;
-- `cooldown_minutes`: evite de creer plusieurs trades similaires;
+- `minimum_agent_confidence`: confiance minimale d'un agent validant;
+- `min_data_quality`: seuil minimum pour autoriser un TradePlan;
+- `cooldown_minutes`, `cooldown_after_loss_minutes`, `cooldown_after_win_minutes`: evite de creer plusieurs trades similaires ou de reprendre trop vite apres outcome;
+- `max_trades_per_24h`, `circuit_breaker_after_n_losses`: limites de securite;
 - `active_agents`: agents actifs dans le terminal. Depuis la Phase 35, ils peuvent etre actives/desactives depuis la page Agents avec un bouton ON/OFF devant chaque agent.
 
 ## Outcomes possibles

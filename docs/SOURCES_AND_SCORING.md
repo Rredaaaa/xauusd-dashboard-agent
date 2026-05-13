@@ -22,7 +22,7 @@ Une source absente, stale ou faible degrade la `Data Quality`, mais tout warning
 
 | Source | Usage | Agents |
 | --- | --- | --- |
-| Investing.com XAU/USD | Spot principal XAU/USD | PriceAgent, RiskManagerAgent, OrchestratorAgent |
+| Investing.com XAU/USD | Spot principal XAU/USD | PriceAgent, RiskManagerAgent |
 | IG Weekend Gold | Proxy week-end indicatif | PriceAgent, RiskManagerAgent |
 | Yahoo Finance GC=F | Proxy futures pour Chart Store OHLC, volume et fallback technique | TechnicalAgent |
 | TradingView widget | Charte utilisateur principale cible v3 | UI uniquement, pas source de scoring backend |
@@ -228,36 +228,38 @@ Une news peut devenir:
 Un Trade Plan n'est cree que si:
 
 - verdict `BUY` ou `SELL`;
-- score global suffisant: seuil agressif controle a `55/100`, warning entre `55` et `58`;
+- score global suffisant: seuil v4 Phase 1 a `65/100`, warning entre `65` et `68`;
 - Preflight non bloquant;
-- data quality exploitable: blocage sous `52/100`, warning sous `68/100`;
-- au moins deux agents decisionnels valident la direction;
-- contradictions directionnelles limitees: une contradiction isolee ne bloque plus si au moins trois agents valident la direction;
-- risk/reward exploitable: blocage sous `0.65R`, warning entre `0.65R` et `0.80R`;
-- pas de regime special bloquant.
+- data quality exploitable: blocage sous `60/100`, warning sous `68/100`;
+- au moins trois agents decisionnels valident la direction avec confidence >= `65/100`;
+- contradictions directionnelles limitees: trois contradictions bloquent, une contradiction devient warning;
+- risk/reward TP1 exploitable: blocage sous `1.50R`, warning entre `1.50R` et `1.65R`;
+- pas de regime special bloquant, notamment `Hormuz / Oil Shock >= 70/100`.
 
 Sinon, le Trade Tracker affiche `WAIT` et explique pourquoi.
 
 Depuis la Phase 32, ces seuils peuvent etre ajustes dans `config/aureum_settings.json`:
 
-- `scoring_mode=conservative` force au moins `60/100` et `0.80R`;
-- `scoring_mode=aggressive_controlled` garde les seuils controles `55/100` et `0.65R`;
+- `scoring_mode=balanced` est le profil par defaut v4;
+- `scoring_mode=conservative` force au moins `70/100` et `1.80R`;
+- `scoring_mode=aggressive_controlled` reste accepte pour compatibilite, mais les planchers v4 restent `65/100`, `65/100` agent confidence, data quality `60/100` et `1.50R`;
 - `active_agents` limite les agents actifs pris en compte par le terminal. Les agents non decisionnels restent surtout des controles/affichages, mais leur bouton ON/OFF est visible dans la page Agents depuis la Phase 35;
-- `cooldown_minutes` bloque les doublons de TradePlan similaires.
+- `cooldown_minutes` bloque les doublons de TradePlan similaires;
+- `cooldown_after_loss_minutes=240` et `cooldown_after_win_minutes=60` bloquent la meme direction apres outcome;
+- `max_trades_per_24h` et le circuit breaker stoppent l'emballement du ledger.
 
 Depuis la Phase 31, le replay lit `reports/trade_ledger.jsonl` et `reports/audit_log.jsonl` pour mesurer les outcomes apres coup. Depuis la Phase 33, les rapports d'audit sont exportes dans `reports/v3/`.
 
-Profil agressif controle:
+Profil v4 Phase 1:
 
-- objectif: reduire les faux `WAIT` quand la majorite des agents est claire;
-- un seul agent contre ne suffit pas a bloquer un trade si la direction est validee par une majorite nette;
-- les warnings reduisent la confiance et la taille, mais ne bloquent plus automatiquement;
-- les blocages durs restent: Preflight bloquant, source critique absente/stale, data quality tres faible, verdict sans direction, SL/TP incoherents, RR < `0.65R`, regime geopolitique/petrole extreme.
+- objectif: supprimer les trades mediocres avant la refonte complete;
+- l'ancienne tolerance "majorite claire absorbe tout" est retiree du trade locking;
+- les warnings reduisent la confiance, les blocages durs stoppent la creation du Trade Snapshot;
+- les blocages durs restent: Preflight bloquant, source critique absente/stale, data quality < `60/100`, verdict sans direction, moins de trois agents valides, SL/TP incoherents, RR < `1.50R`, regime geopolitique/petrole fort, macro HIGH dans la fenetre de blocage.
 
 Agents decisionnels utilises pour compter confirmations/contradictions de TradePlan:
 
 - PriceAgent;
-- TechnicalAgent;
 - MacroAgent;
 - GeopoliticalOilShockAgent;
 - SentimentNewsAgent;
@@ -268,7 +270,7 @@ Agents exclus du comptage decisionnel:
 
 - ElliottWaveAgent, supprime du code actif et absent du produit actif;
 - RiskManagerAgent, role de prudence;
-- OrchestratorAgent, role d'audit/synthese.
+- OrchestratorAgent legacy, supprime du scoring; seule la structure OrchestratorDecision v3 reste disponible pour la synthese.
 
 ## Data Quality
 

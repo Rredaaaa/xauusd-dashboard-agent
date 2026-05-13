@@ -31,7 +31,7 @@ Le projet est encore concentre dans `xauusd_agent.py` pour rester simple a lance
 - Scenario Engine v3: traduit la decision en plan trader lisible sans creer automatiquement un trade.
 - Preflight v3: statut `READY`, `DEGRADED`, `SOURCE_STALE`, `NO_TRADE_DATA` ou `OFFLINE`.
 - Scoring v2.1: separation entre blockers et warnings. Un warning de source secondaire degrade la confiance; seul un blocage dur force `WAIT`.
-- Profil agressif controle: seuil trade a `55/100`, RR minimal `0.65R`, une contradiction isolee toleree si la majorite des agents est nette.
+- Profil v4 Phase 1: seuil trade a `65/100`, RR minimal `1.50R`, trois agents decisionnels valides, data quality minimale `60/100`, cooldown outcome et circuit breaker.
 - Chart Store: OHLC M5/M15/H1/H4/D1 pour qualite technique, affiche en Inspector.
 - Charte principale v3: TradingView dans `Desk`, pas la charte interne.
 - Trade Ledger: signal locking append-only.
@@ -74,7 +74,7 @@ Regle de decision actuelle:
 - source prix XAU/USD principale absente/stale = blocage dur;
 - data quality tres faible = blocage dur;
 - WGC ETF stale, Google News weak ou mode event modere = warning;
-- RiskManagerAgent et OrchestratorAgent ne comptent pas comme contradictions directionnelles pour verrouiller un TradePlan; ElliottWaveAgent est supprime du produit actif.
+- RiskManagerAgent ne compte pas comme contradiction directionnelle pour verrouiller un TradePlan; OrchestratorAgent legacy et ElliottWaveAgent sont supprimes du produit actif.
 - `TRADE_*` exige TechnicalDecisionEngine confirme, invalidation claire, confirmations decisionnelles et risk/reward minimum; sinon le terminal reste en `WATCH_*`, `WAIT` ou `NO_TRADE`.
 - `TradeRecommendation`: signal live.
 

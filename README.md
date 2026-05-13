@@ -1,15 +1,16 @@
-# Aureum Flux Terminal
+# Fourniwell Signals
 
-Aureum Flux Terminal est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` ou `NO_TRADE` avec niveaux de risque.
+Fourniwell Signals, anciennement Aureum Flux Terminal, est un dashboard local pour lire `XAU/USD` en intraday. Il collecte les prix, sources macro, geopolitique, flux, correlations et agents passifs, puis affiche une decision live `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` ou `NO_TRADE` avec niveaux de risque.
 
 A partir de la v3.0, `WATCH_BUY` et `WATCH_SELL` signalent les setups en surveillance sans forcer un trade, tandis que `TRADE_BUY` et `TRADE_SELL` exigent validation technique, sources exploitables, invalidation et risk/reward. La roadmap v3.0 retire aussi Elliott du parcours utilisateur et le remplace par un `TechnicalDecisionEngine` base sur structure, indicateurs, niveaux, volatilite et confirmations.
 
 Le terminal ne donne pas un conseil financier personnalise. Il sert a structurer la lecture du marche, verifier les sources et historiser les plans de trade quand le Quality Gate l'autorise.
 
 Etat roadmap:
-- la reference officielle est la v3.0, documentee dans [Plan v3.0](docs/AUREUM_FLUX_TERMINAL_V3_PLAN.md);
-- le dashboard actif est structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector;
-- la Phase 35 corrige l'UX prioritaire: affichage vertical, toggles ON/OFF agents, calendrier macro lisible et resumes news.
+- la reference officielle devient la v4.0, documentee dans [Roadmap Fourniwell Signals v4.0](docs/FOURNIWELL_SIGNALS_V4_ROADMAP.md);
+- le plan v3.0 reste archive comme historique de conception;
+- le dashboard actif reste structure en 5 pages: Desk, Agents, News Flow, Reports et Inspector;
+- la v4.0 applique exhaustivement le rapport d'inspection du 12/05/2026 avant deploiement public.
 
 ## Lancer sur Mac
 

@@ -1,6 +1,6 @@
 # Sources et scoring
 
-Ce document resume les sources utilisees par Aureum Flux Terminal et la maniere dont elles entrent dans l'analyse.
+Ce document resume les sources utilisees par Fourniwell Signals, anciennement Aureum Flux Terminal, et la maniere dont elles entrent dans l'analyse.
 
 ## Politique generale
 

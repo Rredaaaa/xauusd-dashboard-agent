@@ -1,6 +1,6 @@
 # Installation et lancement
 
-Ce guide explique comment lancer Aureum Flux Terminal sur Mac.
+Ce guide explique comment lancer Fourniwell Signals sur Mac. Le projet s'appelait auparavant Aureum Flux Terminal.
 
 ## Prerequis
 

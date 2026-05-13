@@ -1,8 +1,8 @@
-# Guide utilisateur Aureum Flux Terminal
+# Guide utilisateur Fourniwell Signals
 
 ## Objectif
 
-Aureum Flux Terminal aide a lire rapidement le marche `XAU/USD`:
+Fourniwell Signals, anciennement Aureum Flux Terminal, aide a lire rapidement le marche `XAU/USD`:
 
 - direction live probable: `BUY`, `SELL`, `WAIT`, `WATCH_BUY`, `WATCH_SELL`, `TRADE_BUY`, `TRADE_SELL` ou `NO_TRADE`;
 - score global et raisons;

@@ -5,7 +5,7 @@
     "FlowPositioningAgent",
     "GeopoliticalOilShockAgent",
     "MacroAgent",
-    "PriceAgent",
+    "PriceActionAgent",
     "RiskManagerAgent",
     "SentimentNewsAgent",
     "TechnicalAgent",

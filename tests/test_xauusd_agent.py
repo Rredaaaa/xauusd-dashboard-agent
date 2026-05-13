@@ -66,9 +66,11 @@ from xauusd_agent import (
     write_reports_v3,
     load_user_settings,
     macro_catalyst_gold_bias,
+    merge_news_items,
     resample_candles,
     score_headline,
     set_agent_enabled,
+    should_skip_headline,
     update_orchestrator_agent,
 )
 
@@ -88,6 +90,36 @@ class HeadlineScoringTests(unittest.TestCase):
         score, reasons = score_headline("Brent crude backwardation points to physical market tightness")
         self.assertEqual(score, 0)
         self.assertEqual(reasons, [])
+
+    def test_phase3_news_flow_rejects_weak_forecast_noise(self) -> None:
+        self.assertTrue(should_skip_headline("Gold price prediction for next week", "MSN"))
+        self.assertTrue(should_skip_headline("XAUUSD analysis today and forecast", "FXEmpire"))
+
+    def test_phase3_news_flow_deduplicates_common_prefix_and_keeps_fresh_impact(self) -> None:
+        recent = "2026-05-13T10:00:00+00:00"
+        items = [
+            NewsItem(
+                title="Fed announces emergency liquidity facility as dollar jumps",
+                source="Reuters",
+                link="https://www.reuters.com/markets/test",
+                published_at=recent,
+                category="macro_fed",
+                score=-2,
+                score_reasons=["bearish:dollar"],
+            ),
+            NewsItem(
+                title="Fed announces emergency liquidity facility as dollar rises",
+                source="CNBC",
+                link="https://www.cnbc.com/test",
+                published_at=recent,
+                category="macro_fed",
+                score=-2,
+                score_reasons=["bearish:dollar"],
+            ),
+        ]
+        merged = merge_news_items(items, [], 10)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].source, "Reuters")
 
     def test_bias_buckets(self) -> None:
         self.assertEqual(classify_bias(6), "bullish")
@@ -606,7 +638,7 @@ class AnalysisShapeTests(unittest.TestCase):
                         data_quality_score=88,
                         confidence_score=70,
                         market_regime="Normal Macro",
-                        agents_validating=["PriceAgent", "MacroAgent"],
+                        agents_validating=["PriceActionAgent", "MacroAgent"],
                         agents_contradicting=[],
                         evidence_sources=["Investing.com XAU/USD", "FRED DGS10"],
                         event_facts_snapshot=["FOMC minutes today"],
@@ -638,7 +670,7 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertIn("Scenario Engine v3", dashboard)
         self.assertIn("Scoring et position de chaque agent", dashboard)
         self.assertIn("Positions agents", dashboard)
-        self.assertIn("PriceAgent", dashboard)
+        self.assertIn("PriceActionAgent", dashboard)
         self.assertNotIn("OrchestratorAgent", dashboard)
         self.assertIn("Contradictions", dashboard)
         self.assertIn("Flux d'informations utiles", dashboard)
@@ -758,7 +790,7 @@ class AnalysisShapeTests(unittest.TestCase):
                     value_summary="spot 102.00",
                     source_url="https://example.com",
                     critical=True,
-                    allowed_agents=["PriceAgent"],
+                    allowed_agents=["PriceActionAgent"],
                 ),
                 SourceSnapshot(
                     source_id="google_news_rss",
@@ -777,7 +809,7 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         agents = [
             AgentResult(
-                name="PriceAgent",
+                name="PriceActionAgent",
                 department="Market",
                 bias="BUY",
                 score=68,
@@ -982,7 +1014,7 @@ class AnalysisShapeTests(unittest.TestCase):
             snapshots=[],
         )
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 68, 65, "Technique valide."),
         ]
@@ -1036,7 +1068,7 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
@@ -1091,7 +1123,7 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
@@ -1143,7 +1175,7 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
@@ -1180,13 +1212,13 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         quality = DataQualitySnapshot("2026-04-24T00:00:00+00:00", 90, "HIGH", "OK", [], [], [], [], [])
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 70, 70, "Prix valide."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 70, 70, "Prix valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 72, 75, "Macro valide."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 68, 70, "Technique valide."),
         ]
         settings = UserSettings(
             active_agents=[
-                "PriceAgent",
+                "PriceActionAgent",
                 "MacroAgent",
                 "TechnicalAgent",
                 "RiskManagerAgent",
@@ -1632,7 +1664,7 @@ class AnalysisShapeTests(unittest.TestCase):
             contradictions=[],
         )
         agents = [
-            AgentResult("PriceAgent", "Market", "BUY", 60, 70, "Prix favorable."),
+            AgentResult("PriceActionAgent", "Market", "BUY", 60, 70, "Prix favorable."),
             AgentResult("TechnicalAgent", "Technical", "BUY", 64, 70, "Technique valide."),
             AgentResult("MacroAgent", "Macro", "BUY", 62, 76, "Macro valide."),
             AgentResult("CorrelationAgent", "Market", "SELL", 58, 70, "Contre-signal isole."),
@@ -1933,6 +1965,30 @@ class AnalysisShapeTests(unittest.TestCase):
         self.assertEqual(trump_agent.confidence, 90)
         self.assertIn("official_confirmed", trump_agent.summary)
         self.assertIn("Declaration -> sanctions", trump_agent.evidence[2].value)
+
+    def test_phase4_agents_use_price_action_and_directional_regime(self) -> None:
+        gold = self.snapshot("XAU/USD", 2425.0, 2400.0)
+        gold.day_low = 2380.0
+        gold.day_high = 2420.0
+        gold.support = 2380.0
+        gold.resistance = 2420.0
+        dxy = self.snapshot("DXY", 101.0, 100.0)
+        us10y = self.snapshot("^TNX", 4.3, 4.2)
+        analysis = AnalysisResult("neutral", 0, 60, [], [], [], [])
+        regime = MarketRegimeAnalysis(
+            "Hormuz / Oil Shock",
+            "ACTIF",
+            78,
+            "baissier court terme",
+            "Oil shock actif.",
+            ["WTI confirme."],
+        )
+        agents = build_passive_agent_results(gold, dxy, us10y, [], analysis, market_regime=regime)
+        price_agent = next(agent for agent in agents if agent.name == "PriceActionAgent")
+        geo_agent = next(agent for agent in agents if agent.name == "GeopoliticalOilShockAgent")
+        self.assertIn("PriceActionAgent", price_agent.summary)
+        self.assertTrue(any("Camarilla" in evidence.value for evidence in price_agent.evidence))
+        self.assertEqual(geo_agent.bias, "SELL")
 
 
 class LocalFreeContextTests(unittest.TestCase):
@@ -2256,7 +2312,7 @@ class Phase31To34CompletionTests(unittest.TestCase):
             data_quality_score=88,
             confidence_score=70,
             market_regime="Normal Macro",
-            agents_validating=["PriceAgent", "TechnicalAgent", "MacroAgent"],
+            agents_validating=["PriceActionAgent", "TechnicalAgent", "MacroAgent"],
             agents_contradicting=[],
             evidence_sources=["test"],
             event_facts_snapshot=[],

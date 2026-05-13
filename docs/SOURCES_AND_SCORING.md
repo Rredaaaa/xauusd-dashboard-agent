@@ -22,8 +22,8 @@ Une source absente, stale ou faible degrade la `Data Quality`, mais tout warning
 
 | Source | Usage | Agents |
 | --- | --- | --- |
-| Investing.com XAU/USD | Spot principal XAU/USD | PriceAgent, RiskManagerAgent |
-| IG Weekend Gold | Proxy week-end indicatif | PriceAgent, RiskManagerAgent |
+| Investing.com XAU/USD | Spot principal XAU/USD | PriceActionAgent, RiskManagerAgent |
+| IG Weekend Gold | Proxy week-end indicatif | PriceActionAgent, RiskManagerAgent |
 | Yahoo Finance GC=F | Proxy futures pour Chart Store OHLC, volume et fallback technique | TechnicalAgent |
 | TradingView widget | Charte utilisateur principale cible v3 | UI uniquement, pas source de scoring backend |
 
@@ -70,10 +70,10 @@ Le moteur regarde les relations attendues avec gold:
 
 | Source | Usage | Agents |
 | --- | --- | --- |
-| Google News RSS / fallback feeds | Headlines dedup | SentimentNewsAgent, EventFactsAgent |
-| Yahoo/Investing feeds | Headlines marche | SentimentNewsAgent |
+| Official news feeds | White House, Fed, BLS, Treasury, WGC | SentimentNewsAgent, EventFactsAgent, TrumpPoliticalStatementsAgent |
+| Fast news feeds | AP, CNBC, Reuters/Bloomberg via recherche ciblee | SentimentNewsAgent, EventFactsAgent |
+| Google News RSS cible | Discovery secondaire, filtre strict | SentimentNewsAgent, EventFactsAgent |
 | White House feed | Declarations officielles | TrumpPoliticalStatementsAgent |
-| Reuters/AP via recherche RSS | Confirmation media majeure | EventFactsAgent, TrumpPoliticalStatementsAgent |
 
 Les headlines seules ne suffisent pas. Les agents cherchent:
 
@@ -84,6 +84,8 @@ Les headlines seules ne suffisent pas. Les agents cherchent:
 - chaine marche;
 - impact gold/oil/USD;
 - niveau de confirmation.
+
+Depuis la Phase 3 v4, le flux news rejette en amont les sources faibles et les titres de faible valeur: forecasts, predictions, outlook, next week, next month, analysis today, pure technical analysis et opinions sans fait nouveau. Les sources Tier 4/5 ne sont plus utilisees pour scorer le News Flow. Le tri visible se fait par heure reelle de publication, puis impact et tier source.
 
 ## Orchestrateur v3 et poids dynamiques
 
@@ -261,12 +263,14 @@ Profil v4 Phase 1:
 
 Agents decisionnels utilises pour compter confirmations/contradictions de TradePlan:
 
-- PriceAgent;
+- PriceActionAgent;
 - MacroAgent;
 - GeopoliticalOilShockAgent;
 - SentimentNewsAgent;
 - CorrelationAgent;
 - FlowPositioningAgent.
+
+Depuis la Phase 4 v4, `PriceActionAgent` remplace `PriceAgent` dans le produit actif. L'ancien nom reste accepte uniquement comme alias de configuration/historique.
 
 Agents exclus du comptage decisionnel:
 

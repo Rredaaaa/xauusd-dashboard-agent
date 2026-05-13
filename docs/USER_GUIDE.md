@@ -240,7 +240,7 @@ Il n'est pas modifie retroactivement par le signal live. Si le prix atteint SL o
 
 Le Trade Quality Gate compte seulement les agents decisionnels pour confirmer ou contredire une direction:
 
-- PriceAgent;
+- PriceActionAgent;
 - TechnicalAgent;
 - MacroAgent;
 - GeopoliticalOilShockAgent;

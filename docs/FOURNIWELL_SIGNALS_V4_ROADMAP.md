@@ -130,6 +130,8 @@ Livrable:
 
 ### Phase 3 - News Flow v4
 
+Statut: livre le 2026-05-13 dans `docs/FOURNIWELL_SIGNALS_V4_PHASE_3.md`.
+
 Objectif: remplacer le flux news actuel, juge inutilisable.
 
 Actions:
@@ -177,6 +179,8 @@ Livrable:
 - news utiles classees par fraicheur et impact.
 
 ### Phase 4 - Rebuild des agents
+
+Statut: livre le 2026-05-13 dans `docs/FOURNIWELL_SIGNALS_V4_PHASE_4.md`.
 
 Objectif: faire en sorte que chaque agent ait un role utile et mesurable.
 

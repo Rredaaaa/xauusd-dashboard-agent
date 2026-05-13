@@ -49,6 +49,12 @@ INVESTING_XAUUSD_URL = "https://www.investing.com/currencies/xau-usd"
 INVESTING_XAUUSD_HISTORICAL_URL = "https://www.investing.com/currencies/xau-usd-historical-data"
 IG_WEEKEND_GOLD_URL = "https://www.ig.com/en/indices/markets-indices/weekend-gold"
 WHITE_HOUSE_NEWS_FEED_URL = "https://www.whitehouse.gov/news/feed/"
+AP_BUSINESS_FEED_URL = "https://apnews.com/hub/business?output=rss"
+AP_TOP_NEWS_FEED_URL = "https://apnews.com/hub/ap-top-news?output=rss"
+CNBC_MARKETS_FEED_URL = "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+BLS_NEWS_RELEASE_FEED_URL = "https://www.bls.gov/feed/news_release/bls_latest.rss"
+TREASURY_PRESS_FEED_URL = "https://home.treasury.gov/news/press-releases/rss"
+WGC_NEWS_FEED_URL = "https://www.gold.org/rss.xml"
 
 NEWS_QUERIES = [
     ("gold", '"gold news today" OR XAUUSD when:2d'),
@@ -74,6 +80,28 @@ POLITICAL_STATEMENT_QUERIES = [
 
 POLITICAL_RSS_FEEDS = [
     ("political_white_house", WHITE_HOUSE_NEWS_FEED_URL),
+]
+
+OFFICIAL_NEWS_RSS_FEEDS = [
+    ("official_white_house", WHITE_HOUSE_NEWS_FEED_URL),
+    ("official_fed_speeches", "https://www.federalreserve.gov/feeds/speeches.xml"),
+    ("official_fed_monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
+    ("official_bls", BLS_NEWS_RELEASE_FEED_URL),
+    ("official_treasury", TREASURY_PRESS_FEED_URL),
+    ("official_wgc", WGC_NEWS_FEED_URL),
+]
+
+FAST_NEWS_RSS_FEEDS = [
+    ("fast_ap_business", AP_BUSINESS_FEED_URL),
+    ("fast_ap_top", AP_TOP_NEWS_FEED_URL),
+    ("fast_cnbc_markets", CNBC_MARKETS_FEED_URL),
+]
+
+FAST_NEWS_SEARCH_QUERIES = [
+    ("fast_reuters", '(gold OR XAUUSD OR Fed OR Iran OR oil OR dollar) site:reuters.com when:1d'),
+    ("fast_bloomberg", '(gold OR XAUUSD OR Fed OR Iran OR oil OR dollar) site:bloomberg.com when:1d'),
+    ("fast_ap_search", '(gold OR Federal Reserve OR Iran OR oil OR dollar) site:apnews.com when:1d'),
+    ("fast_cnbc_search", '(gold OR XAUUSD OR Fed OR Iran OR oil OR dollar) site:cnbc.com when:1d'),
 ]
 
 FALLBACK_RSS_FEEDS = [
@@ -1075,6 +1103,84 @@ def normalize_title_for_dedupe(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
+WEAK_NEWS_SOURCES = (
+    "msn",
+    "fxempire",
+    "litefinance",
+    "moomoo",
+    "coinmarketcap",
+    "traders union",
+    "startup fortune",
+    "barchart",
+    "benzinga",
+)
+
+LOW_VALUE_HEADLINE_PATTERNS = (
+    "forecast",
+    "prediction",
+    "price prediction",
+    "outlook",
+    "next week",
+    "next month",
+    "analysis today",
+    "technical analysis",
+    "how to trade",
+    "what to expect",
+    "could hit",
+    "may hit",
+    "might hit",
+    "expert predicts",
+)
+
+
+def news_source_identity(source: str, link: str = "") -> str:
+    text = f"{source} {link}".lower()
+    if "whitehouse.gov" in text:
+        return "White House"
+    if "federalreserve.gov" in text:
+        return "Federal Reserve"
+    if "bls.gov" in text:
+        return "BLS"
+    if "home.treasury.gov" in text or "treasury.gov" in text:
+        return "US Treasury"
+    if "bea.gov" in text:
+        return "BEA"
+    if "cftc.gov" in text:
+        return "CFTC"
+    if "gold.org" in text:
+        return "World Gold Council"
+    if "apnews.com" in text or "associated press" in text:
+        return "Associated Press"
+    if "reuters.com" in text or "reuters" in text:
+        return "Reuters"
+    if "bloomberg.com" in text or "bloomberg" in text:
+        return "Bloomberg"
+    if "cnbc.com" in text or "cnbc" in text:
+        return "CNBC"
+    return compact_whitespace(source) or "RSS"
+
+
+def news_source_tier(source: str, link: str = "") -> int:
+    text = f"{source} {link}".lower()
+    if any(token in text for token in ("whitehouse.gov", "federalreserve.gov", "bls.gov", "treasury.gov", "bea.gov", "cftc.gov", "gold.org")):
+        return 1
+    if any(token in text for token in ("reuters", "apnews.com", "associated press", "bloomberg", "wsj", "financial times")):
+        return 2
+    if any(token in text for token in ("cnbc", "marketwatch", "kitco", "forexlive", "investing.com", "yahoo finance")):
+        return 3
+    if any(token in text for token in WEAK_NEWS_SOURCES):
+        return 5
+    return 4
+
+
+def headline_age_minutes(item: NewsItem, now: datetime | None = None) -> float | None:
+    published = parse_iso_datetime(item.published_at)
+    if published is None:
+        return None
+    reference = now or datetime.now(timezone.utc)
+    return max(0.0, (reference - published).total_seconds() / 60)
+
+
 def should_skip_headline(title: str, source: str) -> bool:
     text = f"{title} {source}".lower()
     blocked_patterns = [
@@ -1084,8 +1190,52 @@ def should_skip_headline(title: str, source: str) -> bool:
         "nostradamus",
         "check prediction here",
         "horoscope",
+        *WEAK_NEWS_SOURCES,
+        *LOW_VALUE_HEADLINE_PATTERNS,
     ]
     return any(pattern in text for pattern in blocked_patterns)
+
+
+def is_news_item_exploitable(item: NewsItem, now: datetime | None = None) -> bool:
+    if should_skip_headline(item.title, item.source):
+        return False
+    tier = news_source_tier(item.source, item.link)
+    if tier >= 4:
+        return False
+    age = headline_age_minutes(item, now=now)
+    if age is None:
+        return False
+    max_age = 7 * 24 * 60 if tier == 1 else 48 * 60
+    if age > max_age:
+        return False
+    if item.score == 0 and tier > 2:
+        return False
+    return True
+
+
+def news_similarity(left: str, right: str) -> float:
+    left_tokens = set(normalize_title_for_dedupe(left).split())
+    right_tokens = set(normalize_title_for_dedupe(right).split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    union = len(left_tokens | right_tokens)
+    return intersection / union if union else 0.0
+
+
+def is_duplicate_news_title(title: str, seen_titles: set[str], threshold: float = 0.65) -> bool:
+    normalized = normalize_title_for_dedupe(title)
+    if not normalized:
+        return True
+    if normalized in seen_titles:
+        return True
+    prefix = " ".join(normalized.split()[:7])
+    for seen in seen_titles:
+        if prefix and seen.startswith(prefix):
+            return True
+        if news_similarity(normalized, seen) >= threshold:
+            return True
+    return False
 
 
 def keyword_matches(text: str, keyword: str) -> bool:
@@ -1102,8 +1252,8 @@ def iso_now() -> str:
 
 
 SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
-    "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceAgent", "RiskManagerAgent"]),
-    "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 2, 120, False, IG_WEEKEND_GOLD_URL, ["PriceAgent", "RiskManagerAgent"]),
+    "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceActionAgent", "RiskManagerAgent"]),
+    "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 2, 120, False, IG_WEEKEND_GOLD_URL, ["PriceActionAgent", "RiskManagerAgent"]),
     "fred_dgs10": SourceRegistryEntry("fred_dgs10", "FRED DGS10", "rates", 1, 10080, True, FRED_CSV_URL_TEMPLATE.format(series_id="DGS10"), ["MacroAgent", "RiskManagerAgent"]),
     "fred_dgs2": SourceRegistryEntry("fred_dgs2", "FRED DGS2", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS2"), ["MacroAgent"]),
     "fred_t10yie": SourceRegistryEntry("fred_t10yie", "FRED T10YIE", "macro", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="T10YIE"), ["MacroAgent"]),
@@ -1113,7 +1263,9 @@ SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
     "macro_catalysts": SourceRegistryEntry("macro_catalysts", "Fed/BEA Macro Catalysts", "macro", 1, 1440, True, FED_FOMC_CALENDAR_URL, ["MacroAgent", "RiskManagerAgent"]),
     "google_news_rss": SourceRegistryEntry("google_news_rss", "Google News RSS / fallback feeds", "news", 4, 2880, True, "https://news.google.com/rss", ["SentimentNewsAgent", "EventFactsAgent"]),
     "white_house_feed": SourceRegistryEntry("white_house_feed", "White House News feed", "political_statements", 1, 10080, False, WHITE_HOUSE_NEWS_FEED_URL, ["TrumpPoliticalStatementsAgent"]),
-    "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceAgent"]),
+    "news_official_feeds": SourceRegistryEntry("news_official_feeds", "Official news feeds", "news", 1, 1440, False, WHITE_HOUSE_NEWS_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent", "TrumpPoliticalStatementsAgent"]),
+    "news_fast_feeds": SourceRegistryEntry("news_fast_feeds", "AP/CNBC/Reuters/Bloomberg news feeds", "news", 2, 120, False, CNBC_MARKETS_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent"]),
+    "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceActionAgent"]),
     "oil_context": SourceRegistryEntry("oil_context", "WTI/Brent oil context", "oil", 2, 240, False, "https://finance.yahoo.com/", ["GeopoliticalOilShockAgent", "RiskManagerAgent"]),
     "chart_store_ohlc": SourceRegistryEntry("chart_store_ohlc", "Chart Store OHLC", "chart", 2, 240, False, "https://finance.yahoo.com/quote/GC=F/", ["TechnicalAgent"]),
 }
@@ -1121,6 +1273,7 @@ SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
 
 HARD_TRADE_BLOCKING_SOURCE_IDS = {"investing_xauusd"}
 DECISION_AGENT_NAMES = {
+    "PriceActionAgent",
     "PriceAgent",
     "TechnicalAgent",
     "MacroAgent",
@@ -1129,8 +1282,9 @@ DECISION_AGENT_NAMES = {
     "CorrelationAgent",
     "FlowPositioningAgent",
 }
+AGENT_NAME_ALIASES = {"PriceAgent": "PriceActionAgent"}
 ALL_AGENT_NAMES = {
-    *DECISION_AGENT_NAMES,
+    *(DECISION_AGENT_NAMES - {"PriceAgent"}),
     "EventFactsAgent",
     "TrumpPoliticalStatementsAgent",
     "RiskManagerAgent",
@@ -1143,6 +1297,7 @@ def default_user_settings() -> UserSettings:
 
 def validate_user_settings(settings: UserSettings, path: Path = SETTINGS_PATH, created_default: bool = False) -> SettingsValidation:
     warnings: list[str] = []
+    settings.active_agents = sorted(set(AGENT_NAME_ALIASES.get(agent, agent) for agent in settings.active_agents))
     allowed_modes = {"conservative", "balanced", "aggressive_controlled"}
     if settings.scoring_mode not in allowed_modes:
         warnings.append(f"scoring_mode inconnu: {settings.scoring_mode}; fallback balanced.")
@@ -2623,6 +2778,8 @@ def build_data_quality_snapshot(
         make_source_snapshot("macro_catalysts", macro_catalysts is not None and bool(macro_catalysts.catalysts), macro_catalysts.generated_at if macro_catalysts else None, f"{len(macro_catalysts.catalysts) if macro_catalysts else 0} events", now=reference),
         make_source_snapshot("google_news_rss", bool(news), latest_news, f"{len(news)} headlines dedup", now=reference),
         make_source_snapshot("white_house_feed", bool(political_statements), latest_political, f"{len(political_statements or [])} statements", now=reference),
+        make_source_snapshot("news_official_feeds", any(news_source_tier(item.source, item.link) == 1 for item in news), latest_news, "White House/Fed/BLS/Treasury/BEA/CFTC/WGC", now=reference),
+        make_source_snapshot("news_fast_feeds", any(news_source_tier(item.source, item.link) <= 2 for item in news), latest_news, "AP/CNBC/Reuters/Bloomberg", now=reference),
         make_source_snapshot("cross_asset_yahoo", cross_asset_analysis is not None, gold.fetched_at, cross_asset_analysis.summary if cross_asset_analysis else "", now=reference),
         make_source_snapshot("oil_context", market_regime is not None, gold.fetched_at, market_regime.summary if market_regime else "", now=reference),
         make_source_snapshot(
@@ -5066,11 +5223,12 @@ def append_rss_items(
 ) -> None:
     channel_title = compact_whitespace(root.findtext("./channel/title", default="RSS"))
     for item in root.findall("./channel/item"):
-        source = compact_whitespace(item.findtext("source", default="")) or channel_title
+        link = compact_whitespace(item.findtext("link", default=""))
+        source = news_source_identity(compact_whitespace(item.findtext("source", default="")) or channel_title, link)
         raw_title = compact_whitespace(item.findtext("title", default=""))
         title = strip_source_suffix(raw_title, source)
         dedupe_key = normalize_title_for_dedupe(title)
-        if not title or dedupe_key in seen_titles or should_skip_headline(title, source):
+        if not title or is_duplicate_news_title(title, seen_titles) or should_skip_headline(title, source):
             continue
 
         score, reasons = score_headline(title)
@@ -5088,7 +5246,7 @@ def append_rss_items(
             NewsItem(
                 title=title,
                 source=source,
-                link=compact_whitespace(item.findtext("link", default="")),
+                link=link,
                 published_at=published_at,
                 category=category,
                 score=score,
@@ -5105,9 +5263,20 @@ def fetch_news(top_n: int) -> list[NewsItem]:
     seen_titles: set[str] = set()
     month_name = current_month_name_en()
     result_limit = max(top_n, 24)
-    deadline = time.time() + 18
+    deadline = time.time() + 22
+    reference = datetime.now(timezone.utc)
 
-    for category, query_template in NEWS_QUERIES:
+    for category, url in [*OFFICIAL_NEWS_RSS_FEEDS, *FAST_NEWS_RSS_FEEDS]:
+        if time.time() >= deadline:
+            break
+        try:
+            xml_text = http_get_text(url)
+            root = ET.fromstring(xml_text)
+        except Exception:
+            continue
+        append_rss_items(root, category, items, seen_titles, result_limit * 2)
+
+    for category, query_template in [*FAST_NEWS_SEARCH_QUERIES, *NEWS_QUERIES]:
         if time.time() >= deadline:
             break
         query = query_template.format(month=month_name)
@@ -5123,11 +5292,13 @@ def fetch_news(top_n: int) -> list[NewsItem]:
             continue
 
         append_rss_items(root, category, items, seen_titles, result_limit)
-        if len(items) >= result_limit:
-            items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
-            return items[:result_limit]
+        usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
+        if len(usable) >= result_limit:
+            usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+            return usable[:result_limit]
 
-    if len(items) < top_n:
+    usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
+    if len(usable) < top_n:
         for category, url in FALLBACK_RSS_FEEDS:
             try:
                 xml_text = http_get_text(url)
@@ -5138,33 +5309,27 @@ def fetch_news(top_n: int) -> list[NewsItem]:
             if len(items) >= result_limit:
                 break
 
-    items.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
-    return items[:result_limit]
+    usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
+    usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+    return usable[:result_limit]
 
 
 def merge_news_items(primary: list[NewsItem], extra: list[NewsItem], limit: int) -> list[NewsItem]:
     merged: list[NewsItem] = []
     seen: set[str] = set()
+    reference = datetime.now(timezone.utc)
     for item in primary + extra:
         key = normalize_title_for_dedupe(item.title)
-        if not key or key in seen:
+        if not key or is_duplicate_news_title(item.title, seen) or not is_news_item_exploitable(item, now=reference):
             continue
         seen.add(key)
         merged.append(item)
-    merged.sort(key=lambda item: (abs(item.score), item.published_at), reverse=True)
+    merged.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
     return merged[:limit]
 
 
 def political_source_tier(item: NewsItem) -> int:
-    source = item.source.lower()
-    link = item.link.lower()
-    if "whitehouse.gov" in link or "white house" in source:
-        return 1
-    if any(token in source for token in ("reuters", "associated press", "ap news", "bloomberg")):
-        return 2
-    if any(token in source for token in ("cnbc", "marketwatch", "wsj", "bbc", "france 24", "al jazeera")):
-        return 3
-    return 4
+    return news_source_tier(item.source, item.link)
 
 
 def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
@@ -5752,6 +5917,96 @@ def clamp_score(value: float) -> int:
     return round(clamp(value, 0, 100))
 
 
+def price_range_position(gold: SymbolSnapshot) -> float:
+    if gold.day_high <= gold.day_low:
+        return 50.0
+    return clamp(((gold.price - gold.day_low) / (gold.day_high - gold.day_low)) * 100, 0, 100)
+
+
+def nearest_psychological_level(price: float, step: float = 25.0) -> tuple[float, float]:
+    if step <= 0:
+        return price, 0.0
+    level = round(price / step) * step
+    return level, price - level
+
+
+def price_action_levels(gold: SymbolSnapshot) -> dict[str, float]:
+    high = gold.day_high or max(gold.price, gold.previous_close)
+    low = gold.day_low or min(gold.price, gold.previous_close)
+    close = gold.previous_close or gold.price
+    day_range = max(high - low, 1.0)
+    return {
+        "support": round(gold.support or low, 2),
+        "resistance": round(gold.resistance or high, 2),
+        "camarilla_s3": round(close - day_range * 1.1 / 4, 2),
+        "camarilla_r3": round(close + day_range * 1.1 / 4, 2),
+        "camarilla_s4": round(close - day_range * 1.1 / 2, 2),
+        "camarilla_r4": round(close + day_range * 1.1 / 2, 2),
+    }
+
+
+def classify_price_action_state(gold: SymbolSnapshot) -> tuple[str, int, list[str]]:
+    position = price_range_position(gold)
+    levels = price_action_levels(gold)
+    psych_level, psych_distance = nearest_psychological_level(gold.price)
+    reasons: list[str] = [
+        f"Position range jour {position:.0f}/100.",
+        f"Niveau psychologique proche {psych_level:.0f}, distance {psych_distance:+.2f}.",
+    ]
+    score = 50 + gold.change_pct * 16 + gold.period_change_pct * 5
+    state = "range"
+    if gold.price > levels["resistance"] and gold.change_pct > 0:
+        state = "breakout"
+        score += 10
+        reasons.append("Prix au-dessus resistance jour: breakout potentiel.")
+    elif gold.price < levels["support"] and gold.change_pct < 0:
+        state = "breakdown"
+        score -= 10
+        reasons.append("Prix sous support jour: breakdown potentiel.")
+    elif position >= 80 and gold.change_pct < 0:
+        state = "reversal"
+        score -= 8
+        reasons.append("Rejet potentiel depuis le haut du range.")
+    elif position <= 20 and gold.change_pct > 0:
+        state = "reversal"
+        score += 8
+        reasons.append("Rebond potentiel depuis le bas du range.")
+    elif abs(psych_distance) <= 3:
+        state = "consolidation"
+        reasons.append("Prix colle a un niveau rond: consolidation probable.")
+    elif gold.change_pct > 0 and 35 <= position <= 75:
+        state = "pullback"
+        score += 4
+        reasons.append("Pullback haussier dans le range.")
+    elif gold.change_pct < 0 and 25 <= position <= 65:
+        state = "pullback"
+        score -= 4
+        reasons.append("Pullback baissier dans le range.")
+    return state, clamp_score(score), reasons
+
+
+def geopolitical_agent_bias_from_regime(market_regime: MarketRegimeAnalysis | None) -> str:
+    if market_regime is None:
+        return "NEUTRAL"
+    mapping = {
+        "Hormuz / Oil Shock": "SELL",
+        "Safe-Haven Gold": "BUY",
+        "De-escalation / Oil Relief": "SELL",
+        "Dollar Liquidity Squeeze": "SELL",
+        "Normal Macro": "NEUTRAL",
+    }
+    return mapping.get(market_regime.name, "NEUTRAL")
+
+
+def event_fact_direction(fact: NewsFact) -> str:
+    impact = fact.impact_bias.upper()
+    if impact == "BULLISH":
+        return "BUY"
+    if impact == "BEARISH":
+        return "SELL"
+    return "NEUTRAL"
+
+
 def top_news_titles(news: list[NewsItem], categories: set[str] | None = None, limit: int = 2) -> str:
     selected = [
         clean_display_text(item.title)
@@ -5832,21 +6087,32 @@ def build_passive_agent_results(
         else []
     )
 
-    price_score = clamp_score(50 + (gold.change_pct * 18) + (gold.period_change_pct * 6))
+    price_state, price_score, price_reasons = classify_price_action_state(gold)
+    price_levels = price_action_levels(gold)
+    range_position = price_range_position(gold)
+    psych_level, psych_distance = nearest_psychological_level(gold.price)
     price_risks = []
     if weekend_gold is not None:
         price_risks.append(AgentRisk("Proxy week-end", "IG Weekend Gold reste indicatif et distinct du spot semaine.", "medium"))
     agents.append(
         AgentResult(
-            name="PriceAgent",
+            name="PriceActionAgent",
             department="Market",
             bias=score_to_bias(price_score),
             score=price_score,
-            confidence=72 if gold.price else 35,
-            summary="Lecture prix passive: spot, variation courte, support/resistance et proxy week-end si disponible.",
+            confidence=76 if gold.price and gold.day_high > gold.day_low else 55 if gold.price else 35,
+            summary=f"PriceActionAgent: etat {price_state}, position range {range_position:.0f}/100, niveau rond {psych_level:.0f} ({psych_distance:+.2f}).",
             evidence=[
                 AgentEvidence("Spot XAU/USD", f"{gold.price:.2f} ({gold.change_pct:+.2f}%)", "Investing.com XAU/USD"),
-                AgentEvidence("Support / resistance", f"{format_number(gold.support)} / {format_number(gold.resistance)}", "Calcul local"),
+                AgentEvidence(
+                    "Niveaux cles",
+                    (
+                        f"S {price_levels['support']:.2f}, R {price_levels['resistance']:.2f}, "
+                        f"Camarilla S3/R3 {price_levels['camarilla_s3']:.2f}/{price_levels['camarilla_r3']:.2f}"
+                    ),
+                    "PriceAction v4",
+                ),
+                AgentEvidence("Structure prix", "; ".join(price_reasons[:3]), "PriceAction v4"),
                 data_quality_evidence,
             ],
             risks=price_risks,
@@ -5864,13 +6130,21 @@ def build_passive_agent_results(
         if technical_decision
         else (technical_recommendation.summary if technical_recommendation else "Lecture technique passive indisponible.")
     )
+    technical_contradiction_penalty = len(technical_decision.contradictions) * 8 if technical_decision else 0
+    technical_trigger_ok = bool(
+        technical_decision
+        and technical_decision.trigger
+        and any(token in technical_decision.trigger.lower() for token in ("m5", "m15", "h1", "cloture", "close", "au-dessus", "sous"))
+    )
+    technical_confidence = technical_decision.confidence if technical_decision else (70 if readings else 45)
+    technical_confidence = min(85, max(0, technical_confidence - technical_contradiction_penalty - (0 if technical_trigger_ok else 12)))
     agents.append(
         AgentResult(
             name="TechnicalAgent",
             department="Technical",
             bias=normalize_agent_bias(technical_bias),
             score=technical_score,
-            confidence=min(85, technical_decision.confidence if technical_decision else (70 if readings else 45)),
+            confidence=technical_confidence,
             summary=technical_summary,
             evidence=[
                 AgentEvidence("Timeframes", f"{len(readings)} lectures EMA/RSI/MACD/volume", "GC=F proxy + spot XAU/USD"),
@@ -5909,13 +6183,26 @@ def build_passive_agent_results(
                 next_macro.source_name,
             )
         )
+    macro_freshness_age = headline_age_minutes(
+        NewsItem("", "FRED", "", official_10y.fetched_at, "macro", 0, []),
+    )
+    macro_freshness_penalty = 0 if macro_freshness_age is not None and macro_freshness_age <= 7 * 24 * 60 else 15
+    macro_confidence = 78 if official_macro_rates and official_macro_rates.dgs10 else 68 if real_yield is not None else 55
+    macro_confidence = max(35, macro_confidence - macro_freshness_penalty)
+    macro_evidence.append(
+        AgentEvidence(
+            "Fraicheur FRED",
+            f"{macro_freshness_age/1440:.1f} jour(s)" if macro_freshness_age is not None else "inconnue",
+            "FRED DGS10",
+        )
+    )
     agents.append(
         AgentResult(
             name="MacroAgent",
             department="Macro",
             bias=normalize_agent_bias(fundamental_recommendation.verdict if fundamental_recommendation else score_to_bias(macro_score)),
             score=macro_score,
-            confidence=78 if official_macro_rates and official_macro_rates.dgs10 else 68 if real_yield is not None else 55,
+            confidence=macro_confidence,
             summary=(fundamental_recommendation.summary if fundamental_recommendation else "Lecture macro passive basee sur dollar et taux."),
             evidence=macro_evidence,
             risks=(
@@ -5929,9 +6216,9 @@ def build_passive_agent_results(
         AgentResult(
             name="GeopoliticalOilShockAgent",
             department="Geopolitics & Flows",
-            bias="CAUTION" if market_regime and market_regime.name != "Normal Macro" else "NEUTRAL",
+            bias=geopolitical_agent_bias_from_regime(market_regime),
             score=regime_score,
-            confidence=68 if market_regime else 45,
+            confidence=min(88, 52 + round(regime_score * 0.35)) if market_regime else 45,
             summary=market_regime.summary if market_regime else "Regime geopolitique/petrole indisponible.",
             evidence=[
                 AgentEvidence("Regime", market_regime.name if market_regime else "indisponible", "Headlines + WTI/Brent"),
@@ -5943,8 +6230,20 @@ def build_passive_agent_results(
     )
 
     sentiment_scorable, sentiment_status_reason, sentiment_confidence_floor = sentiment_news_scoring_status(news)
-    sentiment_score = clamp_score(50 + analysis.score * 5) if sentiment_scorable else 50
-    sentiment_confidence = max(analysis.confidence, sentiment_confidence_floor) if sentiment_scorable else 0
+    fresh_news = [item for item in news if is_news_item_exploitable(item)]
+    weighted_sentiment = 0.0
+    weight_total = 0.0
+    for item in fresh_news[:12]:
+        tier = news_source_tier(item.source, item.link)
+        age = headline_age_minutes(item) or 9999
+        tier_weight = {1: 1.4, 2: 1.2, 3: 0.8, 4: 0.4}.get(tier, 0.0)
+        freshness_weight = 1.0 if age <= 60 else 0.7 if age <= 360 else 0.35
+        weight = tier_weight * freshness_weight
+        weighted_sentiment += item.score * weight
+        weight_total += weight
+    weighted_news_score = weighted_sentiment / weight_total if weight_total else 0.0
+    sentiment_score = clamp_score(50 + weighted_news_score * 8) if sentiment_scorable else 50
+    sentiment_confidence = max(analysis.confidence, sentiment_confidence_floor, round(min(85, 45 + weight_total * 8))) if sentiment_scorable else 0
     agents.append(
         AgentResult(
             name="SentimentNewsAgent",
@@ -5955,7 +6254,7 @@ def build_passive_agent_results(
             summary=heuristic_decision_sentence(analysis) if sentiment_scorable else sentiment_status_reason,
             evidence=[
                 AgentEvidence("Headlines", top_news_titles(news, limit=2), "RSS/Google News"),
-                AgentEvidence("Score headlines", str(analysis.score) if sentiment_scorable else "neutralise", "Moteur heuristique local"),
+                AgentEvidence("Score headlines", f"{weighted_news_score:+.2f} pondere tier/fraicheur" if sentiment_scorable else "neutralise", "News Flow v4"),
                 AgentEvidence("Faits structures", str(len(event_facts or [])), "EventFact"),
                 data_quality_evidence,
             ],
@@ -5964,7 +6263,10 @@ def build_passive_agent_results(
     )
 
     correlation_score = cross_asset_analysis.score if cross_asset_analysis else 50
+    correlation_confirmations = len(cross_asset_analysis.confirmations) if cross_asset_analysis else 0
+    correlation_contradictions = len(cross_asset_analysis.contradictions) if cross_asset_analysis else 0
     correlation_evidence = [
+        AgentEvidence("Verdict net", f"{correlation_confirmations} confirmation(s) / {correlation_contradictions} contradiction(s)", "CrossAsset v4"),
         AgentEvidence("Confirmations", "; ".join((cross_asset_analysis.confirmations if cross_asset_analysis else [])[:2]) or "aucune confirmation nette"),
         AgentEvidence("Contradictions", "; ".join((cross_asset_analysis.contradictions if cross_asset_analysis else [])[:2]) or "aucune contradiction nette"),
     ]
@@ -5982,7 +6284,7 @@ def build_passive_agent_results(
             department="Market",
             bias=normalize_agent_bias(cross_asset_analysis.verdict if cross_asset_analysis else "NEUTRAL"),
             score=correlation_score,
-            confidence=70 if cross_asset_analysis else 40,
+            confidence=min(88, 48 + (correlation_confirmations + correlation_contradictions) * 7) if cross_asset_analysis else 40,
             summary=cross_asset_analysis.summary if cross_asset_analysis else "Confluence inter-marches indisponible.",
             evidence=correlation_evidence,
             risks=[AgentRisk("Correlation", "Une correlation court terme peut casser pendant un regime special.", "medium")],
@@ -6034,6 +6336,19 @@ def build_passive_agent_results(
                 etf_flows_analysis.source_name,
             )
         )
+    flow_risks = [
+        AgentRisk(
+            "Frequence COT",
+            "Le COT officiel est hebdomadaire; les ETF sont plus frequents mais cadrent les flux de fond, pas l'entree intraday.",
+            "medium",
+        )
+    ]
+    if cftc_positioning is not None and etf_flows_analysis is not None:
+        cot_side = "BUY" if cftc_positioning.score >= 56 else "SELL" if cftc_positioning.score <= 44 else "NEUTRAL"
+        etf_side = "BUY" if etf_flows_analysis.score >= 56 else "SELL" if etf_flows_analysis.score <= 44 else "NEUTRAL"
+        flow_evidence.append(AgentEvidence("Divergence COT/ETF", f"COT {cot_side}, ETF {etf_side}", "CFTC + WGC"))
+        if cot_side != "NEUTRAL" and etf_side != "NEUTRAL" and cot_side != etf_side:
+            flow_risks.append(AgentRisk("Divergence COT/ETF", "Les specs futures et les ETF ne valident pas la meme direction.", "high"))
     agents.append(
         AgentResult(
             name="FlowPositioningAgent",
@@ -6043,34 +6358,56 @@ def build_passive_agent_results(
             confidence=flow_confidence,
             summary=flow_summary,
             evidence=flow_evidence,
-            risks=[
-                AgentRisk(
-                    "Frequence COT",
-                    "Le COT officiel est hebdomadaire; les ETF sont plus frequents mais cadrent les flux de fond, pas l'entree intraday.",
-                    "medium",
-                )
-            ],
+            risks=flow_risks,
         )
     )
 
+    qualified_facts = [
+        fact
+        for fact in (event_facts or [])
+        if getattr(fact, "source_tier", 4) <= 2
+        and fact.confidence >= 60
+        and getattr(fact, "fact_type", "confirmed_fact") not in {"opinion", "rumor"}
+    ]
+    if qualified_facts:
+        fact_weights = [max(1, fact.confidence) for fact in qualified_facts]
+        event_score = clamp_score(sum(fact.confidence * weight for fact, weight in zip(qualified_facts, fact_weights)) / sum(fact_weights))
+        buy_votes = sum(1 for fact in qualified_facts if event_fact_direction(fact) == "BUY")
+        sell_votes = sum(1 for fact in qualified_facts if event_fact_direction(fact) == "SELL")
+        event_bias = "BUY" if buy_votes > sell_votes else "SELL" if sell_votes > buy_votes else "NEUTRAL"
+        primary_fact = sorted(
+            qualified_facts,
+            key=lambda fact: (
+                getattr(fact, "source_tier", 4),
+                -fact.confidence,
+                -getattr(getattr(fact, "market_confirmation", None), "confirmation_score", 0),
+            ),
+        )[0]
+        event_summary = f"{len(qualified_facts)} fait(s) qualifies Tier<=2; source principale: {primary_fact.source}."
+        event_confidence = round(sum(fact.confidence for fact in qualified_facts) / len(qualified_facts))
+    else:
+        event_score = 45
+        event_bias = "NEUTRAL"
+        event_summary = "Aucun fait qualifie Tier<=2 avec confidence >=60."
+        event_confidence = 0
     agents.append(
         AgentResult(
             name="EventFactsAgent",
             department="Geopolitics & Flows",
-            bias="CAUTION" if event_facts else "NEUTRAL",
-            score=clamp_score(45 + len(event_facts or []) * 6),
-            confidence=primary_fact.confidence if primary_fact else 35,
-            summary=(
-                f"{len(event_facts)} fait(s) structure(s) detecte(s); source principale: {primary_fact.source}."
-                if primary_fact
-                else "Aucun fait structure disponible."
-            ),
+            bias=event_bias,
+            score=event_score,
+            confidence=event_confidence,
+            summary=event_summary,
             evidence=[
                 AgentEvidence("Fait principal", primary_fact.title if primary_fact else "indisponible", primary_fact.source if primary_fact else ""),
-                AgentEvidence("Confirmation", primary_fact.confirmation_level if primary_fact else "indisponible", "EventFact"),
+                AgentEvidence(
+                    "Confirmation",
+                    f"{primary_fact.confirmation_level}, marche {getattr(getattr(primary_fact, 'market_confirmation', None), 'confirmation_score', 0)}/4" if primary_fact else "indisponible",
+                    "EventFact",
+                ),
                 AgentEvidence("Chaine marche", primary_fact.market_chain if primary_fact else "indisponible", "EventFact"),
             ],
-            risks=[AgentRisk("Validation", "Un fait structure reste une lecture de headline: il doit rester source et confirme.", "medium")],
+            risks=[AgentRisk("Filtre v4", "Opinions, rumeurs, sources faibles et faits non recents sont exclus du score.", "medium")],
         )
     )
 
@@ -6082,13 +6419,18 @@ def build_passive_agent_results(
         if primary_statement
         else 50
     )
+    political_bias = score_to_bias(political_score) if primary_statement else "NEUTRAL"
+    if primary_statement and primary_statement.theme in {"iran_hormuz_oil", "tariffs_trade"} and primary_statement.score <= 0:
+        political_bias = "SELL"
+    elif primary_statement and primary_statement.theme == "fed_pressure" and primary_statement.score >= 0:
+        political_bias = "BUY"
     agents.append(
         AgentResult(
             name="TrumpPoliticalStatementsAgent",
             department="Geopolitics & Flows",
-            bias="CAUTION" if political_items or trump_news else "NEUTRAL",
+            bias=political_bias,
             score=political_score,
-            confidence=primary_statement.confidence if primary_statement else 45 if trump_news else 30,
+            confidence=primary_statement.confidence if primary_statement else 0,
             summary=(
                 f"Declaration politique sourcee detectee: {primary_statement.theme} ({primary_statement.validation_level})."
                 if primary_statement
@@ -6143,20 +6485,44 @@ def build_passive_agent_results(
         risk_reasons.append(f"Macro high impact proche: {next_high_macro.event_type}")
     if data_quality and data_quality.score < 70:
         risk_reasons.append(f"Data quality degradee {data_quality.score}/100")
+    ledger_plans = load_trade_ledger()
+    active_ledger_trades = [plan for plan in ledger_plans if plan.status in {"pending", "active", "tp1_hit"}]
+    recent_losses = count_recent_losses(ledger_plans, datetime.now(timezone.utc), 24)
+    rr_tp1 = (
+        compute_risk_reward(
+            global_recommendation.verdict,
+            gold.price,
+            global_recommendation.stop_loss,
+            global_recommendation.take_profit_1,
+        )
+        if global_recommendation and global_recommendation.verdict in {"BUY", "SELL"}
+        else 0.0
+    )
+    if rr_tp1 and rr_tp1 < 1.5:
+        risk_reasons.append(f"RR TP1 insuffisant {rr_tp1:.2f}R")
+    if active_ledger_trades:
+        risk_reasons.append(f"Exposition active: {len(active_ledger_trades)} trade(s)")
+    if recent_losses >= 2:
+        risk_reasons.append(f"Drawdown recent: {recent_losses} loss/24h")
+    risk_manager_bias = "BLOCK" if recent_losses >= 3 else "CAUTION" if risk_reasons else "OK"
+    risk_manager_score = 0 if risk_manager_bias == "BLOCK" else 50 if risk_manager_bias == "CAUTION" else 100
     agents.append(
         AgentResult(
             name="RiskManagerAgent",
             department="Decision",
-            bias="CAUTION" if risk_reasons else "NEUTRAL",
-            score=risk_score,
-            confidence=72,
+            bias=risk_manager_bias,
+            score=risk_manager_score if global_recommendation else risk_score,
+            confidence=82 if ledger_plans else 65,
             summary=(
                 f"RiskManager: regime {market_regime.name if market_regime else 'inconnu'}, "
                 f"data quality {data_quality.score if data_quality else 0}/100. "
+                f"RR TP1 {rr_tp1:.2f}R, exposition {len(active_ledger_trades)}. "
                 f"Alertes actives: {', '.join(risk_reasons) if risk_reasons else 'aucune majeure'}."
             ),
             evidence=[
                 AgentEvidence("Decision officielle", f"{global_recommendation.verdict} {global_recommendation.score}/100" if global_recommendation else "indisponible", "Scoring actuel"),
+                AgentEvidence("R/R TP1", f"{rr_tp1:.2f}R", "Trade levels"),
+                AgentEvidence("Exposition ledger", f"{len(active_ledger_trades)} actif(s), {recent_losses} loss/24h", "reports/trade_ledger.jsonl"),
                 AgentEvidence("Alertes risque", "; ".join(risk_reasons) if risk_reasons else "aucune alerte majeure", "Event/regime"),
                 data_quality_evidence,
             ],
@@ -7642,13 +8008,15 @@ def build_event_facts(
     candidates = [
         item
         for item in pick_story_headlines(news, limit=max(limit * 3, 18))
-        if item.category in priority_categories or abs(item.score) >= 1
+        if not should_skip_headline(item.title, item.source)
+        and news_source_tier(item.source, item.link) <= 3
+        and (item.category in priority_categories or abs(item.score) >= 1)
     ]
     raw_facts = [
         build_event_fact_from_news(item, wti=wti, brent=brent, dxy=dxy, us10y=us10y, gold=gold)
         for item in candidates
     ]
-    deduped = deduplicate_news_facts(raw_facts, threshold=0.55)
+    deduped = deduplicate_news_facts(raw_facts, threshold=0.65)
     return deduped[:limit]
 
 
@@ -10232,6 +10600,8 @@ def render_news_flow_panel(
             }
         )
     for item in news:
+        if not is_news_item_exploitable(item):
+            continue
         impact = news_impact_from_score(item.score)
         if impact == "NEUTRAL":
             continue

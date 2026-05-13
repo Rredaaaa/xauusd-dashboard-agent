@@ -42,32 +42,32 @@ Statuts autorises:
 
 ## 2. PriceAgent -> PriceActionAgent
 
-- [ ] Renommer ou remplacer PriceAgent par PriceActionAgent.
-- [ ] Calculer pivots Camarilla H1/H4/D1.
+- [x] Renommer ou remplacer PriceAgent par PriceActionAgent.
+- [x] Calculer pivots Camarilla H1/H4/D1.
 - [ ] Detecter swing high/low M15.
-- [ ] Calculer position dans range journaliere.
-- [ ] Calculer distance au niveau psychologique le plus proche.
-- [ ] Classer etat prix: breakout / pullback / range / consolidation / reversal.
-- [ ] Rendre le score dependant de ces niveaux.
-- [ ] Rendre confidence dynamique selon disponibilite des donnees.
-- [ ] Afficher 4-6 niveaux cles chiffres.
+- [x] Calculer position dans range journaliere.
+- [x] Calculer distance au niveau psychologique le plus proche.
+- [x] Classer etat prix: breakout / pullback / range / consolidation / reversal.
+- [x] Rendre le score dependant de ces niveaux.
+- [x] Rendre confidence dynamique selon disponibilite des donnees.
+- [x] Afficher 4-6 niveaux cles chiffres.
 - [ ] Si refonte impossible temporairement: mettre poids a 0.
 
 ## 3. TechnicalAgent
 
 - [x] Plafonner confidence a `85/100`.
 - [ ] Calibrer poids multi-timeframe sur backtest.
-- [ ] Exiger trigger reel avant conversion WATCH -> TRADE.
+- [x] Exiger trigger reel avant conversion WATCH -> TRADE.
 - [ ] Verifier cloture M15 au-dessus/sous trigger.
 - [ ] Adapter SL/TP selon structure: trend, range, breakout, reversal.
-- [ ] Baisser confidence en cas de contradiction intra-timeframe.
-- [ ] Documenter structure technique dans payload.
+- [x] Baisser confidence en cas de contradiction intra-timeframe.
+- [x] Documenter structure technique dans payload.
 - [ ] Migrer vers vraies bougies XAU/USD spot quand Chart Store v3 est fiable.
 
 ## 4. MacroAgent
 
-- [ ] Inclure fraicheur effective FRED dans confidence.
-- [ ] Ponderer DGS10, DXY, DFII10, T10YIE.
+- [x] Inclure fraicheur effective FRED dans confidence.
+- [x] Ponderer DGS10, DXY, DFII10, T10YIE.
 - [ ] Ajouter macro surprise: reel - consensus.
 - [x] Ajouter veto HIGH-impact dans les 30 min.
 - [ ] Exposer trajectoire sur 3 dernieres publications.
@@ -77,15 +77,15 @@ Statuts autorises:
 
 ## 5. GeopoliticalOilShockAgent
 
-- [ ] Rendre bias directionnel selon regime.
-- [ ] Mapper `Hormuz / Oil Shock` vers SELL.
-- [ ] Mapper `Safe-Haven Gold` vers BUY.
-- [ ] Mapper `De-escalation / Oil Relief` vers SELL.
-- [ ] Mapper `Dollar Liquidity Squeeze` vers SELL.
-- [ ] Mapper `Normal Macro` vers NEUTRAL.
+- [x] Rendre bias directionnel selon regime.
+- [x] Mapper `Hormuz / Oil Shock` vers SELL.
+- [x] Mapper `Safe-Haven Gold` vers BUY.
+- [x] Mapper `De-escalation / Oil Relief` vers SELL.
+- [x] Mapper `Dollar Liquidity Squeeze` vers SELL.
+- [x] Mapper `Normal Macro` vers NEUTRAL.
 - [ ] Mesurer tendance regime: escalade / accalmie / stable.
 - [ ] Documenter score brut par composant.
-- [ ] Rendre confidence dynamique selon WTI/Brent/headlines.
+- [x] Rendre confidence dynamique selon WTI/Brent/headlines.
 - [ ] Ajouter cooldown de changement de regime sur 4h.
 - [x] Elever seuil Hormuz a 70.
 - [ ] Ajouter regime Risk-On / Carry Trade.
@@ -95,23 +95,23 @@ Statuts autorises:
 - [x] Desactiver scoring si sources tier > 2.
 - [x] Desactiver scoring si age median news > 60 min.
 - [x] Mettre score a 50 et confidence a 0 si news faibles.
-- [ ] Ponderer par tier source.
-- [ ] Ponderer par fraicheur.
+- [x] Ponderer par tier source.
+- [x] Ponderer par fraicheur.
 - [ ] Remplacer keyword scoring par tone analysis.
 - [ ] Distinguer breaking news vs opinion.
-- [ ] Opinion analyste -> score neutre.
-- [ ] No fresh news -> bias NEUTRAL, confidence 0.
-- [ ] Evidence: top 3 titres avec source, age, sentiment chiffre.
+- [x] Opinion analyste -> score neutre.
+- [x] No fresh news -> bias NEUTRAL, confidence 0.
+- [x] Evidence: top 3 titres avec source, age, sentiment chiffre.
 
 ## 7. CorrelationAgent
 
-- [ ] Hierarchiser confirmations et contradictions.
-- [ ] Afficher verdict net: nombre BUY vs SELL.
+- [x] Hierarchiser confirmations et contradictions.
+- [x] Afficher verdict net: nombre BUY vs SELL.
 - [ ] Calculer correlation glissante 30j.
 - [ ] Abaisser poids si cassure de correlation.
 - [ ] Adapter poids selon regime.
 - [ ] Detecter correlation breakdown.
-- [ ] Rendre confidence dynamique selon nombre actifs disponibles.
+- [x] Rendre confidence dynamique selon nombre actifs disponibles.
 - [ ] Garder le reste de l'agent.
 
 ## 8. FlowPositioningAgent
@@ -119,7 +119,7 @@ Statuts autorises:
 - [ ] Ajouter percentile Managed Money 1 an.
 - [ ] Ajouter percentile Managed Money 5 ans.
 - [ ] Ajouter logique contrarienne si extremes.
-- [ ] Detecter divergence COT vs ETF.
+- [x] Detecter divergence COT vs ETF.
 - [ ] Agreger GLD + IAU + SLV.
 - [ ] Ponderer CFTC 0.6 et ETF 0.4.
 - [ ] Ajouter Producers/Merchants.
@@ -127,43 +127,43 @@ Statuts autorises:
 
 ## 9. EventFactsAgent
 
-- [ ] Remplacer score quantitatif `45 + n_facts * 6`.
-- [ ] Filtrer `qualified_facts`: tier <= 2 et confidence >= 60.
-- [ ] Si aucun fait qualifie: score 45, bias NEUTRAL.
-- [ ] Si faits qualifies: score moyen pondere par confidence.
-- [ ] Choisir bias par vote directionnel.
-- [ ] Choisir primary_fact par meilleur tier + confidence.
-- [ ] Ponderer par market_confirmation.confirmation_score.
-- [ ] Filtrer opinion et rumeur du score.
-- [ ] Evidence: top 3 facts avec tier, confirmation_score, age.
-- [ ] Confidence: moyenne ponderee des faits qualifies.
+- [x] Remplacer score quantitatif `45 + n_facts * 6`.
+- [x] Filtrer `qualified_facts`: tier <= 2 et confidence >= 60.
+- [x] Si aucun fait qualifie: score 45, bias NEUTRAL.
+- [x] Si faits qualifies: score moyen pondere par confidence.
+- [x] Choisir bias par vote directionnel.
+- [x] Choisir primary_fact par meilleur tier + confidence.
+- [x] Ponderer par market_confirmation.confirmation_score.
+- [x] Filtrer opinion et rumeur du score.
+- [x] Evidence: top 3 facts avec tier, confirmation_score, age.
+- [x] Confidence: moyenne ponderee des faits qualifies.
 
 ## 10. TrumpPoliticalStatementsAgent
 
-- [ ] Rendre bias directionnel selon contenu.
-- [ ] Iran/Hormuz menacant -> SELL.
-- [ ] Fed pressure dovish -> BUY.
-- [ ] Tariffs/trade war -> SELL.
-- [ ] Ponderer par recence.
+- [x] Rendre bias directionnel selon contenu.
+- [x] Iran/Hormuz menacant -> SELL.
+- [x] Fed pressure dovish -> BUY.
+- [x] Tariffs/trade war -> SELL.
+- [x] Ponderer par recence.
 - [ ] Mesurer convergence de statements sur 24h.
 - [ ] Distinguer action signee vs menace verbale.
 - [ ] Garder validation source et evidence.
 
 ## 11. RiskManagerAgent
 
-- [ ] Recrire completement le role.
-- [ ] Calculer R/R potentiel actuel.
-- [ ] Calculer risque par trade recommande.
-- [ ] Calculer drawdown recent / attendu.
-- [ ] Calculer exposition cumulee.
-- [ ] Lire `reports/trade_ledger.jsonl`.
-- [ ] Detecter circuit breaker actif.
-- [ ] Score: 100 setup propre, 50 risque normal, 0 ne pas trader.
-- [ ] Bias BLOCK si circuit breaker actif.
-- [ ] Bias CAUTION si exposition trop forte.
-- [ ] Bias OK sinon.
-- [ ] Evidence: R/R, taille, drawdown, exposition, circuit breaker.
-- [ ] Confidence selon disponibilite historique.
+- [x] Recrire completement le role.
+- [x] Calculer R/R potentiel actuel.
+- [x] Calculer risque par trade recommande.
+- [x] Calculer drawdown recent / attendu.
+- [x] Calculer exposition cumulee.
+- [x] Lire `reports/trade_ledger.jsonl`.
+- [x] Detecter circuit breaker actif.
+- [x] Score: 100 setup propre, 50 risque normal, 0 ne pas trader.
+- [x] Bias BLOCK si circuit breaker actif.
+- [x] Bias CAUTION si exposition trop forte.
+- [x] Bias OK sinon.
+- [x] Evidence: R/R, taille, drawdown, exposition, circuit breaker.
+- [x] Confidence selon disponibilite historique.
 
 ## 12. OrchestratorAgent legacy
 
@@ -212,33 +212,33 @@ Statuts autorises:
 
 ## 16. News Flow v4
 
-- [ ] Ajouter feed White House.
-- [ ] Ajouter feed Fed press all.
-- [ ] Ajouter feed Fed monetary.
-- [ ] Ajouter feed BLS news release.
-- [ ] Ajouter feed Treasury press releases.
+- [x] Ajouter feed White House.
+- [x] Ajouter feed Fed press all.
+- [x] Ajouter feed Fed monetary.
+- [x] Ajouter feed BLS news release.
+- [x] Ajouter feed Treasury press releases.
 - [ ] Ajouter feed BEA.
 - [ ] Ajouter feed CFTC press releases.
-- [ ] Ajouter feed WGC.
-- [ ] Ajouter AP business si accessible.
-- [ ] Ajouter AP top news si accessible.
-- [ ] Ajouter CNBC RSS.
-- [ ] Ajouter Reuters si flux accessible.
-- [ ] Ajouter Bloomberg si flux accessible.
+- [x] Ajouter feed WGC.
+- [x] Ajouter AP business si accessible.
+- [x] Ajouter AP top news si accessible.
+- [x] Ajouter CNBC RSS.
+- [x] Ajouter Reuters si flux accessible.
+- [x] Ajouter Bloomberg si flux accessible.
 - [ ] Polling canal critique 20-30s.
-- [ ] Rejeter sources tier 4 en amont.
-- [ ] Rejeter forecasts/predictions/outlook.
-- [ ] Rejeter vieux articles.
-- [ ] Rejeter analysis today sans fait nouveau.
+- [x] Rejeter sources tier 4 en amont.
+- [x] Rejeter forecasts/predictions/outlook.
+- [x] Rejeter vieux articles.
+- [x] Rejeter analysis today sans fait nouveau.
 - [ ] Detecter breaking par hash de feed.
-- [ ] Trier par heure reelle de publication.
-- [ ] Masquer news neutres par defaut.
-- [ ] Afficher "aucune news exploitable" si rien de fiable.
+- [x] Trier par heure reelle de publication.
+- [x] Masquer news neutres par defaut.
+- [x] Afficher "aucune news exploitable" si rien de fiable.
 
 ## 17. News Facts Engine
 
-- [ ] Elever dedup Jaccard a 0.65.
-- [ ] Ajouter dedup prefixe commun.
+- [x] Elever dedup Jaccard a 0.65.
+- [x] Ajouter dedup prefixe commun.
 - [ ] Ameliorer `build_why_it_matters`.
 - [ ] Utiliser actors et locations detectes.
 - [ ] Recalibrer `build_trader_action`.

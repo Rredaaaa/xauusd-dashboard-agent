@@ -12,6 +12,7 @@ from xauusd_agent import (
     BriefingBundle,
     CFTCPositioning,
     ChartStore,
+    CrossAssetAnalysis,
     DataQualitySnapshot,
     ETFFlowsAnalysis,
     ETFHoldingRecord,
@@ -67,6 +68,9 @@ from xauusd_agent import (
     classify_bias,
     build_passive_agent_results,
     build_payload,
+    build_news_reaction_engine,
+    classify_news_reaction_event,
+    detect_news_reaction_price,
     build_orchestrator_decision,
     build_scenario_plan,
     build_technical_decision,
@@ -2691,6 +2695,195 @@ class Phase31To34CompletionTests(unittest.TestCase):
         swing = detect_recent_swing_levels(points)
         self.assertEqual(swing["status"], "ok")
         self.assertIn("swing high", swing["summary"])
+
+
+class Phase5NewsReactionEngineTests(unittest.TestCase):
+    def snapshot(self, symbol: str, price: float, previous: float) -> SymbolSnapshot:
+        return SymbolSnapshot(
+            symbol=symbol,
+            label=symbol,
+            price=price,
+            previous_close=previous,
+            change_abs=price - previous,
+            change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            period_change_pct=((price - previous) / previous) * 100 if previous else 0.0,
+            day_high=max(price, previous),
+            day_low=min(price, previous),
+            support=min(price, previous),
+            resistance=max(price, previous),
+            fetched_at="2026-05-14T10:05:00+00:00",
+            points=[
+                PricePoint(timestamp=1, close=previous),
+                PricePoint(timestamp=2, close=price),
+            ],
+        )
+
+    def news(self, title: str, source: str = "Reuters", category: str = "fast_reuters") -> NewsItem:
+        score, reasons = score_headline_v2(title, source, category)
+        return NewsItem(
+            title=title,
+            source=source,
+            link="https://www.reuters.com/test",
+            published_at="2026-05-14T10:00:00+00:00",
+            category=category,
+            score=score,
+            score_reasons=reasons,
+        )
+
+    def cross_asset(self, oil_change: float = 1.2) -> CrossAssetAnalysis:
+        return CrossAssetAnalysis(
+            score=50,
+            status="test",
+            verdict="NEUTRAL",
+            summary="test",
+            confirmations=[],
+            contradictions=[],
+            drivers={
+                "wti": {"available": True, "change_pct": oil_change},
+                "brent": {"available": True, "change_pct": oil_change * 0.8},
+            },
+            signals=[],
+        )
+
+    def test_phase5_classifies_rejected_iran_deal_as_buy(self) -> None:
+        gold = self.snapshot("XAU/USD", 2405.0, 2400.0)
+        facts = build_event_facts(
+            [self.news("Iran rejects nuclear deal as Trump warns of sanctions")],
+            wti=self.snapshot("WTI", 81.0, 80.0),
+            dxy=self.snapshot("DXY", 99.8, 100.0),
+            us10y=self.snapshot("10Y", 4.30, 4.32),
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.direction, "BUY")
+        self.assertEqual(event.event_type, "GEOPOLITICAL_ESCALATION")
+
+    def test_phase5_classifies_ceasefire_as_sell(self) -> None:
+        gold = self.snapshot("XAU/USD", 2398.0, 2400.0)
+        facts = build_event_facts(
+            [self.news("Israel and Iran agree ceasefire after White House talks")],
+            wti=self.snapshot("WTI", 79.5, 80.0),
+            dxy=self.snapshot("DXY", 100.2, 100.0),
+            us10y=self.snapshot("10Y", 4.34, 4.32),
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.direction, "SELL")
+        self.assertEqual(event.event_type, "GEOPOLITICAL_DEESCALATION")
+
+    def test_phase5_price_reaction_requires_market_confirmation(self) -> None:
+        gold = self.snapshot("XAU/USD", 2406.0, 2400.0)
+        dxy = self.snapshot("DXY", 99.8, 100.0)
+        us10y = self.snapshot("10Y", 4.30, 4.32)
+        facts = build_event_facts(
+            [self.news("Trump warns Iran after tanker attack near Hormuz")],
+            wti=self.snapshot("WTI", 81.0, 80.0),
+            dxy=dxy,
+            us10y=us10y,
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        assert event is not None
+        reaction = detect_news_reaction_price(event, gold, dxy, us10y, self.cross_asset())
+        self.assertTrue(reaction.confirms)
+        self.assertGreaterEqual(reaction.confirmation_score, 2)
+
+    def test_phase5_classifies_fed_dovish_surprise_as_buy(self) -> None:
+        gold = self.snapshot("XAU/USD", 2404.0, 2400.0)
+        facts = build_event_facts(
+            [self.news("Federal Reserve announces dovish rate cut surprise", "Federal Reserve", "official_fed_press_all")],
+            dxy=self.snapshot("DXY", 99.7, 100.0),
+            us10y=self.snapshot("10Y", 4.28, 4.32),
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.event_type, "FED_DOVISH_SURPRISE")
+        self.assertEqual(event.direction, "BUY")
+
+    def test_phase5_classifies_hot_cpi_as_sell(self) -> None:
+        gold = self.snapshot("XAU/USD", 2397.0, 2400.0)
+        facts = build_event_facts(
+            [self.news("CPI hotter than expected as inflation accelerates", "BLS", "official_bls")],
+            dxy=self.snapshot("DXY", 100.3, 100.0),
+            us10y=self.snapshot("10Y", 4.36, 4.32),
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.event_type, "MACRO_SURPRISE")
+        self.assertEqual(event.direction, "SELL")
+
+    def test_phase5_classifies_weak_nfp_as_buy(self) -> None:
+        gold = self.snapshot("XAU/USD", 2403.0, 2400.0)
+        facts = build_event_facts(
+            [self.news("NFP misses as jobs market weakens sharply", "BLS", "official_bls")],
+            dxy=self.snapshot("DXY", 99.8, 100.0),
+            us10y=self.snapshot("10Y", 4.29, 4.32),
+            gold=gold,
+        )
+        event = classify_news_reaction_event(facts[0], datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc))
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.event_type, "MACRO_SURPRISE")
+        self.assertEqual(event.direction, "BUY")
+
+    def test_phase5_news_reaction_plan_has_valid_sell_levels(self) -> None:
+        gold = self.snapshot("XAU/USD", 2395.0, 2400.0)
+        dxy = self.snapshot("DXY", 100.3, 100.0)
+        us10y = self.snapshot("10Y", 4.35, 4.32)
+        facts = build_event_facts(
+            [self.news("Iran and Israel agree ceasefire as oil drops", "Reuters", "fast_reuters")],
+            wti=self.snapshot("WTI", 79.0, 80.0),
+            dxy=dxy,
+            us10y=us10y,
+            gold=gold,
+        )
+        plan = build_news_reaction_engine(
+            facts,
+            gold,
+            dxy,
+            us10y,
+            cross_asset=self.cross_asset(oil_change=-1.0),
+            now=datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(plan.entry_type, "NEWS_REACTION")
+        self.assertEqual(plan.status, "TRADE_READY")
+        self.assertLess(plan.tp1, plan.reference_price)
+        self.assertLess(plan.tp2, plan.tp1)
+        self.assertLess(plan.tp3, plan.tp2)
+        self.assertGreater(plan.stop_loss, plan.reference_price)
+
+    def test_phase5_multi_event_collision_suspends_signal(self) -> None:
+        gold = self.snapshot("XAU/USD", 2402.0, 2400.0)
+        dxy = self.snapshot("DXY", 100.0, 100.0)
+        us10y = self.snapshot("10Y", 4.32, 4.32)
+        facts = build_event_facts(
+            [
+                self.news("Trump warns Iran after attack near Hormuz"),
+                self.news("Israel and Iran agree ceasefire after White House talks"),
+            ],
+            wti=self.snapshot("WTI", 80.0, 80.0),
+            dxy=dxy,
+            us10y=us10y,
+            gold=gold,
+        )
+        plan = build_news_reaction_engine(
+            facts,
+            gold,
+            dxy,
+            us10y,
+            cross_asset=self.cross_asset(),
+            now=datetime(2026, 5, 14, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(plan.status, "SUSPENDED")
+        self.assertEqual(plan.event_type, "MULTI_EVENT_COLLISION")
 
 
 if __name__ == "__main__":

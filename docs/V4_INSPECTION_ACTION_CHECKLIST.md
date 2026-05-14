@@ -310,25 +310,25 @@ Statuts autorises:
 
 ## 24. News Reaction Engine
 
-- [ ] Creer `FastNewsListener`.
-- [ ] Polling 5-15s sur feeds critiques.
-- [ ] Stocker hashes de feeds.
-- [ ] Creer `EventClassifier`.
-- [ ] Dictionnaire high impact: Iran oil deal/escalation, Fed dovish/hawkish, macro surprise.
-- [ ] Distinguer "rejects" vs "accepts".
-- [ ] Creer `PriceReactionDetector`.
-- [ ] Polling prix 1-3s pendant 60s apres event.
-- [ ] Verifier XAU/USD.
-- [ ] Verifier oil.
-- [ ] Verifier DXY.
-- [ ] Verifier volume/volatilite si disponible.
-- [ ] Creer `NewsReactionTradePlan`.
-- [ ] Validite 15-30 min.
-- [ ] SL serre au prix pre-event +/- buffer.
-- [ ] TP bases sur mouvement deja fait.
-- [ ] Ajouter bypass controle du quality gate classique uniquement pour news event qualifie.
-- [ ] Suspendre 10 min apres signal news.
-- [ ] Ajouter tests fixtures Trump/Iran/Fed/CPI/NFP.
+- [x] Creer `FastNewsListener`.
+- [x] Polling 5-15s sur feeds critiques via refresh dashboard; boucle daemon VPS a activer au deploiement H24.
+- [x] Stocker hashes de feeds.
+- [x] Creer `EventClassifier`.
+- [x] Dictionnaire high impact: Iran oil deal/escalation, Fed dovish/hawkish, macro surprise.
+- [x] Distinguer "rejects" vs "accepts".
+- [x] Creer `PriceReactionDetector`.
+- [x] Polling prix 1-3s pendant 60s apres event prepare cote detecteur; boucle daemon VPS a activer au deploiement H24.
+- [x] Verifier XAU/USD.
+- [x] Verifier oil.
+- [x] Verifier DXY.
+- [x] Verifier volume/volatilite si disponible par event mode/market snapshots quand disponible.
+- [x] Creer `NewsReactionTradePlan`.
+- [x] Validite 15-30 min.
+- [x] SL serre au prix pre-event +/- buffer.
+- [x] TP bases sur mouvement deja fait.
+- [x] Ajouter bypass controle du quality gate classique uniquement pour news event qualifie.
+- [x] Suspendre 10 min apres signal news.
+- [x] Ajouter tests fixtures Trump/Iran/Fed/CPI/NFP.
 
 ## 25. Multi-Strategy Engine
 

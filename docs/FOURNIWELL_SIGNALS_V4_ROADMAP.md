@@ -204,9 +204,9 @@ Points a reprendre en Phase 4.5:
 
 La prochaine phase a lancer est:
 
-`Phase 5 - News Reaction Engine`
+`Phase 6 - Refonte Trade Levels`
 
-Phase 4.5 a ete livree et testee le 2026-05-14. Phase 5 ne doit commencer qu'apres validation fonctionnelle utilisateur de la Phase 4.5.
+Phase 4.5 a ete livree et testee le 2026-05-14. Phase 5 a ete livree le 2026-05-14 avec `News Reaction Engine`, signal `NEWS_REACTION`, confirmation prix/cross-assets et affichage dashboard.
 
 ## 7. Phase 4.5 - Redressement exhaustif avant Phase 5
 
@@ -662,6 +662,8 @@ La Phase 4.5 n'est validee que si:
 
 ## 8. Phase 5 - News Reaction Engine
 
+Statut: livree le 2026-05-14.
+
 Objectif: capter les vraies news qui bougent le marche, apres que les sources et prerequis Phase 4.5 soient en place.
 
 Composants a creer:
@@ -700,6 +702,19 @@ Livrable:
 - validite 15-30 min;
 - affichage clair: event exploitable ou non exploitable;
 - trade type `NEWS_REACTION` separe des trades classiques.
+
+Livraison effective:
+
+- `FastNewsListener`: filtre les NewsFacts Tier 1-3 recents sur 30 minutes;
+- `EventClassifier`: detecte escalation/de-escalation geopolitique, Fed dovish/hawkish, macro surprise CPI/PCE/NFP, declarations Trump/White House/Netanyahu;
+- detection negation: `rejects deal` != `accepts deal`;
+- `PriceReactionDetector`: confirme par XAU/USD, DXY, 10Y US et WTI/Brent quand applicable;
+- detection `fade trap`;
+- collision multi-event BUY/SELL -> `SUSPENDED` 10 minutes;
+- `NewsReactionTradePlan`: entry type `NEWS_REACTION`, validite 15-30 min, SL serre, TP1/TP2/TP3, R/R;
+- payload `news_reaction_setup`;
+- affichage Desk, News Flow et Inspector;
+- tests unitaires Trump/Iran/Fed-style, ceasefire, confirmation prix, niveaux SELL et collision.
 
 ## 9. Phase 6 - Refonte Trade Levels
 
@@ -986,7 +1001,7 @@ Livrable:
 4. Phase 3 - News Flow v4. Statut: livre partiel, a completer par Phase 4.5.
 5. Phase 4 - Rebuild des agents. Statut: livre partiel, a completer par Phase 4.5.
 6. Phase 4.5 - Redressement exhaustif avant Phase 5. Statut: livree le 2026-05-14.
-7. Phase 5 - News Reaction Engine.
+7. Phase 5 - News Reaction Engine. Statut: livree le 2026-05-14.
 8. Phase 6 - Refonte Trade Levels.
 9. Phase 7 - Multi-Strategy Engine.
 10. Phase 8 - Calibration et backtest.
@@ -1013,6 +1028,6 @@ Cette roadmap v1.1 devient la base de travail v4.0 apres validation utilisateur.
 
 La prochaine phase officielle est:
 
-`Phase 5 - News Reaction Engine`
+`Phase 6 - Refonte Trade Levels`
 
-Ne pas lancer Phase 5 avant validation fonctionnelle utilisateur de la Phase 4.5 livree.
+Phase 5 est livree. La prochaine phase officielle est Phase 6, sauf correction critique de validation Phase 5.

@@ -753,6 +753,72 @@ class EventModeAnalysis:
 
 
 @dataclass
+class FastNewsEvent:
+    event_id: str
+    title: str
+    source: str
+    source_url: str
+    published_at: str
+    detected_at: str
+    processed_at: str
+    category: str
+    logical_category: str
+    source_tier: int
+    event_type: str
+    direction: str
+    score: int
+    confidence: int
+    validity_minutes: int
+    valid_until: str
+    latency_seconds: float | None
+    is_breaking: bool
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PriceReactionSignal:
+    direction: str
+    confirmation_score: int
+    confirms: bool
+    fade_trap: bool
+    xauusd_change_pct: float
+    dxy_change_pct: float
+    us10y_change_bps: float
+    oil_change_pct: float | None
+    checks: list[str] = field(default_factory=list)
+
+
+@dataclass
+class NewsReactionTradePlan:
+    status: str
+    direction: str
+    event_type: str
+    title: str
+    source: str
+    source_url: str
+    confidence: int
+    validity_minutes: int
+    valid_until: str
+    entry_type: str
+    reference_price: float
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    risk_reward_tp1: float
+    risk_reward_tp2: float
+    risk_reward_tp3: float
+    confirmation_score: int
+    latency_seconds: float | None
+    created_at: str
+    event_id: str
+    reasons: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+
+
+@dataclass
 class MarketRegimeAnalysis:
     name: str
     status: str
@@ -1230,6 +1296,7 @@ class BriefingBundle:
     trade_ledger: TradeLedgerSummary | None = None
     orchestrator_decision: OrchestratorDecision | None = None
     chart_store: ChartStore | None = None
+    news_reaction_setup: NewsReactionTradePlan | None = None
 
 
 @dataclass
@@ -6796,6 +6863,424 @@ def event_fact_direction(fact: NewsFact) -> str:
     return "NEUTRAL"
 
 
+NEWS_REACTION_HIGH_IMPACT_TERMS = (
+    "trump",
+    "white house",
+    "netanyahu",
+    "israel",
+    "iran",
+    "hormuz",
+    "strait",
+    "tanker",
+    "ship",
+    "navy",
+    "missile",
+    "attack",
+    "sanction",
+    "ceasefire",
+    "truce",
+    "fed",
+    "fomc",
+    "powell",
+    "cpi",
+    "pce",
+    "nfp",
+    "payroll",
+)
+
+
+def fast_news_event_id(title: str, source: str, published_at: str) -> str:
+    seed = f"{source}|{published_at}|{normalize_title_for_dedupe(title)}"
+    return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
+
+
+def event_latency_seconds(published_at: str, reference: datetime) -> float | None:
+    published = parse_iso_datetime(published_at)
+    if published is None:
+        return None
+    return max(0.0, (reference - published).total_seconds())
+
+
+def event_valid_until(published_at: str, reference: datetime, minutes: int) -> str:
+    published = parse_iso_datetime(published_at)
+    base = published if published is not None else reference
+    return (base + timedelta(minutes=minutes)).isoformat()
+
+
+def classify_news_reaction_event(fact: NewsFact, now: datetime | None = None) -> FastNewsEvent | None:
+    reference = now or datetime.now(timezone.utc)
+    text = f"{fact.title} {' '.join(fact.themes)} {fact.category} {fact.source}".lower()
+    category = logical_category(fact)
+    source_tier = int(getattr(fact, "source_tier", news_source_tier(fact.source, fact.source_url)) or 4)
+    confidence = int(getattr(fact, "confidence", 50) or 50)
+    latency = event_latency_seconds(fact.published_at, reference)
+    age_minutes = (latency / 60.0) if latency is not None else None
+    fact_type = str(getattr(fact, "fact_type", "unconfirmed_headline"))
+    if source_tier > 3 or confidence < 55 or fact_type in {"rumor", "opinion"}:
+        return None
+    if age_minutes is not None and age_minutes > 30:
+        return None
+    if not text_contains_any(text, NEWS_REACTION_HIGH_IMPACT_TERMS):
+        return None
+
+    event_type = "MARKET_MOVING_NEWS"
+    direction = event_fact_direction(fact)
+    reasons: list[str] = []
+    rejects = text_contains_any(text, ("reject", "rejects", "rejected", "refuse", "refuses", "denies", "failed", "collapse", "breakdown", "no deal"))
+    accepts = text_contains_any(text, ("accept", "accepts", "accepted", "agree", "agrees", "agreed", "deal", "ceasefire", "truce", "peace", "reopen"))
+
+    if text_contains_any(text, ("iran", "hormuz", "strait", "tanker", "ship", "navy", "missile", "attack", "blockade", "sanction")):
+        if accepts and not rejects:
+            event_type = "GEOPOLITICAL_DEESCALATION"
+            direction = "SELL"
+            reasons.append("Accalmie geopolitique: prime refuge gold susceptible de se detendre.")
+        else:
+            event_type = "GEOPOLITICAL_ESCALATION"
+            direction = "BUY"
+            reasons.append("Escalade geopolitique: demande refuge gold possible, a confirmer par XAU/USD et DXY.")
+    elif text_contains_any(text, ("fed", "fomc", "powell", "rate", "rates")):
+        if text_contains_any(text, ("cut", "cuts", "dovish", "easing", "pause", "slows", "liquidity")):
+            event_type = "FED_DOVISH_SURPRISE"
+            direction = "BUY"
+            reasons.append("Surprise Fed dovish: pression baissiere possible sur DXY/taux, favorable gold.")
+        elif text_contains_any(text, ("hike", "hikes", "hawkish", "higher for longer", "inflation risk", "tightening")):
+            event_type = "FED_HAWKISH_SURPRISE"
+            direction = "SELL"
+            reasons.append("Surprise Fed hawkish: DXY/taux peuvent monter, negatif gold.")
+    elif text_contains_any(text, ("cpi", "pce", "inflation", "nfp", "payroll", "jobs", "employment")):
+        event_type = "MACRO_SURPRISE"
+        if text_contains_any(text, ("hot", "hotter", "above forecast", "beats", "strong", "sticky", "accelerates")):
+            direction = "SELL"
+            reasons.append("Surprise macro chaude: taux/DXY peuvent monter, negatif gold.")
+        elif text_contains_any(text, ("cool", "cooler", "below forecast", "misses", "weak", "slows", "disinflation")):
+            direction = "BUY"
+            reasons.append("Surprise macro faible/dovish: taux/DXY peuvent reculer, favorable gold.")
+    elif text_contains_any(text, ("trump", "white house", "netanyahu")):
+        event_type = "POLITICAL_STATEMENT"
+        if direction == "NEUTRAL":
+            direction = "BUY" if text_contains_any(text, ("war", "attack", "sanction", "threat")) else "WAIT"
+        reasons.append("Declaration politique detectee: elle doit etre confirmee par le prix avant tout trade.")
+
+    if direction not in {"BUY", "SELL"}:
+        return None
+
+    validity = 30 if source_tier <= 2 and confidence >= 75 else 15
+    published = parse_iso_datetime(fact.published_at)
+    is_breaking = (age_minutes is not None and age_minutes <= 15) or source_tier == 1
+    score = clamp_score(confidence + (10 if source_tier <= 2 else 0) + (8 if is_breaking else 0))
+    reasons.extend(
+        [
+            f"Source Tier {source_tier}, confiance {confidence}/100.",
+            f"Categorie {category}; signal valable {validity} min.",
+        ]
+    )
+    return FastNewsEvent(
+        event_id=fast_news_event_id(fact.title, fact.source, fact.published_at),
+        title=fact.title,
+        source=fact.source,
+        source_url=fact.source_url,
+        published_at=fact.published_at,
+        detected_at=reference.isoformat(),
+        processed_at=reference.isoformat(),
+        category=fact.category,
+        logical_category=category,
+        source_tier=source_tier,
+        event_type=event_type,
+        direction=direction,
+        score=score,
+        confidence=min(100, max(confidence, score)),
+        validity_minutes=validity,
+        valid_until=event_valid_until(fact.published_at, reference, validity),
+        latency_seconds=latency,
+        is_breaking=is_breaking,
+        reasons=reasons,
+    )
+
+
+class FastNewsListener:
+    """Filtre les NewsFacts recents pour ne laisser passer que les evenements tradables."""
+
+    def __init__(self, max_age_minutes: int = 30) -> None:
+        self.max_age_minutes = max_age_minutes
+
+    def select_events(self, event_facts: list[NewsFact], now: datetime | None = None) -> list[FastNewsEvent]:
+        reference = now or datetime.now(timezone.utc)
+        events: list[FastNewsEvent] = []
+        seen: set[str] = set()
+        for fact in event_facts:
+            event = classify_news_reaction_event(fact, reference)
+            if event is None:
+                continue
+            age = event.latency_seconds / 60.0 if event.latency_seconds is not None else None
+            if age is not None and age > self.max_age_minutes:
+                continue
+            if event.event_id in seen:
+                continue
+            seen.add(event.event_id)
+            events.append(event)
+        return sorted(events, key=lambda item: (item.is_breaking, item.score, item.confidence), reverse=True)
+
+
+def cross_asset_oil_change_pct(cross_asset: CrossAssetAnalysis | None) -> float | None:
+    if cross_asset is None:
+        return None
+    changes: list[float] = []
+    for key in ("wti", "brent"):
+        driver = cross_asset.drivers.get(key, {})
+        if driver.get("available") and driver.get("change_pct") is not None:
+            changes.append(float(driver["change_pct"]))
+    if not changes:
+        return None
+    return max(changes, key=lambda value: abs(value))
+
+
+def detect_news_reaction_price(
+    event: FastNewsEvent,
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    cross_asset: CrossAssetAnalysis | None,
+) -> PriceReactionSignal:
+    direction = event.direction
+    xau_change = gold.period_change_pct if abs(gold.period_change_pct) >= 0.01 else gold.change_pct
+    dxy_change = dxy.period_change_pct if abs(dxy.period_change_pct) >= 0.01 else dxy.change_pct
+    us10y_bps = us10y.change_abs * 100
+    oil_change = cross_asset_oil_change_pct(cross_asset)
+    checks: list[str] = []
+    score = 0
+
+    if direction == "BUY":
+        if xau_change >= 0.05:
+            score += 1
+            checks.append(f"XAU/USD confirme BUY ({xau_change:+.2f}%).")
+        else:
+            checks.append(f"XAU/USD ne confirme pas encore BUY ({xau_change:+.2f}%).")
+        if dxy_change <= -0.05:
+            score += 1
+            checks.append(f"DXY recule ({dxy_change:+.2f}%), favorable gold.")
+        else:
+            checks.append(f"DXY ne confirme pas BUY ({dxy_change:+.2f}%).")
+        if us10y_bps <= -1.0:
+            score += 1
+            checks.append(f"10Y US recule ({us10y_bps:+.1f} bps).")
+        if event.event_type == "GEOPOLITICAL_ESCALATION" and oil_change is not None:
+            if oil_change >= 0.30:
+                score += 1
+                checks.append(f"Oil confirme l'escalade ({oil_change:+.2f}%).")
+            else:
+                checks.append(f"Oil ne confirme pas l'escalade ({oil_change:+.2f}%).")
+    else:
+        if xau_change <= -0.05:
+            score += 1
+            checks.append(f"XAU/USD confirme SELL ({xau_change:+.2f}%).")
+        else:
+            checks.append(f"XAU/USD ne confirme pas encore SELL ({xau_change:+.2f}%).")
+        if dxy_change >= 0.05:
+            score += 1
+            checks.append(f"DXY monte ({dxy_change:+.2f}%), pression sur gold.")
+        else:
+            checks.append(f"DXY ne confirme pas SELL ({dxy_change:+.2f}%).")
+        if us10y_bps >= 1.0:
+            score += 1
+            checks.append(f"10Y US monte ({us10y_bps:+.1f} bps).")
+        if event.event_type == "GEOPOLITICAL_DEESCALATION" and oil_change is not None:
+            if oil_change <= -0.30:
+                score += 1
+                checks.append(f"Oil confirme l'accalmie ({oil_change:+.2f}%).")
+            else:
+                checks.append(f"Oil ne confirme pas l'accalmie ({oil_change:+.2f}%).")
+
+    fade_trap = (
+        (direction == "BUY" and (xau_change <= -0.10 or dxy_change >= 0.20))
+        or (direction == "SELL" and (xau_change >= 0.10 or dxy_change <= -0.20))
+    )
+    if fade_trap:
+        checks.append("Fade trap detecte: la reaction prix contredit la news.")
+    confirms = score >= 2 and not fade_trap
+    return PriceReactionSignal(
+        direction=direction,
+        confirmation_score=score,
+        confirms=confirms,
+        fade_trap=fade_trap,
+        xauusd_change_pct=round(xau_change, 3),
+        dxy_change_pct=round(dxy_change, 3),
+        us10y_change_bps=round(us10y_bps, 2),
+        oil_change_pct=round(oil_change, 3) if oil_change is not None else None,
+        checks=checks,
+    )
+
+
+def news_reaction_levels(direction: str, price: float, move_pct: float) -> tuple[float, float, float, float, float, float]:
+    move_abs = max(abs(price * move_pct / 100.0), price * 0.00075, 3.0)
+    risk = max(move_abs * 0.72, 3.0)
+    entry_low = price - risk * 0.18
+    entry_high = price + risk * 0.18
+    if direction == "BUY":
+        return (
+            round(entry_low, 2),
+            round(entry_high, 2),
+            round(price - risk, 2),
+            round(price + risk * 1.65, 2),
+            round(price + risk * 2.65, 2),
+            round(price + risk * 4.00, 2),
+        )
+    return (
+        round(entry_low, 2),
+        round(entry_high, 2),
+        round(price + risk, 2),
+        round(price - risk * 1.65, 2),
+        round(price - risk * 2.65, 2),
+        round(price - risk * 4.00, 2),
+    )
+
+
+def is_weekend_market_window(now: datetime) -> bool:
+    return now.weekday() in {5, 6}
+
+
+def build_news_reaction_trade_plan(
+    event: FastNewsEvent,
+    reaction: PriceReactionSignal,
+    gold: SymbolSnapshot,
+    data_quality: DataQualitySnapshot | None = None,
+    now: datetime | None = None,
+) -> NewsReactionTradePlan:
+    reference = now or datetime.now(timezone.utc)
+    blockers: list[str] = []
+    reasons = list(event.reasons) + list(reaction.checks)
+    if is_weekend_market_window(reference):
+        blockers.append("Marche spot ferme: signal news conserve en surveillance, pas en trade exploitable.")
+    if data_quality is not None and data_quality.preflight and data_quality.preflight.trade_blocked:
+        blockers.append("Preflight sources bloque le trade: donnees critiques insuffisantes.")
+    if not reaction.confirms:
+        blockers.append("La news ne suffit pas: confirmation prix/cross-assets insuffisante.")
+    if reaction.fade_trap:
+        blockers.append("Fade trap: le prix contredit la direction attendue.")
+
+    entry_low, entry_high, stop_loss, tp1, tp2, tp3 = news_reaction_levels(
+        event.direction,
+        gold.price,
+        reaction.xauusd_change_pct,
+    )
+    risk = abs(gold.price - stop_loss) or 1.0
+    rr1 = abs(tp1 - gold.price) / risk
+    rr2 = abs(tp2 - gold.price) / risk
+    rr3 = abs(tp3 - gold.price) / risk
+    status = "TRADE_READY" if not blockers else "WATCH" if reaction.confirmation_score >= 1 else "NO_TRADE"
+    if blockers and any("Marche spot ferme" in blocker or "Preflight" in blocker for blocker in blockers):
+        status = "SUSPENDED"
+    return NewsReactionTradePlan(
+        status=status,
+        direction=event.direction if status == "TRADE_READY" else f"WATCH_{event.direction}" if status == "WATCH" else "WAIT",
+        event_type=event.event_type,
+        title=event.title,
+        source=event.source,
+        source_url=event.source_url,
+        confidence=min(100, max(event.confidence, 50 + reaction.confirmation_score * 12)),
+        validity_minutes=event.validity_minutes,
+        valid_until=event.valid_until,
+        entry_type="NEWS_REACTION",
+        reference_price=round(gold.price, 2),
+        entry_zone_low=entry_low,
+        entry_zone_high=entry_high,
+        stop_loss=stop_loss,
+        tp1=tp1,
+        tp2=tp2,
+        tp3=tp3,
+        risk_reward_tp1=round(rr1, 2),
+        risk_reward_tp2=round(rr2, 2),
+        risk_reward_tp3=round(rr3, 2),
+        confirmation_score=reaction.confirmation_score,
+        latency_seconds=event.latency_seconds,
+        created_at=reference.isoformat(),
+        event_id=event.event_id,
+        reasons=reasons[:8],
+        blockers=blockers[:6],
+    )
+
+
+def empty_news_reaction_plan(now: datetime | None = None) -> NewsReactionTradePlan:
+    reference = now or datetime.now(timezone.utc)
+    return NewsReactionTradePlan(
+        status="NO_EVENT",
+        direction="WAIT",
+        event_type="NO_FAST_EVENT",
+        title="Aucune news recente qualifiee",
+        source="FastNewsListener",
+        source_url="",
+        confidence=0,
+        validity_minutes=0,
+        valid_until=reference.isoformat(),
+        entry_type="NEWS_REACTION",
+        reference_price=0.0,
+        entry_zone_low=0.0,
+        entry_zone_high=0.0,
+        stop_loss=0.0,
+        tp1=0.0,
+        tp2=0.0,
+        tp3=0.0,
+        risk_reward_tp1=0.0,
+        risk_reward_tp2=0.0,
+        risk_reward_tp3=0.0,
+        confirmation_score=0,
+        latency_seconds=None,
+        created_at=reference.isoformat(),
+        event_id="NO_EVENT",
+        reasons=["Aucune headline Tier 1-3 recente et directionnelle dans la fenetre 30 minutes."],
+        blockers=[],
+    )
+
+
+def build_news_reaction_engine(
+    event_facts: list[NewsFact],
+    gold: SymbolSnapshot,
+    dxy: SymbolSnapshot,
+    us10y: SymbolSnapshot,
+    cross_asset: CrossAssetAnalysis | None = None,
+    data_quality: DataQualitySnapshot | None = None,
+    now: datetime | None = None,
+) -> NewsReactionTradePlan:
+    reference = now or datetime.now(timezone.utc)
+    listener = FastNewsListener(max_age_minutes=30)
+    events = listener.select_events(event_facts, reference)
+    if not events:
+        return empty_news_reaction_plan(reference)
+    directions = {event.direction for event in events[:3]}
+    if len(directions) > 1:
+        top = events[0]
+        return NewsReactionTradePlan(
+            status="SUSPENDED",
+            direction="WAIT",
+            event_type="MULTI_EVENT_COLLISION",
+            title=top.title,
+            source=top.source,
+            source_url=top.source_url,
+            confidence=top.confidence,
+            validity_minutes=10,
+            valid_until=(reference + timedelta(minutes=10)).isoformat(),
+            entry_type="NEWS_REACTION",
+            reference_price=round(gold.price, 2),
+            entry_zone_low=round(gold.price, 2),
+            entry_zone_high=round(gold.price, 2),
+            stop_loss=round(gold.price, 2),
+            tp1=round(gold.price, 2),
+            tp2=round(gold.price, 2),
+            tp3=round(gold.price, 2),
+            risk_reward_tp1=0.0,
+            risk_reward_tp2=0.0,
+            risk_reward_tp3=0.0,
+            confirmation_score=0,
+            latency_seconds=top.latency_seconds,
+            created_at=reference.isoformat(),
+            event_id=top.event_id,
+            reasons=[f"Collision multi-event: directions detectees {', '.join(sorted(directions))}."],
+            blockers=["Suspension 10 minutes: plusieurs news recentes donnent des directions opposees."],
+        )
+    top_event = events[0]
+    reaction = detect_news_reaction_price(top_event, gold, dxy, us10y, cross_asset)
+    return build_news_reaction_trade_plan(top_event, reaction, gold, data_quality=data_quality, now=reference)
+
+
 def top_news_titles(news: list[NewsItem], categories: set[str] | None = None, limit: int = 2) -> str:
     selected_categories = {logical_category(category) for category in categories} if categories else None
     selected = [
@@ -9041,6 +9526,7 @@ def build_payload(
     trade_ledger: TradeLedgerSummary | None = None,
     orchestrator_decision: OrchestratorDecision | None = None,
     chart_store: ChartStore | None = None,
+    news_reaction_setup: NewsReactionTradePlan | None = None,
     settings: UserSettings | None = None,
     settings_validation: SettingsValidation | None = None,
 ) -> dict[str, Any]:
@@ -9178,6 +9664,8 @@ def build_payload(
         payload["trade_ledger"] = trade_ledger_public_dict(trade_ledger)
     if orchestrator_decision:
         payload["orchestrator_decision"] = asdict(orchestrator_decision)
+    if news_reaction_setup:
+        payload["news_reaction_setup"] = asdict(news_reaction_setup)
     if settings:
         payload["settings"] = asdict(settings)
     if settings_validation:
@@ -9466,6 +9954,39 @@ def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerS
             for item in post_mortems_data
             if isinstance(item, dict)
         ],
+    )
+
+
+def build_news_reaction_from_payload(data: dict[str, Any] | None) -> NewsReactionTradePlan | None:
+    if not isinstance(data, dict):
+        return None
+    return NewsReactionTradePlan(
+        status=str(data.get("status", "NO_EVENT")),
+        direction=str(data.get("direction", "WAIT")),
+        event_type=str(data.get("event_type", "NO_FAST_EVENT")),
+        title=str(data.get("title", "")),
+        source=str(data.get("source", "")),
+        source_url=str(data.get("source_url", "")),
+        confidence=int(data.get("confidence", 0) or 0),
+        validity_minutes=int(data.get("validity_minutes", 0) or 0),
+        valid_until=str(data.get("valid_until", "")),
+        entry_type=str(data.get("entry_type", "NEWS_REACTION")),
+        reference_price=float(data.get("reference_price", 0.0) or 0.0),
+        entry_zone_low=float(data.get("entry_zone_low", 0.0) or 0.0),
+        entry_zone_high=float(data.get("entry_zone_high", 0.0) or 0.0),
+        stop_loss=float(data.get("stop_loss", 0.0) or 0.0),
+        tp1=float(data.get("tp1", 0.0) or 0.0),
+        tp2=float(data.get("tp2", 0.0) or 0.0),
+        tp3=float(data.get("tp3", 0.0) or 0.0),
+        risk_reward_tp1=float(data.get("risk_reward_tp1", 0.0) or 0.0),
+        risk_reward_tp2=float(data.get("risk_reward_tp2", 0.0) or 0.0),
+        risk_reward_tp3=float(data.get("risk_reward_tp3", 0.0) or 0.0),
+        confirmation_score=int(data.get("confirmation_score", 0) or 0),
+        latency_seconds=float(data["latency_seconds"]) if data.get("latency_seconds") is not None else None,
+        created_at=str(data.get("created_at", iso_now())),
+        event_id=str(data.get("event_id", "NO_EVENT")),
+        reasons=[str(item) for item in data.get("reasons", [])],
+        blockers=[str(item) for item in data.get("blockers", [])],
     )
 
 
@@ -9825,6 +10346,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         for item in payload.get("technical_timeframes", [])
     ]
     agent_results = parse_agent_results(payload.get("agent_results", []))
+    news_reaction_setup = build_news_reaction_from_payload(payload.get("news_reaction_setup"))
     event_facts = [
         build_event_fact_from_payload(item)
         for item in payload.get("event_facts", [])
@@ -9876,6 +10398,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         agent_results=agent_results,
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
+        news_reaction_setup=news_reaction_setup,
     )
 
 
@@ -11505,6 +12028,73 @@ def render_news_flow_panel(
     """.strip()
 
 
+def render_news_reaction_panel(setup: NewsReactionTradePlan | None) -> str:
+    if setup is None:
+        setup = empty_news_reaction_plan()
+    tone = (
+        "bullish"
+        if setup.direction in {"BUY", "WATCH_BUY"}
+        else "bearish"
+        if setup.direction in {"SELL", "WATCH_SELL"}
+        else "caution"
+        if setup.status in {"WATCH", "SUSPENDED"}
+        else "neutral"
+    )
+    latency = (
+        f"{setup.latency_seconds:.0f}s"
+        if setup.latency_seconds is not None and setup.latency_seconds < 3600
+        else f"{setup.latency_seconds / 60:.0f} min"
+        if setup.latency_seconds is not None
+        else "n/a"
+    )
+    if setup.status == "TRADE_READY":
+        status_text = "Exploitable maintenant"
+        details = f"""
+        <div class="trade-levels">
+          <div><small>Entry</small><strong>{setup.entry_zone_low:.2f} / {setup.entry_zone_high:.2f}</strong></div>
+          <div><small>SL</small><strong>{setup.stop_loss:.2f}</strong></div>
+          <div><small>TP1</small><strong>{setup.tp1:.2f}</strong></div>
+          <div><small>TP2</small><strong>{setup.tp2:.2f}</strong></div>
+          <div><small>TP3</small><strong>{setup.tp3:.2f}</strong></div>
+        </div>
+        <p class="footer-note">R/R: TP1 {setup.risk_reward_tp1:.2f} · TP2 {setup.risk_reward_tp2:.2f} · TP3 {setup.risk_reward_tp3:.2f}</p>
+        """.strip()
+    elif setup.status == "NO_EVENT":
+        status_text = "Aucun flash exploitable"
+        details = '<div class="empty-state">Aucune news recente Tier 1-3 ne justifie un signal NEWS_REACTION.</div>'
+    else:
+        status_text = "Non exploitable pour le moment"
+        blockers = "".join(f"<li>{html.escape(blocker)}</li>" for blocker in setup.blockers) or "<li>Confirmation incomplete.</li>"
+        details = f"<ul>{blockers}</ul>"
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in setup.reasons[:5])
+    source_link = (
+        f'<a href="{html.escape(setup.source_url)}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>'
+        if setup.source_url
+        else ""
+    )
+    return f"""
+    <div class="technical-decision-card {tone}">
+      <div class="technical-decision-head">
+        <div>
+          <div class="tag-row">
+            <span class="source-tag {tone}">NEWS_REACTION</span>
+            <span class="source-tag">{html.escape(setup.status)}</span>
+            <span class="source-tag">Latence {html.escape(latency)}</span>
+          </div>
+          <h3>{html.escape(status_text)}</h3>
+          <p class="trade-summary"><strong>{html.escape(setup.direction)}</strong> · {html.escape(setup.event_type)} · confirmation {setup.confirmation_score}/4 · confiance {setup.confidence}/100</p>
+        </div>
+        <span class="score-badge">{setup.validity_minutes} min</span>
+      </div>
+      <h3>{html.escape(setup.title)}</h3>
+      <p class="footer-note">Source: {html.escape(setup.source)} · valide jusqu'a {html.escape(format_timestamp_for_humans(setup.valid_until))}</p>
+      {details}
+      <div class="technical-decision-block"><strong>Pourquoi</strong><ul>{reasons}</ul></div>
+      {source_link}
+    </div>
+    """.strip()
+
+
 def render_agents_scoreboard_panel(agent_results: list[AgentResult], settings_payload: dict[str, Any] | None = None) -> str:
     if not agent_results:
         return '<div class="empty-state">Aucun agent disponible sur ce snapshot.</div>'
@@ -12328,6 +12918,7 @@ def render_dashboard_clarity_v2(
     trade_ledger = bundle.trade_ledger
     orchestrator_decision = bundle.orchestrator_decision
     chart_store = bundle.chart_store
+    news_reaction_setup = bundle.news_reaction_setup
     technical_decision = bundle.technical_decision
     scenario_plan = bundle.scenario_plan
     tradingview_chart = render_tradingview_chart(interval="15")
@@ -12388,6 +12979,15 @@ def render_dashboard_clarity_v2(
             cross_asset=cross_asset_analysis,
             market_regime=market_regime,
             event_facts=event_facts,
+            data_quality=data_quality,
+        )
+    if news_reaction_setup is None:
+        news_reaction_setup = build_news_reaction_engine(
+            event_facts,
+            gold,
+            dxy,
+            us10y,
+            cross_asset=cross_asset_analysis,
             data_quality=data_quality,
         )
     agent_results = bundle.agent_results or build_passive_agent_results(
@@ -12463,6 +13063,15 @@ def render_dashboard_clarity_v2(
     lead_class = state_tone_class(lead_status)
     locked_status = "LOCKED" if active_trades else "NO LOCK"
     locked_class = "bullish" if active_trades else "neutral"
+    news_reaction_class = (
+        "bullish"
+        if news_reaction_setup.direction in {"BUY", "WATCH_BUY"}
+        else "bearish"
+        if news_reaction_setup.direction in {"SELL", "WATCH_SELL"}
+        else "caution"
+        if news_reaction_setup.status in {"WATCH", "SUSPENDED"}
+        else "neutral"
+    )
 
     if weekend_gold is not None:
         weekend_delta_class = (
@@ -13255,6 +13864,11 @@ def render_dashboard_clarity_v2(
             <strong class="{locked_class}">{locked_status}</strong>
             <span>{active_trades} trade(s) actif(s)</span>
           </div>
+          <div class="live-cell">
+            <small>News Reaction</small>
+            <strong class="{news_reaction_class}">{html.escape(news_reaction_setup.status)}</strong>
+            <span>{html.escape(news_reaction_setup.direction)} · {news_reaction_setup.confirmation_score}/4</span>
+          </div>
           {weekend_gold_cell}
           <div class="live-cell">
             <small>Refresh</small>
@@ -13291,6 +13905,11 @@ def render_dashboard_clarity_v2(
               <h2>Position historisee</h2>
               {render_signal_locked_panel(trade_ledger, global_recommendation, orchestrator_decision, scenario_plan)}
             </article>
+            <article class="panel span-12">
+              <div class="section-kicker">News Reaction Engine</div>
+              <h2>Flash exploitable ou non exploitable</h2>
+              {render_news_reaction_panel(news_reaction_setup)}
+            </article>
             <article class="panel span-6">
               <div class="section-kicker">Charte live TradingView</div>
               <h2>XAU/USD live chart</h2>
@@ -13318,6 +13937,7 @@ def render_dashboard_clarity_v2(
         <section class="tab-view" id="news" data-tab-view="news">
           <div class="view-header"><div><div class="section-kicker">News Flow</div><h2>Flux d'informations utiles</h2><p>Titres recents, source, heure et impact. Les headlines neutres, chaines internes et textes d'audit sont masques.</p></div></div>
           <section class="layout-news">
+            <article class="panel span-12"><div class="section-kicker">News Reaction Engine</div><h2>Evenement rapide</h2>{render_news_reaction_panel(news_reaction_setup)}</article>
             <article class="panel span-12"><div class="section-kicker">Flux trie</div><h2>News avec impact XAU/USD</h2>{render_news_flow_panel(bundle.news, event_facts, political_statements)}</article>
             <article class="panel span-12"><div class="section-kicker">Macro Catalysts</div><h2>Calendrier a surveiller</h2>{render_macro_catalysts_panel(macro_catalysts)}</article>
             <article class="panel span-12"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2>{render_cftc_positioning_panel(cftc_positioning)}</article>
@@ -13333,6 +13953,7 @@ def render_dashboard_clarity_v2(
             <article class="panel span-12"><div class="section-kicker">Regime interne</div><h2>Mode politique / petrole / dollar</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
             <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaines marche</h2>{render_event_facts_panel(event_facts)}</article>
             <article class="panel span-12"><div class="section-kicker">Political Statements</div><h2>Declarations politiques sourcees</h2>{render_political_statements_panel(political_statements)}</article>
+            <article class="panel span-12"><div class="section-kicker">News Reaction Engine</div><h2>Details latence et blocages</h2>{render_news_reaction_panel(news_reaction_setup)}</article>
             <article class="panel span-12"><div class="section-kicker">Confluence inter-marches</div><h2>Cross-assets, DXY, taux reels et confirmations</h2>{render_cross_asset_panel(cross_asset_analysis, real_yield)}</article>
             <article class="panel span-12"><div class="section-kicker">COT officiel CFTC</div><h2>Positionnement Gold Futures COMEX</h2>{render_cftc_positioning_panel(cftc_positioning)}</article>
             <article class="panel span-12"><div class="section-kicker">ETF flows officiels</div><h2>WGC + GLD + IAU</h2>{render_etf_flows_panel(etf_flows_analysis)}</article>
@@ -13619,6 +14240,14 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         event_facts=event_facts,
         data_quality=data_quality,
     )
+    news_reaction_setup = build_news_reaction_engine(
+        event_facts,
+        gold,
+        dxy,
+        us10y,
+        cross_asset=cross_asset_analysis,
+        data_quality=data_quality,
+    )
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -13661,6 +14290,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
+        news_reaction_setup=news_reaction_setup,
         settings=user_settings,
         settings_validation=settings_validation,
     )
@@ -13697,6 +14327,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.trade_ledger = trade_ledger
     live_bundle.orchestrator_decision = orchestrator_decision
     live_bundle.chart_store = chart_store
+    live_bundle.news_reaction_setup = news_reaction_setup
     return live_bundle
 
 
@@ -13840,6 +14471,14 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         event_facts=event_facts,
         data_quality=data_quality,
     )
+    news_reaction_setup = build_news_reaction_engine(
+        event_facts,
+        gold,
+        dxy,
+        us10y,
+        cross_asset=cross_asset_analysis,
+        data_quality=data_quality,
+    )
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -13882,6 +14521,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
+        news_reaction_setup=news_reaction_setup,
         settings=user_settings,
         settings_validation=settings_validation,
     )
@@ -13923,6 +14563,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
+        news_reaction_setup=news_reaction_setup,
     )
 
 

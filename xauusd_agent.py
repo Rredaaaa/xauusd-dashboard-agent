@@ -264,7 +264,47 @@ BULLISH_KEYWORDS = {
     "geopolit": 2,
     "war": 2,
     "conflict": 2,
+    "attack": 2,
+    "attacks": 2,
+    "clash": 2,
+    "missile": 2,
+    "military": 2,
+    "militarily": 2,
+    "enemy": 1,
+    "navy": 2,
+    "ships": 2,
+    "sanction": 2,
+    "sanctions": 2,
+    "escalation": 2,
+    "escalate": 2,
+    "iran nuclear": 3,
+    "nuclear weapon": 3,
+    "iran tension": 2,
+    "iran clash": 2,
+    "hormuz": 3,
+    "oil shock": 3,
+    "oil spike": 2,
+    "blockade": 2,
+    "attack ship": 3,
+    "attack tanker": 3,
+    "iran threat": 2,
+    "tehran": 1,
+    "houthi": 2,
+    "red sea": 2,
+    "energy supply shock": 2,
+    "supply shock": 2,
     "rate cut": 2,
+    "fed cut": 3,
+    "fed pause": 2,
+    "fed signal cut": 3,
+    "powell dovish": 3,
+    "rate decrease": 2,
+    "ease policy": 2,
+    "lower fed funds": 2,
+    "inflation cool": 2,
+    "cpi miss": 2,
+    "nfp weak": 2,
+    "yield curve invert": 2,
     "cuts": 1,
     "dovish": 2,
     "recession": 1,
@@ -274,18 +314,55 @@ BULLISH_KEYWORDS = {
     "lower yields": 2,
     "falling yields": 2,
     "central bank buying": 2,
+    "central bank gold": 3,
+    "gold buying": 2,
+    "china tension": 2,
 }
 
 BEARISH_KEYWORDS = {
     "hawkish": -2,
     "higher for longer": -2,
     "rate hike": -2,
+    "fed hike": -3,
+    "powell hawkish": -3,
+    "rate increase": -2,
+    "tighten policy": -2,
+    "higher fed funds": -2,
+    "inflation accelerate": -2,
+    "cpi beat": -2,
+    "nfp strong": -2,
+    "jobs surge": -2,
+    "yield surge": -2,
+    "dollar surge": -3,
+    "dxy rally": -2,
+    "treasury sell": -2,
     "strong dollar": -2,
     "dollar strengthens": -2,
     "rising yields": -2,
     "higher yields": -2,
     "risk-on": -1,
+    "economic cooperation": -1,
+    "market access": -1,
+    "increasing investment": -1,
+    "open up china": -1,
+    "s&p 500 tops": -2,
+    "record-breaking run": -1,
+    "ai fuels": -1,
     "ceasefire": -1,
+    "truce": -1,
+    "de-escalation": -2,
+    "deescalation": -2,
+    "iran deal": -3,
+    "iran agreement": -2,
+    "iran ceasefire": -3,
+    "iran nuclear deal": -3,
+    "iran accord": -3,
+    "tehran agreement": -3,
+    "peace iran": -3,
+    "tanker resume": -2,
+    "hormuz transit": -2,
+    "lpg tanker": -2,
+    "oil supply": -1,
 }
 
 RISK_OFF_POSITIVE_KEYWORDS = {
@@ -1403,6 +1480,41 @@ LOW_VALUE_HEADLINE_PATTERNS = (
     "expert predicts",
 )
 
+NEWS_NOISE_PATTERNS = (
+    "rt @",
+    "rt by @",
+    "r to @",
+    "🇺🇸🇨🇳",
+    "🇨🇳🇺🇸",
+    "national hospital week",
+    "presidential message",
+    "the courage to build",
+    "a powerful arrival",
+    "history in motion",
+    "ceremony plays",
+    "arrival ceremony",
+    "star-spangled banner",
+    "it's an honor",
+    "if you'd like to see",
+    "sorry that happened",
+    "state banquet",
+    "delivers remarks at the state banquet",
+    "reflecting pool",
+    "washington monument",
+    "lincoln memorial",
+    "law enforcement",
+    "nominations sent",
+    "first lady",
+    "foster youth",
+    "peace officers memorial",
+    "police week",
+    "signed into law",
+    "america's moms",
+    "support for families",
+    "termination of enforcement actions",
+    "approval of related applications",
+)
+
 
 def news_source_identity(source: str, link: str = "") -> str:
     text = f"{source} {link}".lower()
@@ -1475,6 +1587,7 @@ def should_skip_headline(title: str, source: str) -> bool:
         "horoscope",
         *WEAK_NEWS_SOURCES,
         *LOW_VALUE_HEADLINE_PATTERNS,
+        *NEWS_NOISE_PATTERNS,
     ]
     return any(pattern in text for pattern in blocked_patterns)
 
@@ -5650,22 +5763,49 @@ def build_executive_summary(
     return f"{alignment} {score_line}"
 
 
-def score_headline(title: str) -> tuple[int, list[str]]:
+def score_headline_v2(title: str, source: str = "", category: str = "", link: str = "") -> tuple[int, list[str]]:
     text = title.lower()
-    score = 0
+    if should_skip_headline(title, source):
+        return 0, ["noise_filter"]
+
+    raw_score = 0.0
     reasons: list[str] = []
 
     for keyword, weight in BULLISH_KEYWORDS.items():
         if keyword_matches(text, keyword):
-            score += weight
+            raw_score += weight
             reasons.append(f"bullish:{keyword}")
 
     for keyword, weight in BEARISH_KEYWORDS.items():
         if keyword_matches(text, keyword):
-            score += weight
+            raw_score += weight
             reasons.append(f"bearish:{keyword}")
 
-    return max(-3, min(3, score)), reasons
+    if text_contains_any(text, ("reject", "rejects", "denies", "refuses", "walks away", "fails to agree")):
+        if text_contains_any(text, ("deal", "agreement", "accord", "ceasefire", "truce", "nuclear")):
+            raw_score = abs(raw_score) if raw_score else 2
+            reasons.append("negation_inversion")
+
+    source_tier = news_source_tier(source, link)
+    if raw_score != 0:
+        if source_tier == 1:
+            raw_score *= 1.5
+            reasons.append("tier_1_official")
+        elif source_tier == 2:
+            raw_score *= 1.2
+            reasons.append("tier_2_agency")
+
+        logical = logical_category(category)
+        if logical in {"geopolitical", "macro_fed", "macro_cpi", "macro_nfp"}:
+            raw_score *= 1.3
+            reasons.append(f"category_bonus_{logical}")
+
+    score = round(raw_score)
+    return max(-5, min(5, score)), reasons
+
+
+def score_headline(title: str) -> tuple[int, list[str]]:
+    return score_headline_v2(title)
 
 
 def append_rss_items(
@@ -5689,7 +5829,7 @@ def append_rss_items(
         if not title or is_duplicate_news_title(title, seen_titles) or should_skip_headline(title, source):
             continue
 
-        score, reasons = score_headline(title)
+        score, reasons = score_headline_v2(title, source, category, link)
         published_raw = item.findtext("pubDate", default="")
         try:
             published_at = (
@@ -5781,7 +5921,7 @@ def fetch_news(top_n: int) -> list[NewsItem]:
         append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
         if len(usable) >= result_limit:
-            usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+            usable.sort(key=lambda item: (abs(item.score), -news_source_tier(item.source, item.link), parse_iso_sort_key(item.published_at)), reverse=True)
             save_feed_hash_cache(feed_hash_cache)
             return usable[:result_limit]
 
@@ -5796,7 +5936,7 @@ def fetch_news(top_n: int) -> list[NewsItem]:
                 break
 
     usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
-    usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+    usable.sort(key=lambda item: (abs(item.score), -news_source_tier(item.source, item.link), parse_iso_sort_key(item.published_at)), reverse=True)
     save_feed_hash_cache(feed_hash_cache)
     return usable[:result_limit]
 
@@ -5811,7 +5951,7 @@ def merge_news_items(primary: list[NewsItem], extra: list[NewsItem], limit: int)
             continue
         seen.add(key)
         merged.append(item)
-    merged.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+    merged.sort(key=lambda item: (abs(item.score), -news_source_tier(item.source, item.link), parse_iso_sort_key(item.published_at)), reverse=True)
     return merged[:limit]
 
 
@@ -8220,12 +8360,13 @@ def parse_iso_sort_key(iso_text: str) -> datetime:
         return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
-def headline_sort_key(item: NewsItem) -> tuple[int, int, int, float]:
+def headline_sort_key(item: NewsItem) -> tuple[int, int, int, int, float]:
     priority = CATEGORY_PRIORITY.get(logical_category(item), 99)
+    impact_boost = -abs(item.score)
     newest_first = -parse_iso_sort_key(item.published_at).timestamp()
     breaking_boost = 0 if item.is_breaking else 1
     source_tier = news_source_tier(item.source, item.link)
-    return (priority, breaking_boost, source_tier, newest_first)
+    return (priority, impact_boost, breaking_boost, source_tier, newest_first)
 
 
 def text_contains_any(text: str, patterns: tuple[str, ...]) -> bool:

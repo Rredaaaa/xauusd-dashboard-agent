@@ -112,6 +112,15 @@ Hotfix Phase 4.5 categories news:
 - WGC va vers `physical_demand`;
 - les filtres `build_event_facts`, `pick_story_headlines`, `build_geopolitical_analysis`, `find_story_for_categories` et `explain_headline_gold_impact` doivent utiliser ces categories logiques.
 
+Hotfix Phase 4.5 scoring news:
+
+- `score_headline_v2(...)` remplace le scoring simple lors de la collecte RSS;
+- le scoring combine mots-cles et contexte: source tier, categorie logique, bruit protocolaire, inversion de deal rejete;
+- les news Iran/Hormuz/oil, Fed/taux, DXY, risk-on/risk-off et flux officiels sont mieux scorees;
+- les titres RT/protocole/ceremonie/emoji-only ou officiels non market-moving sont exclus avant NewsFacts;
+- le tri privilegie l'impact puis la fiabilite source et la fraicheur;
+- objectif avant Phase 5: au moins 30% de headlines exploitables scorees si le flux contient assez de titres market-moving, zero bruit protocolaire dans les NewsFacts.
+
 ## Orchestrateur v3 et poids dynamiques
 
 Depuis la Phase 29, l'Orchestrateur v3 combine les composants suivants avec des poids contextuels:

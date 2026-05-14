@@ -81,6 +81,7 @@ from xauusd_agent import (
     merge_news_items,
     resample_candles,
     score_headline,
+    score_headline_v2,
     set_agent_enabled,
     should_skip_headline,
     update_orchestrator_agent,
@@ -102,6 +103,81 @@ class HeadlineScoringTests(unittest.TestCase):
         score, reasons = score_headline("Brent crude backwardation points to physical market tightness")
         self.assertEqual(score, 0)
         self.assertEqual(reasons, [])
+
+    def test_scoring_v2_scores_iran_nuclear_headline(self) -> None:
+        score, reasons = score_headline_v2(
+            "Both countries agreed Iran can never have nuclear weapon",
+            "Nitter White House",
+            "critical_white_house_nitter",
+        )
+        self.assertGreater(score, 0)
+        self.assertIn("bullish:nuclear weapon", reasons)
+        self.assertIn("tier_1_official", reasons)
+
+    def test_scoring_v2_scores_hormuz_and_reuters_headline(self) -> None:
+        score, reasons = score_headline_v2(
+            "New attacks on ships near Hormuz as Trump discusses Iran with Xi",
+            "Reuters",
+            "fast_reuters",
+        )
+        self.assertGreater(score, 0)
+        self.assertIn("tier_2_agency", reasons)
+
+    def test_scoring_v2_filters_protocol_noise(self) -> None:
+        score, reasons = score_headline_v2(
+            "R to @WhiteHouse: 🇺🇸🇨🇳",
+            "Nitter White House",
+            "critical_white_house_nitter",
+        )
+        self.assertEqual(score, 0)
+        self.assertEqual(reasons, ["noise_filter"])
+        self.assertTrue(should_skip_headline("History in motion 🇺🇸🇨🇳", "Nitter White House"))
+
+    def test_scoring_v2_inverts_failed_deal(self) -> None:
+        score, reasons = score_headline_v2(
+            "Iran rejects nuclear deal proposal",
+            "Reuters",
+            "fast_reuters",
+        )
+        self.assertGreater(score, 0)
+        self.assertIn("negation_inversion", reasons)
+
+    def test_scoring_v2_source_tier_bonus(self) -> None:
+        score_t1, _ = score_headline_v2(
+            "Federal Reserve announces rate cut",
+            "Federal Reserve",
+            "official_fed_press_all",
+            "https://www.federalreserve.gov/newsevents/pressreleases/test.htm",
+        )
+        score_t4, _ = score_headline_v2(
+            "Federal Reserve announces rate cut",
+            "Unknown Blog",
+            "macro_fed",
+            "https://example.com/test",
+        )
+        self.assertGreater(score_t1, score_t4)
+
+    def test_scoring_v2_scores_irans_ships_claim(self) -> None:
+        score, reasons = score_headline_v2(
+            "Iran had 159 ships in their Navy and every ship is now resting at the bottom of the sea",
+            "Truth Social",
+            "political_trump_truth",
+        )
+        self.assertGreater(score, 0)
+        self.assertTrue(any(reason.startswith("bullish:") for reason in reasons))
+
+    def test_scoring_v2_scores_risk_on_market_wrap(self) -> None:
+        score, reasons = score_headline_v2(
+            "S&P 500 Tops 7,500 as AI Fuels Record-Breaking Run: Markets Wrap",
+            "Bloomberg",
+            "fast_bloomberg_markets",
+        )
+        self.assertLess(score, 0)
+        self.assertTrue(any(reason.startswith("bearish:") for reason in reasons))
+
+    def test_scoring_v2_filters_official_non_market_noise(self) -> None:
+        self.assertTrue(should_skip_headline("Nominations Sent to the Senate", "White House"))
+        self.assertTrue(should_skip_headline("President Trump Honors America’s Moms with New Support for Families", "White House"))
 
     def test_phase3_news_flow_rejects_weak_forecast_noise(self) -> None:
         self.assertTrue(should_skip_headline("Gold price prediction for next week", "MSN"))

@@ -89,6 +89,31 @@ Validation locale apres hotfix:
 - `EventFactsAgent`: `CAUTION`, score 87/100, confiance 87/100;
 - `geopolitical_analysis.event_watch`: 5 elements.
 
+## Hotfix scoring keywords Phase 4.5
+
+Le rapport `fourniwell_v4_bug_keywords_scoring.md` a identifie que le pipeline news etait debloque mais que le scoring restait calibre pour l'ancien flux Google News. Les nouvelles sources directes produisaient donc trop de `score=0`, ce qui laissait le bruit protocolaire passer avant les vraies news.
+
+Correction livree:
+
+- extension des mots-cles geopolitique, Iran/Hormuz/oil, Fed, taux, DXY, risk-on/risk-off;
+- ajout de `score_headline_v2(title, source, category, link)`;
+- bonus source tier: source officielle Tier 1 et agence Tier 2;
+- bonus categorie logique pour `geopolitical`, `macro_fed`, `macro_cpi`, `macro_nfp`;
+- filtre bruit dans `should_skip_headline`: RT/protocole, emoji-only, ceremonies, nominations, contenus officiels non market-moving;
+- detection d'inversion quand une headline rejette/denie un deal ou accord;
+- tri des headlines par impact avant fraicheur dans les listes exploitables;
+- `headline_sort_key` integre maintenant l'impact avant breaking/source/date.
+
+Validation locale apres hotfix scoring:
+
+- `python3 -m py_compile xauusd_agent.py news_facts.py`: OK;
+- `python3 -m unittest discover tests`: 134 tests OK;
+- regeneration dashboard/payload: OK;
+- payload de validation: 15 headlines apres filtrage, 6 headlines scorees, 6 NewsFacts;
+- 4 NewsFacts contiennent des mots-cles critiques (`Iran`, `nuclear`, `Hormuz`, `oil`, `ships`, `clash`);
+- bruit protocolaire dans les NewsFacts: 0;
+- `EventFactsAgent`: `BUY`, score 91/100, confiance 91/100.
+
 ## Regimes de marche
 
 Regimes geres:

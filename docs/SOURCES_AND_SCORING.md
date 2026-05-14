@@ -10,6 +10,7 @@ Les sources sont classees par tiers:
 - Tier 2: donnees financieres fiables ou media majeur.
 - Tier 3: source specialisee a confirmer.
 - Tier 4: agregateur, headline ou source faible.
+- Tier 5: discovery/fallback faible, jamais suffisant seul pour scorer.
 
 Une source absente, stale ou faible degrade la `Data Quality`, mais tout warning ne doit pas forcer `WAIT`. Depuis la mise a jour scoring du 07/05/2026, le moteur separe:
 
@@ -36,10 +37,13 @@ TradingView sert a afficher une vraie charte live dans le dashboard principal. L
 | --- | --- | --- |
 | FRED DGS10 | 10Y nominal US officiel | MacroAgent, RiskManagerAgent |
 | FRED DGS2 | 2Y nominal US officiel | MacroAgent |
+| FRED DGS3MO | 3M nominal US officiel | MacroAgent |
+| FRED DGS30 | 30Y nominal US officiel | MacroAgent |
 | FRED T10YIE | Breakeven inflation 10Y | MacroAgent |
 | FRED DFII10 | 10Y reel officiel | MacroAgent, RiskManagerAgent |
 | Federal Reserve calendar/RSS | FOMC, speeches, monetary policy | MacroAgent |
 | BEA release schedule | Macro releases US | MacroAgent |
+| ECB/BOE/BOJ calendars and feeds | Reunions et messages banques centrales non-US | MacroAgent |
 | CME FedWatch page | Reference officielle externe | MacroAgent |
 
 FRED est prioritaire pour les taux. Yahoo `^TNX` reste un controle de marche.
@@ -53,6 +57,7 @@ FRED est prioritaire pour les taux. Yahoo `^TNX` reste un controle de marche.
 | BlackRock iShares IAU | Donnees IAU | FlowPositioningAgent |
 
 Les flux peuvent confirmer ou contredire le signal. Exemple: COT bullish mais ETF en sorties = contradiction.
+Depuis la Phase 4.5, le COT suit aussi `Producers/Merchants` et les percentiles Managed Money / Producers sur 1 an et 5 ans. Ces extremes sont traites comme signaux contrarians de prudence.
 
 ## Sources cross-asset
 
@@ -70,9 +75,10 @@ Le moteur regarde les relations attendues avec gold:
 
 | Source | Usage | Agents |
 | --- | --- | --- |
-| Official news feeds | White House, Fed, BLS, Treasury, WGC | SentimentNewsAgent, EventFactsAgent, TrumpPoliticalStatementsAgent |
-| Fast news feeds | AP, CNBC, Reuters/Bloomberg via recherche ciblee | SentimentNewsAgent, EventFactsAgent |
-| Google News RSS cible | Discovery secondaire, filtre strict | SentimentNewsAgent, EventFactsAgent |
+| Official news feeds | White House, Fed, BLS, Treasury, BEA, CFTC, ECB, BOE, BOJ, WGC | SentimentNewsAgent, EventFactsAgent, TrumpPoliticalStatementsAgent |
+| Fast news feeds | AP, CNBC, Reuters direct, Bloomberg direct | SentimentNewsAgent, EventFactsAgent |
+| Critical fast feeds | Truth Social, Nitter Trump, Nitter White House, White House, Fed, BEA, Reuters, Bloomberg, AP | SentimentNewsAgent, EventFactsAgent, TrumpPoliticalStatementsAgent |
+| Google News RSS cible | Discovery secondaire Tier 5, filtre strict | SentimentNewsAgent, EventFactsAgent |
 | White House feed | Declarations officielles | TrumpPoliticalStatementsAgent |
 
 Les headlines seules ne suffisent pas. Les agents cherchent:
@@ -86,6 +92,14 @@ Les headlines seules ne suffisent pas. Les agents cherchent:
 - niveau de confirmation.
 
 Depuis la Phase 3 v4, le flux news rejette en amont les sources faibles et les titres de faible valeur: forecasts, predictions, outlook, next week, next month, analysis today, pure technical analysis et opinions sans fait nouveau. Les sources Tier 4/5 ne sont plus utilisees pour scorer le News Flow. Le tri visible se fait par heure reelle de publication, puis impact et tier source.
+
+Depuis la Phase 4.5:
+
+- chaque `NewsItem` peut porter `feed_detected_at`, `feed_processed_at`, `source_latency_seconds`, `processing_latency_seconds`, `feed_hash` et `is_breaking`;
+- les erreurs source sont ecrites dans `reports/source_errors.jsonl`;
+- `reports/feed_hash_cache.json` sert a detecter les nouveaux titres;
+- si les feeds Trump/White House tombent tous, l'Inspector doit montrer le mode degrade;
+- aucun headline faible ne doit remplacer une source officielle disponible.
 
 ## Orchestrateur v3 et poids dynamiques
 
@@ -103,10 +117,13 @@ Les poids changent selon:
 
 - regime normal: technique et macro augmentent;
 - regime geopolitique ou Hormuz/Oil Shock: geopolitique/oil, regime et flows augmentent;
+- regimes `Risk-On / Carry Trade` et `Stagflation Fear`: le poids regime/macro est ajuste pour eviter une lecture geopolitique simpliste;
 - data quality degradee: data quality augmente comme garde-fou, sources faibles reduites;
 - structure technique confirmee: poids technique augmente;
 - structure technique faible ou contradictoire: poids technique baisse;
 - mode event actif: execution plus prudente, sans `WAIT` automatique si les preuves restent exploitables.
+
+Phase 4.5 ajoute la persistance/probabilite des regimes: un regime confirme sur trois snapshots consecutifs peut etre traite comme plus robuste qu'un regime ponctuel.
 
 Decision v3.0:
 - `ElliottWaveAgent` est supprime du code actif. Il ne doit plus etre utilise comme composant de scoring, preuve, contradiction ou justification utilisateur.

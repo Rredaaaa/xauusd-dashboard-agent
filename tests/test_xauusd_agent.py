@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from xauusd_agent import (
     AnalysisResult,
@@ -34,6 +35,9 @@ from xauusd_agent import (
     TradeRecommendation,
     UserSettings,
     WeekendGoldSnapshot,
+    CRITICAL_FAST_FEEDS,
+    FAST_NEWS_RSS_FEEDS,
+    OFFICIAL_NEWS_RSS_FEEDS,
     append_audit_log_snapshot,
     apply_user_settings_to_agents,
     build_market_regime_analysis,
@@ -49,6 +53,7 @@ from xauusd_agent import (
     build_cftc_positioning_from_rows,
     build_political_statements,
     build_chart_store,
+    detect_recent_swing_levels,
     parse_bea_release_schedule,
     parse_fed_rss_events,
     parse_fomc_calendar_events,
@@ -2419,6 +2424,89 @@ class Phase31To34CompletionTests(unittest.TestCase):
             self.assertIn("signal_report.md", labels)
             self.assertIn("replay_report.json", labels)
             self.assertTrue((Path(tmp) / "index.html").exists())
+
+    def test_phase45_news_sources_include_fast_and_official_feeds(self) -> None:
+        official_ids = {source_id for source_id, _ in OFFICIAL_NEWS_RSS_FEEDS}
+        fast_ids = {source_id for source_id, _ in FAST_NEWS_RSS_FEEDS}
+        self.assertIn("official_ecb", official_ids)
+        self.assertIn("official_boj", official_ids)
+        self.assertIn("official_cftc_press", official_ids)
+        self.assertIn("fast_reuters_top", fast_ids)
+        self.assertIn("fast_bloomberg_markets", fast_ids)
+        self.assertIn("trump_truth", CRITICAL_FAST_FEEDS)
+
+    def test_phase45_event_mode_pre_event_macro_is_active(self) -> None:
+        calendar = MacroCatalystCalendar(
+            generated_at="2026-05-14T10:00:00+00:00",
+            source_note="test",
+            fedwatch_status="linked_only",
+            fedwatch_note="test",
+            fedwatch_source_url="https://example.com",
+            catalysts=[],
+            high_impact_24h=3,
+            density_status="high_density",
+            pre_event_active=True,
+            pre_event_summary="Pre-event HIGH actif: FOMC dans 20 min.",
+        )
+        result = build_event_mode_analysis(
+            self.snapshot("XAU/USD", 2400.0),
+            [],
+            None,
+            None,
+            macro_catalysts=calendar,
+        )
+        self.assertTrue(result.active)
+        self.assertEqual(result.stop_multiplier, 1.5)
+        self.assertTrue(any("Pre-event" in reason for reason in result.reasons))
+
+    def test_phase45_market_regime_detects_stagflation_fear(self) -> None:
+        gold = self.snapshot("XAU/USD", 2440.0)
+        dxy = self.snapshot("DX-Y.NYB", 101.0)
+        us10y = self.snapshot("^TNX", 4.45)
+        us10y.previous_close = 4.38
+        us10y.change_abs = 0.07
+        with TemporaryDirectory() as tmp, patch("xauusd_agent.REGIME_STATE_PATH", Path(tmp) / "regime_state.json"):
+            regime = build_market_regime_analysis(gold, dxy, us10y, [], wti=self.snapshot("WTI", 82.0))
+        self.assertEqual(regime.name, "Stagflation Fear")
+        self.assertIn("Stagflation Fear", regime.probabilities)
+
+    def test_phase45_cftc_positioning_tracks_producers_merchants_percentiles(self) -> None:
+        base = {
+            "Market_and_Exchange_Names": "GOLD - COMMODITY EXCHANGE INC.",
+            "CFTC_Contract_Market_Code": "088691",
+            "Open_Interest_All": "100000",
+            "M_Money_Positions_Long_All": "20000",
+            "M_Money_Positions_Short_All": "10000",
+            "M_Money_Positions_Spread_All": "1000",
+            "Prod_Merc_Positions_Long_All": "8000",
+            "Prod_Merc_Positions_Short_All": "30000",
+            "Swap_Positions_Long_All": "10000",
+            "Swap__Positions_Short_All": "12000",
+            "Swap__Positions_Spread_All": "1000",
+            "NonRept_Positions_Long_All": "5000",
+            "NonRept_Positions_Short_All": "4000",
+        }
+        rows = []
+        for index, producer_short in enumerate([22000, 26000, 30000], start=1):
+            row = dict(base)
+            row["Report_Date_as_YYYY-MM-DD"] = f"2026-04-{index:02d}"
+            row["Prod_Merc_Positions_Short_All"] = str(producer_short)
+            row["M_Money_Positions_Long_All"] = str(18000 + index * 1000)
+            rows.append(row)
+        positioning = build_cftc_positioning_from_rows(rows, "https://www.cftc.gov/test")
+        self.assertIsNotNone(positioning)
+        assert positioning is not None
+        self.assertLessEqual(positioning.producer_net_percentile_1y, 50.0)
+        self.assertIn("Producers/Merchants", positioning.summary)
+
+    def test_phase45_price_action_detects_m15_swing(self) -> None:
+        points = [
+            PricePoint(timestamp=1_700_000_000 + index * 300, close=2400 + index, high=2401 + index, low=2399 + index)
+            for index in range(20)
+        ]
+        swing = detect_recent_swing_levels(points)
+        self.assertEqual(swing["status"], "ok")
+        self.assertIn("swing high", swing["summary"])
 
 
 if __name__ == "__main__":

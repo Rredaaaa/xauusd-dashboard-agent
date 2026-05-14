@@ -1,7 +1,7 @@
 # Fourniwell Signals v4.0 - Checklist d'application du rapport d'inspection
 
-Version: 1.0  
-Date: 2026-05-13  
+Version: 1.0
+Date: 2026-05-13
 Source: `aureum_flux_v3_inspection_report_2026-05-12.md`
 
 Objectif: transformer toutes les recommandations du rapport en taches suivables.
@@ -34,9 +34,9 @@ Statuts autorises:
 - [x] Ajouter `circuit_breaker_after_n_losses`.
 - [x] Ajouter `circuit_breaker_window_hours`.
 - [x] Ajouter `circuit_breaker_pause_hours`.
-- [ ] Ajouter `min_data_quality = 60`.
-- [ ] Ajouter `no_trade_window_minutes_before_high_macro = 30`.
-- [ ] Ajouter `no_trade_window_minutes_after_high_macro = 15`.
+- [x] Ajouter `min_data_quality = 60`.
+- [x] Ajouter `no_trade_window_minutes_before_high_macro = 30`.
+- [x] Ajouter `no_trade_window_minutes_after_high_macro = 15`.
 - [ ] Garder `live_refresh_seconds = 10`.
 - [ ] Garder `full_refresh_seconds = 60`.
 
@@ -44,7 +44,7 @@ Statuts autorises:
 
 - [x] Renommer ou remplacer PriceAgent par PriceActionAgent.
 - [x] Calculer pivots Camarilla H1/H4/D1.
-- [ ] Detecter swing high/low M15.
+- [x] Detecter swing high/low M15.
 - [x] Calculer position dans range journaliere.
 - [x] Calculer distance au niveau psychologique le plus proche.
 - [x] Classer etat prix: breakout / pullback / range / consolidation / reversal.
@@ -58,7 +58,7 @@ Statuts autorises:
 - [x] Plafonner confidence a `85/100`.
 - [ ] Calibrer poids multi-timeframe sur backtest.
 - [x] Exiger trigger reel avant conversion WATCH -> TRADE.
-- [ ] Verifier cloture M15 au-dessus/sous trigger.
+- [x] Verifier cloture M15 au-dessus/sous trigger.
 - [ ] Adapter SL/TP selon structure: trend, range, breakout, reversal.
 - [x] Baisser confidence en cas de contradiction intra-timeframe.
 - [x] Documenter structure technique dans payload.
@@ -71,8 +71,8 @@ Statuts autorises:
 - [ ] Ajouter macro surprise: reel - consensus.
 - [x] Ajouter veto HIGH-impact dans les 30 min.
 - [ ] Exposer trajectoire sur 3 dernieres publications.
-- [ ] Ajouter DGS3M.
-- [ ] Ajouter 30Y.
+- [x] Ajouter DGS3M.
+- [x] Ajouter 30Y.
 - [ ] Conserver architecture actuelle, car agent globalement fonctionnel.
 
 ## 5. GeopoliticalOilShockAgent
@@ -83,12 +83,12 @@ Statuts autorises:
 - [x] Mapper `De-escalation / Oil Relief` vers SELL.
 - [x] Mapper `Dollar Liquidity Squeeze` vers SELL.
 - [x] Mapper `Normal Macro` vers NEUTRAL.
-- [ ] Mesurer tendance regime: escalade / accalmie / stable.
-- [ ] Documenter score brut par composant.
+- [x] Mesurer tendance regime: escalade / accalmie / stable.
+- [x] Documenter score brut par composant.
 - [x] Rendre confidence dynamique selon WTI/Brent/headlines.
 - [ ] Ajouter cooldown de changement de regime sur 4h.
 - [x] Elever seuil Hormuz a 70.
-- [ ] Ajouter regime Risk-On / Carry Trade.
+- [x] Ajouter regime Risk-On / Carry Trade.
 
 ## 6. SentimentNewsAgent
 
@@ -116,13 +116,13 @@ Statuts autorises:
 
 ## 8. FlowPositioningAgent
 
-- [ ] Ajouter percentile Managed Money 1 an.
-- [ ] Ajouter percentile Managed Money 5 ans.
-- [ ] Ajouter logique contrarienne si extremes.
+- [x] Ajouter percentile Managed Money 1 an.
+- [x] Ajouter percentile Managed Money 5 ans.
+- [x] Ajouter logique contrarienne si extremes.
 - [x] Detecter divergence COT vs ETF.
 - [ ] Agreger GLD + IAU + SLV.
 - [ ] Ponderer CFTC 0.6 et ETF 0.4.
-- [ ] Ajouter Producers/Merchants.
+- [x] Ajouter Producers/Merchants.
 - [ ] Garder architecture source tier 1.
 
 ## 9. EventFactsAgent
@@ -146,7 +146,7 @@ Statuts autorises:
 - [x] Tariffs/trade war -> SELL.
 - [x] Ponderer par recence.
 - [ ] Mesurer convergence de statements sur 24h.
-- [ ] Distinguer action signee vs menace verbale.
+- [x] Distinguer action signee vs menace verbale.
 - [ ] Garder validation source et evidence.
 
 ## 11. RiskManagerAgent
@@ -169,22 +169,22 @@ Statuts autorises:
 
 - [x] Supprimer OrchestratorAgent legacy.
 - [x] Conserver uniquement OrchestratorDecision v3.
-- [ ] Nettoyer mentions "ancien moteur".
-- [ ] Corriger duplication `RISK [high] Gate:`.
+- [x] Nettoyer mentions "ancien moteur".
+- [x] Corriger duplication `RISK [high] Gate:`.
 - [x] Mettre a jour tests qui reference OrchestratorAgent.
 - [x] Verifier que les contradictions ne comptent plus cet agent legacy.
 
 ## 13. TradeQualityGate
 
-- [ ] `min_rr` minimum a 1.5.
-- [ ] Validating agents minimum a 3.
-- [ ] Supprimer bypass aggressive majority.
-- [ ] Hard block regime fort si score >= 70.
-- [ ] Hard block direction contraire au regime.
-- [ ] Hard block catalyseur high impact dans 30 min.
-- [ ] Hard block apres >=3 losses dans 24h.
-- [ ] Hard block data quality < 60.
-- [ ] Ecrire raisons de blocage dans payload.
+- [x] `min_rr` minimum a 1.5.
+- [x] Validating agents minimum a 3.
+- [x] Supprimer bypass aggressive majority.
+- [x] Hard block regime fort si score >= 70.
+- [x] Hard block direction contraire au regime.
+- [x] Hard block catalyseur high impact dans 30 min.
+- [x] Hard block apres >=3 losses dans 24h.
+- [x] Hard block data quality < 60.
+- [x] Ecrire raisons de blocage dans payload.
 
 ## 14. TradeLevels
 
@@ -217,8 +217,8 @@ Statuts autorises:
 - [x] Ajouter feed Fed monetary.
 - [x] Ajouter feed BLS news release.
 - [x] Ajouter feed Treasury press releases.
-- [ ] Ajouter feed BEA.
-- [ ] Ajouter feed CFTC press releases.
+- [x] Ajouter feed BEA.
+- [x] Ajouter feed CFTC press releases.
 - [x] Ajouter feed WGC.
 - [x] Ajouter AP business si accessible.
 - [x] Ajouter AP top news si accessible.
@@ -230,7 +230,7 @@ Statuts autorises:
 - [x] Rejeter forecasts/predictions/outlook.
 - [x] Rejeter vieux articles.
 - [x] Rejeter analysis today sans fait nouveau.
-- [ ] Detecter breaking par hash de feed.
+- [x] Detecter breaking par hash de feed.
 - [x] Trier par heure reelle de publication.
 - [x] Masquer news neutres par defaut.
 - [x] Afficher "aucune news exploitable" si rien de fiable.
@@ -272,41 +272,41 @@ Statuts autorises:
 
 ## 20. Event Mode
 
-- [ ] Adapter TP en mode event.
-- [ ] TP1 event = 1.65 ATR.
-- [ ] TP2 event = 3.15 ATR.
-- [ ] Ajouter pre-event mode 30 min avant high impact.
-- [ ] Bloquer nouveaux trades 15 min apres high impact.
+- [x] Adapter TP en mode event.
+- [x] TP1 event = 1.65 ATR.
+- [x] TP2 event = 3.15 ATR.
+- [x] Ajouter pre-event mode 30 min avant high impact.
+- [x] Bloquer nouveaux trades 15 min apres high impact.
 - [ ] Stocker historique event modes.
 
 ## 21. Data Quality / SourceRegistry
 
-- [ ] Ponderer par criticite.
-- [ ] Gold spot, FRED DGS10, CFTC poids 3x.
-- [ ] ETF/news poids 1x.
-- [ ] Reclasser google_news_rss en tier 5.
-- [ ] Reclasser IG Weekend Gold en tier 3.
-- [ ] Ajouter delai depuis dernier refresh par source.
-- [ ] Garder missing/stale/weak/preflight.
+- [x] Ponderer par criticite.
+- [x] Gold spot, FRED DGS10, CFTC poids 3x.
+- [x] ETF/news poids 1x.
+- [x] Reclasser google_news_rss en tier 5.
+- [x] Reclasser IG Weekend Gold en tier 3.
+- [x] Ajouter delai depuis dernier refresh par source.
+- [x] Garder missing/stale/weak/preflight.
 
 ## 22. Market Regime Analysis
 
-- [ ] Revoir seuils de regimes.
-- [ ] Ajouter persistance de regime.
-- [ ] Ajouter changement escalade/accalmie.
-- [ ] Ajouter regime Risk-On / Carry Trade.
+- [x] Revoir seuils de regimes.
+- [x] Ajouter persistance de regime.
+- [x] Ajouter changement escalade/accalmie.
+- [x] Ajouter regime Risk-On / Carry Trade.
 - [ ] Ajouter regime correlation breakdown si necessaire.
-- [ ] Exposer composants de score.
+- [x] Exposer composants de score.
 
 ## 23. Macro Catalysts
 
-- [ ] Filtrer par impact HIGH/MEDIUM/LOW.
-- [ ] Ajouter ECB.
-- [ ] Ajouter BOJ.
+- [x] Filtrer par impact HIGH/MEDIUM/LOW.
+- [x] Ajouter ECB.
+- [x] Ajouter BOJ.
 - [ ] Ajouter consensus quand disponible.
-- [ ] Calculer macro density 24h.
-- [ ] Alerte 1h avant event HIGH.
-- [ ] No-trade window 30 min avant / 15 min apres.
+- [x] Calculer macro density 24h.
+- [x] Alerte 1h avant event HIGH.
+- [x] No-trade window 30 min avant / 15 min apres.
 
 ## 24. News Reaction Engine
 

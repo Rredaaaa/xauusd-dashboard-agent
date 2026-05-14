@@ -49,12 +49,33 @@ INVESTING_XAUUSD_URL = "https://www.investing.com/currencies/xau-usd"
 INVESTING_XAUUSD_HISTORICAL_URL = "https://www.investing.com/currencies/xau-usd-historical-data"
 IG_WEEKEND_GOLD_URL = "https://www.ig.com/en/indices/markets-indices/weekend-gold"
 WHITE_HOUSE_NEWS_FEED_URL = "https://www.whitehouse.gov/news/feed/"
+TRUMP_TRUTH_SOCIAL_FEED_URL = "https://trumpstruth.org/feed"
+TRUMP_NITTER_FEEDS = [
+    "https://nitter.net/realDonaldTrump/rss",
+    "https://nitter.privacydev.net/realDonaldTrump/rss",
+    "https://nitter.poast.org/realDonaldTrump/rss",
+]
+WHITE_HOUSE_NITTER_FEEDS = [
+    "https://nitter.net/WhiteHouse/rss",
+    "https://nitter.privacydev.net/WhiteHouse/rss",
+    "https://nitter.poast.org/WhiteHouse/rss",
+]
 AP_BUSINESS_FEED_URL = "https://apnews.com/hub/business?output=rss"
 AP_TOP_NEWS_FEED_URL = "https://apnews.com/hub/ap-top-news?output=rss"
 CNBC_MARKETS_FEED_URL = "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+REUTERS_TOP_NEWS_FEED_URL = "https://feeds.reuters.com/reuters/topNews"
+REUTERS_BUSINESS_FEED_URL = "https://feeds.reuters.com/reuters/businessNews"
+REUTERS_MARKETS_FEED_URL = "https://feeds.reuters.com/reuters/marketsNews"
+BLOOMBERG_MARKETS_FEED_URL = "https://feeds.bloomberg.com/markets/news.rss"
 BLS_NEWS_RELEASE_FEED_URL = "https://www.bls.gov/feed/news_release/bls_latest.rss"
+BEA_RSS_URL = "https://www.bea.gov/rss.xml"
 TREASURY_PRESS_FEED_URL = "https://home.treasury.gov/news/press-releases/rss"
+CFTC_PRESS_FEED_URL = "https://www.cftc.gov/PressRoom/PressReleases/RSS"
 WGC_NEWS_FEED_URL = "https://www.gold.org/rss.xml"
+FED_PRESS_ALL_RSS_URL = "https://www.federalreserve.gov/feeds/press_all.xml"
+ECB_PRESS_FEED_URL = "https://www.ecb.europa.eu/rss/press.html"
+BOE_NEWS_FEED_URL = "https://www.bankofengland.co.uk/news/news-publications-feed"
+BOJ_NEWS_FEED_URL = "https://www.boj.or.jp/en/whatsnew/news_e.xml"
 
 NEWS_QUERIES = [
     ("gold", '"gold news today" OR XAUUSD when:2d'),
@@ -80,22 +101,53 @@ POLITICAL_STATEMENT_QUERIES = [
 
 POLITICAL_RSS_FEEDS = [
     ("political_white_house", WHITE_HOUSE_NEWS_FEED_URL),
+    ("political_trump_truth", TRUMP_TRUTH_SOCIAL_FEED_URL),
+    ("political_trump_nitter", TRUMP_NITTER_FEEDS[0]),
+    ("political_white_house_nitter", WHITE_HOUSE_NITTER_FEEDS[0]),
 ]
 
 OFFICIAL_NEWS_RSS_FEEDS = [
     ("official_white_house", WHITE_HOUSE_NEWS_FEED_URL),
     ("official_fed_speeches", "https://www.federalreserve.gov/feeds/speeches.xml"),
     ("official_fed_monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml"),
+    ("official_fed_press_all", FED_PRESS_ALL_RSS_URL),
     ("official_bls", BLS_NEWS_RELEASE_FEED_URL),
+    ("official_bea", BEA_RSS_URL),
     ("official_treasury", TREASURY_PRESS_FEED_URL),
+    ("official_cftc_press", CFTC_PRESS_FEED_URL),
     ("official_wgc", WGC_NEWS_FEED_URL),
+    ("official_ecb", ECB_PRESS_FEED_URL),
+    ("official_boe", BOE_NEWS_FEED_URL),
+    ("official_boj", BOJ_NEWS_FEED_URL),
 ]
 
 FAST_NEWS_RSS_FEEDS = [
     ("fast_ap_business", AP_BUSINESS_FEED_URL),
     ("fast_ap_top", AP_TOP_NEWS_FEED_URL),
     ("fast_cnbc_markets", CNBC_MARKETS_FEED_URL),
+    ("fast_reuters_top", REUTERS_TOP_NEWS_FEED_URL),
+    ("fast_reuters_business", REUTERS_BUSINESS_FEED_URL),
+    ("fast_reuters_markets", REUTERS_MARKETS_FEED_URL),
+    ("fast_bloomberg_markets", BLOOMBERG_MARKETS_FEED_URL),
 ]
+
+CRITICAL_FAST_FEEDS = {
+    "trump_truth": TRUMP_TRUTH_SOCIAL_FEED_URL,
+    "trump_nitter": TRUMP_NITTER_FEEDS[0],
+    "white_house_nitter": WHITE_HOUSE_NITTER_FEEDS[0],
+    "white_house": WHITE_HOUSE_NEWS_FEED_URL,
+    "fed_press_all": FED_PRESS_ALL_RSS_URL,
+    "bls": BLS_NEWS_RELEASE_FEED_URL,
+    "bea": BEA_RSS_URL,
+    "treasury": TREASURY_PRESS_FEED_URL,
+    "ecb": ECB_PRESS_FEED_URL,
+    "boj": BOJ_NEWS_FEED_URL,
+    "reuters_top": REUTERS_TOP_NEWS_FEED_URL,
+    "reuters_business": REUTERS_BUSINESS_FEED_URL,
+    "bloomberg_markets": BLOOMBERG_MARKETS_FEED_URL,
+    "ap_business": AP_BUSINESS_FEED_URL,
+    "ap_top": AP_TOP_NEWS_FEED_URL,
+}
 
 FAST_NEWS_SEARCH_QUERIES = [
     ("fast_reuters", '(gold OR XAUUSD OR Fed OR Iran OR oil OR dollar) site:reuters.com when:1d'),
@@ -132,9 +184,17 @@ CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-ap
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
 TRADE_GATE_AUDIT_PATH = Path("reports") / "trade_gate_audit.jsonl"
 AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
+SOURCE_ERRORS_PATH = Path("reports") / "source_errors.jsonl"
+FEED_HASH_CACHE_PATH = Path("reports") / "feed_hash_cache.json"
 CHART_STORE_CACHE_PATH = Path("reports") / "chart_store_cache.json"
+REGIME_STATE_PATH = Path("reports") / "regime_state.json"
 SETTINGS_PATH = Path("config") / "aureum_settings.json"
 REPORTS_V3_DIR = Path("reports") / "v3"
+AUDIT_ROTATION_MAX_BYTES = 2_000_000
+AUDIT_ARCHIVE_MAX_FILES = 12
+ECB_MEETING_CALENDAR_URL = "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"
+BOE_MEETING_CALENDAR_URL = "https://www.bankofengland.co.uk/monetary-policy-summary-and-minutes/monetary-policy-summary-and-minutes"
+BOJ_MEETING_CALENDAR_URL = "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
 CFTC_DISAGG_MIN_FIELDS = [
     "Market_and_Exchange_Names",
     "As_of_Date_In_Form_YYMMDD",
@@ -163,6 +223,8 @@ CFTC_DISAGG_MIN_FIELDS = [
 FRED_SERIES_LABELS = {
     "DGS10": "US 10Y Treasury Yield",
     "DGS2": "US 2Y Treasury Yield",
+    "DGS3MO": "US 3M Treasury Yield",
+    "DGS30": "US 30Y Treasury Yield",
     "T10YIE": "US 10Y Breakeven Inflation",
     "DFII10": "US 10Y Real Yield",
 }
@@ -406,6 +468,12 @@ class NewsItem:
     category: str
     score: int
     score_reasons: list[str]
+    feed_detected_at: str = ""
+    feed_processed_at: str = ""
+    source_latency_seconds: float | None = None
+    processing_latency_seconds: float | None = None
+    feed_hash: str = ""
+    is_breaking: bool = False
 
 
 @dataclass
@@ -514,12 +582,18 @@ class MarketRegimeAnalysis:
     gold_impact: str
     summary: str
     reasons: list[str]
+    trend: str = "stable"
+    confirmed: bool = False
+    probabilities: dict[str, int] = field(default_factory=dict)
+    component_scores: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
 class OfficialMacroRates:
     dgs10: SymbolSnapshot | None = None
     dgs2: SymbolSnapshot | None = None
+    dgs3m: SymbolSnapshot | None = None
+    dgs30: SymbolSnapshot | None = None
     t10yie: SymbolSnapshot | None = None
     dfii10: SymbolSnapshot | None = None
     yahoo_tnx_gap_bps: float | None = None
@@ -555,6 +629,10 @@ class CFTCPositioning:
     score: int
     status: str
     summary: str
+    managed_money_percentile_1y: float = 50.0
+    managed_money_percentile_5y: float = 50.0
+    producer_net_percentile_1y: float = 50.0
+    producer_net_percentile_5y: float = 50.0
 
 
 @dataclass
@@ -617,6 +695,10 @@ class MacroCatalystCalendar:
     fedwatch_note: str
     fedwatch_source_url: str
     catalysts: list[MacroCatalyst] = field(default_factory=list)
+    high_impact_24h: int = 0
+    density_status: str = "normal"
+    pre_event_active: bool = False
+    pre_event_summary: str = ""
 
 
 @dataclass
@@ -1053,12 +1135,12 @@ def load_env_file(path: Path) -> None:
             os.environ[key] = value
 
 
-def http_get_text(url: str) -> str:
+def http_get_text(url: str, timeout: int = 8) -> str:
     request = urllib.request.Request(url, headers=HEADERS)
     last_error: Exception | None = None
     for attempt in range(2):
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read().decode("utf-8", "ignore")
         except urllib.error.HTTPError as exc:
             last_error = exc
@@ -1070,6 +1152,94 @@ def http_get_text(url: str) -> str:
                 raise
         time.sleep(1.0 * (attempt + 1))
     raise RuntimeError(f"Echec HTTP pour {url}: {last_error}")
+
+
+def append_source_error(
+    source_id: str,
+    url: str,
+    error: Exception | str,
+    criticality: str = "medium",
+    path: Path = SOURCE_ERRORS_PATH,
+) -> None:
+    entry = {
+        "timestamp": iso_now(),
+        "source_id": source_id,
+        "url": url,
+        "error": str(error),
+        "criticality": criticality,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_jsonl_file(path)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
+def load_feed_hash_cache(path: Path = FEED_HASH_CACHE_PATH) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+
+
+def recent_source_error_warnings(path: Path = SOURCE_ERRORS_PATH, limit: int = 80) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()[-limit:]
+    except Exception:
+        return []
+    errors: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            errors.append(item)
+    source_ids = {str(item.get("source_id", "")) for item in errors}
+    warnings: list[str] = []
+    if any("trump" in source_id for source_id in source_ids) and any("white_house" in source_id for source_id in source_ids):
+        warnings.append("Trump/White House feeds degradés: fallback Google News/Reuters requis pour statements politiques.")
+    high_errors = [item for item in errors if item.get("criticality") == "high"]
+    if len(high_errors) >= 3:
+        warnings.append(f"{len(high_errors)} erreurs feed critiques recentes dans source_errors.jsonl.")
+    return warnings[:3]
+
+
+def save_feed_hash_cache(cache: dict[str, str], path: Path = FEED_HASH_CACHE_PATH) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def stable_news_hash(title: str, link: str, published_at: str = "") -> str:
+    base = f"{normalize_title_for_dedupe(title)}|{link.strip()}|{published_at[:16]}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+
+
+def fetch_rss_root(source_id: str, url: str, timeout: int = 8, criticality: str = "medium") -> ET.Element | None:
+    try:
+        return ET.fromstring(http_get_text(url, timeout=timeout).lstrip("\ufeff"))
+    except Exception as exc:
+        append_source_error(source_id, url, exc, criticality=criticality)
+        return None
+
+
+def fetch_nitter_feed_with_fallback(account: str, mirrors: list[str]) -> tuple[str, ET.Element] | None:
+    for mirror_url in mirrors:
+        root = fetch_rss_root(f"nitter_{account}", mirror_url, timeout=4, criticality="high")
+        if root is not None:
+            return mirror_url, root
+    append_source_error(f"nitter_{account}", ",".join(mirrors), "all_nitter_mirrors_down", criticality="high")
+    return None
 
 
 def http_get_json(url: str) -> dict[str, Any]:
@@ -1135,12 +1305,24 @@ LOW_VALUE_HEADLINE_PATTERNS = (
 
 def news_source_identity(source: str, link: str = "") -> str:
     text = f"{source} {link}".lower()
+    if "trumpstruth.org" in text or "truth social" in text:
+        return "Truth Social"
+    if "nitter" in text and "realdonaldtrump" in text:
+        return "Nitter Trump"
+    if "nitter" in text and "whitehouse" in text:
+        return "Nitter White House"
     if "whitehouse.gov" in text:
         return "White House"
     if "federalreserve.gov" in text:
         return "Federal Reserve"
     if "bls.gov" in text:
         return "BLS"
+    if "ecb.europa.eu" in text:
+        return "ECB"
+    if "bankofengland.co.uk" in text:
+        return "Bank of England"
+    if "boj.or.jp" in text:
+        return "Bank of Japan"
     if "home.treasury.gov" in text or "treasury.gov" in text:
         return "US Treasury"
     if "bea.gov" in text:
@@ -1162,7 +1344,7 @@ def news_source_identity(source: str, link: str = "") -> str:
 
 def news_source_tier(source: str, link: str = "") -> int:
     text = f"{source} {link}".lower()
-    if any(token in text for token in ("whitehouse.gov", "federalreserve.gov", "bls.gov", "treasury.gov", "bea.gov", "cftc.gov", "gold.org")):
+    if any(token in text for token in ("whitehouse.gov", "truth social", "trumpstruth.org", "nitter trump", "nitter white house", "federalreserve.gov", "bls.gov", "treasury.gov", "bea.gov", "cftc.gov", "gold.org", "ecb.europa.eu", "bankofengland.co.uk", "boj.or.jp")):
         return 1
     if any(token in text for token in ("reuters", "apnews.com", "associated press", "bloomberg", "wsj", "financial times")):
         return 2
@@ -1253,18 +1435,21 @@ def iso_now() -> str:
 
 SOURCE_REGISTRY: dict[str, SourceRegistryEntry] = {
     "investing_xauusd": SourceRegistryEntry("investing_xauusd", "Investing.com XAU/USD", "price", 2, 30, True, INVESTING_XAUUSD_URL, ["PriceActionAgent", "RiskManagerAgent"]),
-    "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 2, 120, False, IG_WEEKEND_GOLD_URL, ["PriceActionAgent", "RiskManagerAgent"]),
+    "ig_weekend_gold": SourceRegistryEntry("ig_weekend_gold", "IG Weekend Gold", "price", 3, 120, False, IG_WEEKEND_GOLD_URL, ["PriceActionAgent", "RiskManagerAgent"]),
     "fred_dgs10": SourceRegistryEntry("fred_dgs10", "FRED DGS10", "rates", 1, 10080, True, FRED_CSV_URL_TEMPLATE.format(series_id="DGS10"), ["MacroAgent", "RiskManagerAgent"]),
     "fred_dgs2": SourceRegistryEntry("fred_dgs2", "FRED DGS2", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS2"), ["MacroAgent"]),
+    "fred_dgs3m": SourceRegistryEntry("fred_dgs3m", "FRED DGS3MO", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS3MO"), ["MacroAgent"]),
+    "fred_dgs30": SourceRegistryEntry("fred_dgs30", "FRED DGS30", "rates", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="DGS30"), ["MacroAgent"]),
     "fred_t10yie": SourceRegistryEntry("fred_t10yie", "FRED T10YIE", "macro", 1, 10080, False, FRED_CSV_URL_TEMPLATE.format(series_id="T10YIE"), ["MacroAgent"]),
     "fred_dfii10": SourceRegistryEntry("fred_dfii10", "FRED DFII10", "rates", 1, 10080, True, FRED_DFII10_CSV_URL, ["MacroAgent", "RiskManagerAgent"]),
     "cftc_cot_gold": SourceRegistryEntry("cftc_cot_gold", "CFTC COT Gold", "flows", 1, 14400, True, CFTC_DISAGG_CURRENT_URL, ["FlowPositioningAgent", "RiskManagerAgent"]),
     "wgc_etf_flows": SourceRegistryEntry("wgc_etf_flows", "World Gold Council ETF flows", "flows", 1, 14400, True, WGC_ETF_FLOWS_PAGE_URL, ["FlowPositioningAgent", "CorrelationAgent"]),
     "macro_catalysts": SourceRegistryEntry("macro_catalysts", "Fed/BEA Macro Catalysts", "macro", 1, 1440, True, FED_FOMC_CALENDAR_URL, ["MacroAgent", "RiskManagerAgent"]),
-    "google_news_rss": SourceRegistryEntry("google_news_rss", "Google News RSS / fallback feeds", "news", 4, 2880, True, "https://news.google.com/rss", ["SentimentNewsAgent", "EventFactsAgent"]),
+    "google_news_rss": SourceRegistryEntry("google_news_rss", "Google News RSS / fallback feeds", "news", 5, 2880, False, "https://news.google.com/rss", ["SentimentNewsAgent", "EventFactsAgent"]),
     "white_house_feed": SourceRegistryEntry("white_house_feed", "White House News feed", "political_statements", 1, 10080, False, WHITE_HOUSE_NEWS_FEED_URL, ["TrumpPoliticalStatementsAgent"]),
     "news_official_feeds": SourceRegistryEntry("news_official_feeds", "Official news feeds", "news", 1, 1440, False, WHITE_HOUSE_NEWS_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent", "TrumpPoliticalStatementsAgent"]),
-    "news_fast_feeds": SourceRegistryEntry("news_fast_feeds", "AP/CNBC/Reuters/Bloomberg news feeds", "news", 2, 120, False, CNBC_MARKETS_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent"]),
+    "news_fast_feeds": SourceRegistryEntry("news_fast_feeds", "AP/CNBC/Reuters/Bloomberg direct news feeds", "news", 2, 120, False, CNBC_MARKETS_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent"]),
+    "critical_fast_feeds": SourceRegistryEntry("critical_fast_feeds", "Critical fast feeds", "news", 1, 30, False, TRUMP_TRUTH_SOCIAL_FEED_URL, ["SentimentNewsAgent", "EventFactsAgent", "TrumpPoliticalStatementsAgent"]),
     "cross_asset_yahoo": SourceRegistryEntry("cross_asset_yahoo", "Yahoo cross-assets", "technical", 2, 240, True, "https://finance.yahoo.com/", ["CorrelationAgent", "PriceActionAgent"]),
     "oil_context": SourceRegistryEntry("oil_context", "WTI/Brent oil context", "oil", 2, 240, False, "https://finance.yahoo.com/", ["GeopoliticalOilShockAgent", "RiskManagerAgent"]),
     "chart_store_ohlc": SourceRegistryEntry("chart_store_ohlc", "Chart Store OHLC", "chart", 2, 240, False, "https://finance.yahoo.com/quote/GC=F/", ["TechnicalAgent"]),
@@ -1649,6 +1834,22 @@ def append_trade_plan_snapshot(plan: TradePlan, path: Path = TRADE_LEDGER_PATH) 
         handle.write(json.dumps(asdict(plan), ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def rotate_jsonl_file(path: Path, max_bytes: int = AUDIT_ROTATION_MAX_BYTES, max_archives: int = AUDIT_ARCHIVE_MAX_FILES) -> None:
+    if not path.exists() or path.stat().st_size < max_bytes:
+        return
+    archive_dir = path.parent / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = archive_dir / f"{path.stem}.{timestamp}.jsonl"
+    path.replace(archive_path)
+    archives = sorted(archive_dir.glob(f"{path.stem}.*.jsonl"), key=lambda item: item.stat().st_mtime, reverse=True)
+    for old_archive in archives[max_archives:]:
+        try:
+            old_archive.unlink()
+        except OSError:
+            pass
+
+
 def trade_gate_audit_path_for_ledger(path: Path = TRADE_LEDGER_PATH) -> Path:
     if path == TRADE_LEDGER_PATH:
         return TRADE_GATE_AUDIT_PATH
@@ -1689,6 +1890,7 @@ def append_trade_gate_audit_event(
     if extra:
         payload.update(extra)
     path.parent.mkdir(parents=True, exist_ok=True)
+    rotate_jsonl_file(path)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
@@ -1928,6 +2130,33 @@ def build_macro_trade_window_reasons(
     return reasons[:2]
 
 
+def regime_direction_contradiction(market_regime: MarketRegimeAnalysis | None, direction: str, threshold: int = 70) -> str | None:
+    if market_regime is None or direction not in {"BUY", "SELL"}:
+        return None
+    score = market_regime.score
+    confirmed_enough = score >= threshold or market_regime.confirmed
+    if not confirmed_enough:
+        return None
+    bullish_regimes = {"Safe-Haven Gold", "Stagflation Fear"}
+    bearish_regimes = {"Hormuz / Oil Shock", "Dollar Liquidity Squeeze", "De-escalation / Oil Relief", "Risk-On / Carry Trade"}
+    if direction == "BUY" and market_regime.name in bearish_regimes:
+        return f"Direction BUY contraire au regime fort {market_regime.name} ({score}/100)."
+    if direction == "SELL" and market_regime.name in bullish_regimes:
+        return f"Direction SELL contraire au regime fort {market_regime.name} ({score}/100)."
+    return None
+
+
+def unique_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
 def build_trade_quality_gate(
     gold: SymbolSnapshot,
     global_recommendation: TradeRecommendation,
@@ -1981,6 +2210,9 @@ def build_trade_quality_gate(
         hard_reasons.append("Trop de contradictions entre agents decisionnels.")
     elif contradicting:
         advisory_reasons.append(f"Contradiction presente: {len(contradicting)} agent(s) contre la direction.")
+    regime_block = regime_direction_contradiction(market_regime, global_recommendation.verdict)
+    if regime_block:
+        hard_reasons.append(regime_block)
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
         if market_regime.score >= 70:
             hard_reasons.append("Regime geopolitique/petrole actif >= 70/100: nouveau trade bloque.")
@@ -2003,6 +2235,8 @@ def build_trade_quality_gate(
         hard_reasons.append("SL/TP non exploitables.")
 
     allowed = not hard_reasons
+    hard_reasons = unique_preserve_order(hard_reasons)
+    advisory_reasons = unique_preserve_order(advisory_reasons)
     reasons = [*hard_reasons, *advisory_reasons]
     if allowed:
         reasons.append(
@@ -2766,6 +3000,20 @@ def build_data_quality_snapshot(
             now=reference,
         ),
         make_source_snapshot(
+            "fred_dgs3m",
+            bool(official_macro_rates and official_macro_rates.dgs3m),
+            official_macro_rates.dgs3m.fetched_at if official_macro_rates and official_macro_rates.dgs3m else None,
+            f"3M {format_number(official_macro_rates.dgs3m.price if official_macro_rates and official_macro_rates.dgs3m else None, 2, '%')}",
+            now=reference,
+        ),
+        make_source_snapshot(
+            "fred_dgs30",
+            bool(official_macro_rates and official_macro_rates.dgs30),
+            official_macro_rates.dgs30.fetched_at if official_macro_rates and official_macro_rates.dgs30 else None,
+            f"30Y {format_number(official_macro_rates.dgs30.price if official_macro_rates and official_macro_rates.dgs30 else None, 2, '%')}",
+            now=reference,
+        ),
+        make_source_snapshot(
             "fred_t10yie",
             bool(official_macro_rates and official_macro_rates.t10yie),
             official_macro_rates.t10yie.fetched_at if official_macro_rates and official_macro_rates.t10yie else None,
@@ -2780,6 +3028,13 @@ def build_data_quality_snapshot(
         make_source_snapshot("white_house_feed", bool(political_statements), latest_political, f"{len(political_statements or [])} statements", now=reference),
         make_source_snapshot("news_official_feeds", any(news_source_tier(item.source, item.link) == 1 for item in news), latest_news, "White House/Fed/BLS/Treasury/BEA/CFTC/WGC", now=reference),
         make_source_snapshot("news_fast_feeds", any(news_source_tier(item.source, item.link) <= 2 for item in news), latest_news, "AP/CNBC/Reuters/Bloomberg", now=reference),
+        make_source_snapshot(
+            "critical_fast_feeds",
+            any(item.category.startswith("critical_") or item.source in {"Truth Social", "Nitter Trump", "Nitter White House"} for item in news),
+            latest_news,
+            "Trump/White House/Fed/AP/Reuters/Bloomberg critical feeds",
+            now=reference,
+        ),
         make_source_snapshot("cross_asset_yahoo", cross_asset_analysis is not None, gold.fetched_at, cross_asset_analysis.summary if cross_asset_analysis else "", now=reference),
         make_source_snapshot("oil_context", market_regime is not None, gold.fetched_at, market_regime.summary if market_regime else "", now=reference),
         make_source_snapshot(
@@ -2801,11 +3056,26 @@ def build_data_quality_snapshot(
         contradictions.append("CFTC positioning bullish mais ETF flows officiels en sorties.")
     if cftc_positioning and etf_flows_analysis and cftc_positioning.score <= 40 and etf_flows_analysis.score >= 60:
         contradictions.append("CFTC positioning bearish mais ETF flows officiels en entrees.")
+    contradictions.extend(recent_source_error_warnings())
 
+    criticality_weight = {
+        "price": 3.0,
+        "rates": 3.0,
+        "flows": 3.0,
+        "macro": 2.5,
+        "chart": 2.0,
+        "technical": 2.0,
+        "oil": 1.5,
+        "political_statements": 1.5,
+        "news": 1.0,
+    }
+    missing_penalty = sum(18 * criticality_weight.get(snap.category, 1.0) for snap in snapshots if snap.status == "missing" and snap.critical)
+    stale_penalty = sum(12 * criticality_weight.get(snap.category, 1.0) for snap in snapshots if snap.status == "stale" and snap.critical)
+    weak_penalty = sum(4 * max(0.5, 5 - snap.tier) for snap in snapshots if snap.status == "weak")
     score = 100
-    score -= 18 * len(missing)
-    score -= 12 * len(stale)
-    score -= 4 * len(weak)
+    score -= round(missing_penalty)
+    score -= round(stale_penalty)
+    score -= round(weak_penalty)
     score -= min(18, 6 * len(contradictions))
     score = clamp_score(score)
     status = data_quality_status(score)
@@ -3134,17 +3404,30 @@ def fetch_real_yield_snapshot() -> SymbolSnapshot | None:
 
 def build_official_macro_rates(
     dgs10: SymbolSnapshot | None,
-    dgs2: SymbolSnapshot | None,
-    t10yie: SymbolSnapshot | None,
-    dfii10: SymbolSnapshot | None,
-    yahoo_us10y: SymbolSnapshot | None,
+    dgs2: SymbolSnapshot | None = None,
+    dgs3m: SymbolSnapshot | None = None,
+    dgs30: SymbolSnapshot | None = None,
+    t10yie: SymbolSnapshot | None = None,
+    dfii10: SymbolSnapshot | None = None,
+    yahoo_us10y: SymbolSnapshot | None = None,
 ) -> OfficialMacroRates:
+    # Backward compatibility with the pre-Phase-4.5 call shape:
+    # (dgs10, dgs2, t10yie, dfii10, yahoo_us10y).
+    if yahoo_us10y is None and t10yie is not None and t10yie.symbol == "^TNX":
+        yahoo_us10y = t10yie
+        t10yie = dgs3m
+        if dgs30 is not None and dgs30.symbol == "DFII10":
+            dfii10 = dgs30
+            dgs30 = None
+        dgs3m = None
     gap_bps = None
     if dgs10 is not None and yahoo_us10y is not None:
         gap_bps = (yahoo_us10y.price - dgs10.price) * 100
     return OfficialMacroRates(
         dgs10=dgs10,
         dgs2=dgs2,
+        dgs3m=dgs3m,
+        dgs30=dgs30,
         t10yie=t10yie,
         dfii10=dfii10,
         yahoo_tnx_gap_bps=gap_bps,
@@ -3157,6 +3440,14 @@ def parse_int_field(row: dict[str, str], field_name: str) -> int:
         return int(str(value).replace(",", "").strip() or "0")
     except ValueError:
         return 0
+
+
+def percentile_rank(value: float, history: list[float]) -> float:
+    valid = [item for item in history if item is not None]
+    if not valid:
+        return 50.0
+    below_or_equal = sum(1 for item in valid if item <= value)
+    return round((below_or_equal / len(valid)) * 100, 1)
 
 
 def parse_cftc_disagg_history_text(text: str) -> list[dict[str, str]]:
@@ -3240,10 +3531,19 @@ def build_cftc_positioning_from_rows(
         else non_reportable_net
     )
 
+    managed_history = [cftc_net(row, "M_Money_Positions_Long_All", "M_Money_Positions_Short_All") for row in valid_rows]
+    producer_history = [cftc_net(row, "Prod_Merc_Positions_Long_All", "Prod_Merc_Positions_Short_All") for row in valid_rows]
+    managed_percentile_1y = percentile_rank(managed_money_net, managed_history[-52:])
+    managed_percentile_5y = percentile_rank(managed_money_net, managed_history[-260:])
+    producer_percentile_1y = percentile_rank(producer_net, producer_history[-52:])
+    producer_percentile_5y = percentile_rank(producer_net, producer_history[-260:])
+
     net_pct_component = clamp(managed_money_net_pct_oi * 1.4, -18, 18)
     weekly_component = clamp((managed_money_net_change / open_interest * 220) if open_interest else 0, -12, 12)
     oi_component = clamp((open_interest_change / open_interest * 120) if open_interest else 0, -5, 5)
-    score = clamp_score(50 + net_pct_component + weekly_component + oi_component)
+    crowding_component = -10 if managed_percentile_1y >= 90 else 8 if managed_percentile_1y <= 10 else 0
+    producer_component = -8 if producer_percentile_1y <= 10 else 6 if producer_percentile_1y >= 90 else 0
+    score = clamp_score(50 + (net_pct_component * 0.55) + weekly_component + oi_component + crowding_component + producer_component)
 
     if score >= 62:
         status = "bullish positioning"
@@ -3259,7 +3559,8 @@ def build_cftc_positioning_from_rows(
     summary = (
         f"Managed Money {direction} de {managed_money_net:+,} contrats "
         f"({managed_money_net_pct_oi:+.1f}% de l'open interest); variation hebdo {change_text} "
-        f"de {managed_money_net_change:+,} contrats."
+        f"de {managed_money_net_change:+,} contrats. Producers/Merchants net {producer_net:+,} "
+        f"(percentile 1 an {producer_percentile_1y:.0f}/100)."
     )
 
     return CFTCPositioning(
@@ -3291,6 +3592,10 @@ def build_cftc_positioning_from_rows(
         score=score,
         status=status,
         summary=summary,
+        managed_money_percentile_1y=managed_percentile_1y,
+        managed_money_percentile_5y=managed_percentile_5y,
+        producer_net_percentile_1y=producer_percentile_1y,
+        producer_net_percentile_5y=producer_percentile_5y,
     )
 
 
@@ -3861,6 +4166,29 @@ def fallback_fomc_calendar_events(now: datetime | None = None) -> list[MacroCata
     return events
 
 
+def central_bank_calendar_events(now: datetime | None = None) -> list[MacroCatalyst]:
+    schedules = [
+        ("ECB rate decision", "European Central Bank calendar", ECB_MEETING_CALENDAR_URL, [(2026, 6, 4), (2026, 7, 23), (2026, 9, 10), (2026, 10, 29), (2026, 12, 17)]),
+        ("BOE rate decision", "Bank of England MPC calendar", BOE_MEETING_CALENDAR_URL, [(2026, 6, 18), (2026, 8, 6), (2026, 9, 17), (2026, 11, 5), (2026, 12, 17)]),
+        ("BOJ monetary policy decision", "Bank of Japan MPM calendar", BOJ_MEETING_CALENDAR_URL, [(2026, 6, 16), (2026, 7, 31), (2026, 9, 18), (2026, 10, 30), (2026, 12, 18)]),
+    ]
+    events: list[MacroCatalyst] = []
+    for event_type, source_name, source_url, dates in schedules:
+        for year, month, day in dates:
+            scheduled_at = datetime(year, month, day, 11, 45, tzinfo=timezone.utc).isoformat()
+            events.append(
+                build_macro_catalyst(
+                    title=f"{event_type} {year}-{month:02d}-{day:02d}",
+                    event_type=event_type,
+                    scheduled_at=scheduled_at,
+                    source_name=source_name,
+                    source_url=source_url,
+                    now=now,
+                )
+            )
+    return events
+
+
 def parse_bea_release_schedule(html_text: str, now: datetime | None = None) -> list[MacroCatalyst]:
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, flags=re.IGNORECASE | re.DOTALL)
     events: list[MacroCatalyst] = []
@@ -3988,10 +4316,27 @@ def build_macro_catalyst_calendar(now: datetime | None = None) -> MacroCatalystC
     except Exception:
         source_notes.append("Fed RSS indisponible.")
 
+    catalysts.extend(central_bank_calendar_events(now=reference))
+    source_notes.append("Calendriers ECB/BOE/BOJ planifies charges.")
+
     catalysts = dedupe_macro_catalysts(catalysts)
     catalysts.sort(key=lambda item: (item.minutes_to_event is None, abs(item.minutes_to_event or 10**9)))
     upcoming = [item for item in catalysts if item.minutes_to_event is None or item.minutes_to_event >= -24 * 60]
     selected = upcoming[:10] if upcoming else catalysts[:10]
+    high_impact_24h = sum(
+        1
+        for item in selected
+        if item.impact_level == "HIGH" and item.minutes_to_event is not None and -60 <= item.minutes_to_event <= 24 * 60
+    )
+    density_status = "high_density" if high_impact_24h >= 3 else "elevated" if high_impact_24h >= 2 else "normal"
+    pre_event = next(
+        (
+            item
+            for item in selected
+            if item.impact_level == "HIGH" and item.minutes_to_event is not None and 0 <= item.minutes_to_event <= 60
+        ),
+        None,
+    )
 
     return MacroCatalystCalendar(
         generated_at=reference.isoformat(),
@@ -4003,6 +4348,14 @@ def build_macro_catalyst_calendar(now: datetime | None = None) -> MacroCatalystC
         ),
         fedwatch_source_url=CME_FEDWATCH_TOOL_URL,
         catalysts=selected,
+        high_impact_24h=high_impact_24h,
+        density_status=density_status,
+        pre_event_active=pre_event is not None,
+        pre_event_summary=(
+            f"Pre-event HIGH actif: {pre_event.event_type} {format_macro_countdown(pre_event.minutes_to_event)}."
+            if pre_event
+            else "Aucun pre-event HIGH dans 60 minutes."
+        ),
     )
 
 
@@ -5220,8 +5573,12 @@ def append_rss_items(
     items: list[NewsItem],
     seen_titles: set[str],
     result_limit: int,
+    feed_hash_cache: dict[str, str] | None = None,
+    detected_at: str | None = None,
 ) -> None:
     channel_title = compact_whitespace(root.findtext("./channel/title", default="RSS"))
+    detected_iso = detected_at or iso_now()
+    detected_dt = parse_iso_datetime(detected_iso) or datetime.now(timezone.utc)
     for item in root.findall("./channel/item"):
         link = compact_whitespace(item.findtext("link", default=""))
         source = news_source_identity(compact_whitespace(item.findtext("source", default="")) or channel_title, link)
@@ -5241,6 +5598,20 @@ def append_rss_items(
             )
         except Exception:
             published_at = iso_now()
+        processed_at = iso_now()
+        published_dt = parse_iso_datetime(published_at)
+        processed_dt = parse_iso_datetime(processed_at) or datetime.now(timezone.utc)
+        source_latency = (
+            max(0.0, (detected_dt - published_dt).total_seconds())
+            if published_dt is not None
+            else None
+        )
+        processing_latency = max(0.0, (processed_dt - detected_dt).total_seconds())
+        feed_hash = stable_news_hash(title, link, published_at)
+        cache_key = f"{category}:{feed_hash}"
+        is_breaking = bool(feed_hash_cache is not None and feed_hash_cache.get(cache_key) != feed_hash)
+        if feed_hash_cache is not None:
+            feed_hash_cache[cache_key] = feed_hash
 
         items.append(
             NewsItem(
@@ -5251,6 +5622,12 @@ def append_rss_items(
                 category=category,
                 score=score,
                 score_reasons=reasons,
+                feed_detected_at=detected_iso,
+                feed_processed_at=processed_at,
+                source_latency_seconds=round(source_latency, 3) if source_latency is not None else None,
+                processing_latency_seconds=round(processing_latency, 3),
+                feed_hash=feed_hash,
+                is_breaking=is_breaking,
             )
         )
         seen_titles.add(dedupe_key)
@@ -5261,20 +5638,31 @@ def append_rss_items(
 def fetch_news(top_n: int) -> list[NewsItem]:
     items: list[NewsItem] = []
     seen_titles: set[str] = set()
+    feed_hash_cache = load_feed_hash_cache()
     month_name = current_month_name_en()
     result_limit = max(top_n, 24)
     deadline = time.time() + 22
     reference = datetime.now(timezone.utc)
 
+    for category, mirrors in (
+        ("critical_trump_nitter", TRUMP_NITTER_FEEDS),
+        ("critical_white_house_nitter", WHITE_HOUSE_NITTER_FEEDS),
+    ):
+        if time.time() >= deadline:
+            break
+        fallback = fetch_nitter_feed_with_fallback(category, mirrors)
+        if fallback is None:
+            continue
+        _, root = fallback
+        append_rss_items(root, category, items, seen_titles, result_limit * 2, feed_hash_cache=feed_hash_cache)
+
     for category, url in [*OFFICIAL_NEWS_RSS_FEEDS, *FAST_NEWS_RSS_FEEDS]:
         if time.time() >= deadline:
             break
-        try:
-            xml_text = http_get_text(url)
-            root = ET.fromstring(xml_text)
-        except Exception:
+        root = fetch_rss_root(category, url, criticality="high" if category in CRITICAL_FAST_FEEDS else "medium")
+        if root is None:
             continue
-        append_rss_items(root, category, items, seen_titles, result_limit * 2)
+        append_rss_items(root, category, items, seen_titles, result_limit * 2, feed_hash_cache=feed_hash_cache)
 
     for category, query_template in [*FAST_NEWS_SEARCH_QUERIES, *NEWS_QUERIES]:
         if time.time() >= deadline:
@@ -5285,32 +5673,30 @@ def fetch_news(top_n: int) -> list[NewsItem]:
             "https://news.google.com/rss/search"
             f"?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
         )
-        try:
-            xml_text = http_get_text(url)
-            root = ET.fromstring(xml_text)
-        except Exception:
+        root = fetch_rss_root(category, url, timeout=6, criticality="low")
+        if root is None:
             continue
 
-        append_rss_items(root, category, items, seen_titles, result_limit)
+        append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
         if len(usable) >= result_limit:
             usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+            save_feed_hash_cache(feed_hash_cache)
             return usable[:result_limit]
 
     usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
     if len(usable) < top_n:
         for category, url in FALLBACK_RSS_FEEDS:
-            try:
-                xml_text = http_get_text(url)
-                root = ET.fromstring(xml_text)
-            except Exception:
+            root = fetch_rss_root(category, url, timeout=6, criticality="low")
+            if root is None:
                 continue
-            append_rss_items(root, category, items, seen_titles, result_limit)
+            append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
             if len(items) >= result_limit:
                 break
 
     usable = [item for item in items if is_news_item_exploitable(item, now=reference)]
     usable.sort(key=lambda item: (parse_iso_sort_key(item.published_at), abs(item.score), -news_source_tier(item.source, item.link)), reverse=True)
+    save_feed_hash_cache(feed_hash_cache)
     return usable[:result_limit]
 
 
@@ -5335,17 +5721,31 @@ def political_source_tier(item: NewsItem) -> int:
 def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
     items: list[NewsItem] = []
     seen_titles: set[str] = set()
+    feed_hash_cache = load_feed_hash_cache()
     result_limit = max(limit, 12)
     deadline = time.time() + 12
+
+    for category, mirrors in (
+        ("political_trump_nitter", TRUMP_NITTER_FEEDS),
+        ("political_white_house_nitter", WHITE_HOUSE_NITTER_FEEDS),
+    ):
+        if time.time() >= deadline:
+            break
+        fallback = fetch_nitter_feed_with_fallback(category, mirrors)
+        if fallback is None:
+            continue
+        _, root = fallback
+        append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
+        items = keep_political_statement_candidates(items)
+        seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
 
     for category, url in POLITICAL_RSS_FEEDS:
         if time.time() >= deadline:
             break
-        try:
-            root = ET.fromstring(http_get_text(url))
-        except Exception:
+        root = fetch_rss_root(category, url, timeout=5, criticality="high")
+        if root is None:
             continue
-        append_rss_items(root, category, items, seen_titles, result_limit)
+        append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         items = keep_political_statement_candidates(items)
         seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
 
@@ -5357,14 +5757,14 @@ def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
             "https://news.google.com/rss/search"
             f"?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
         )
-        try:
-            root = ET.fromstring(http_get_text(url))
-        except Exception:
+        root = fetch_rss_root(category, url, timeout=6, criticality="low")
+        if root is None:
             continue
-        append_rss_items(root, category, items, seen_titles, result_limit)
+        append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         items = keep_political_statement_candidates(items)
         seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
 
+    save_feed_hash_cache(feed_hash_cache)
     items.sort(key=lambda item: (-political_source_tier(item), abs(item.score), item.published_at), reverse=True)
     return items[:result_limit]
 
@@ -5705,6 +6105,7 @@ def build_event_mode_analysis(
     readings: list[TechnicalReading],
     gvz: SymbolSnapshot | None,
     vix: SymbolSnapshot | None,
+    macro_catalysts: MacroCatalystCalendar | None = None,
 ) -> EventModeAnalysis:
     score = 0.0
     reasons: list[str] = []
@@ -5732,6 +6133,14 @@ def build_event_mode_analysis(
         score += 18
         reasons.append(f"VIX en acceleration ({vix.change_pct:+.2f}%).")
 
+    if macro_catalysts is not None:
+        if macro_catalysts.pre_event_active:
+            score += 30
+            reasons.append(macro_catalysts.pre_event_summary)
+        if macro_catalysts.density_status in {"elevated", "high_density"}:
+            score += 12 if macro_catalysts.density_status == "elevated" else 22
+            reasons.append(f"Densite macro {macro_catalysts.density_status}: {macro_catalysts.high_impact_24h} event(s) HIGH sur 24h.")
+
     intraday_points = gold.intraday_points or gold.points
     if len(intraday_points) >= 4:
         reference = intraday_points[-4].close
@@ -5745,7 +6154,7 @@ def build_event_mode_analysis(
                 reasons.append(f"Deplacement court terme notable sur XAU/USD ({short_move:+.2f}%).")
 
     score_int = round(clamp(score, 0, 100))
-    active = score_int >= 45 or max_volume_ratio >= 2.0
+    active = score_int >= 45 or max_volume_ratio >= 2.0 or bool(macro_catalysts and macro_catalysts.pre_event_active)
     if active:
         return EventModeAnalysis(
             active=True,
@@ -5775,6 +6184,28 @@ def count_oil_shock_headlines(news: list[NewsItem]) -> int:
     return count
 
 
+def finalize_market_regime(regime: MarketRegimeAnalysis, path: Path = REGIME_STATE_PATH) -> MarketRegimeAnalysis:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            history = [str(item) for item in data.get("history", [])] if isinstance(data, dict) else []
+        else:
+            history = []
+        history = (history + [regime.name])[-3:]
+        if len(history) == 3 and len(set(history)) == 1 and regime.name != "Normal Macro":
+            regime.confirmed = True
+            if "Regime confirme par persistance 3 snapshots consecutifs." not in regime.reasons:
+                regime.reasons.append("Regime confirme par persistance 3 snapshots consecutifs.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"updated_at": iso_now(), "current": regime.name, "history": history, "probabilities": regime.probabilities}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    return regime
+
+
 def build_market_regime_analysis(
     gold: SymbolSnapshot,
     dxy: SymbolSnapshot,
@@ -5789,7 +6220,9 @@ def build_market_regime_analysis(
     oil_change = max(oil_changes, default=0.0)
     oil_available = bool(oil_changes)
     dxy_strong = dxy.change_pct >= 0.20
+    dxy_weak = dxy.change_pct <= -0.20
     yields_up = (us10y.change_abs * 100) >= 3
+    yields_down = (us10y.change_abs * 100) <= -3
     gold_weak = gold.change_pct <= -0.20
     gold_strong = gold.change_pct >= 0.20
 
@@ -5828,8 +6261,30 @@ def build_market_regime_analysis(
         )
 
     oil_shock_score = round(clamp(oil_shock_score, 0, 100))
+    safe_haven_score = round(clamp((45 if oil_shock_headlines else 25) + (18 if gold_strong else 0) + (10 if dxy_weak else 0) + (8 if yields_down else 0), 0, 100))
+    dollar_squeeze_score = round(clamp((42 if dxy_strong and gold_weak else 0) + abs(dxy.change_pct) * 12 + abs(gold.change_pct) * 8, 0, 100))
+    risk_on_score = round(clamp((35 if dxy_weak else 0) + (25 if yields_down else 0) + (18 if gold_weak else 0), 0, 100))
+    stagflation_score = round(clamp((28 if gold_strong else 0) + (28 if yields_up else 0) + (22 if dxy_strong else 0) + (12 if oil_change >= 0.35 else 0), 0, 100))
+    deesc_score = round(clamp((45 if oil_shock_headlines and oil_change <= -0.35 else 0) + oil_shock_headlines * 5, 0, 100))
+    probabilities = {
+        "Hormuz / Oil Shock": oil_shock_score,
+        "Safe-Haven Gold": safe_haven_score,
+        "Dollar Liquidity Squeeze": dollar_squeeze_score,
+        "Risk-On / Carry Trade": risk_on_score,
+        "Stagflation Fear": stagflation_score,
+        "De-escalation / Oil Relief": deesc_score,
+        "Normal Macro": max(0, 100 - max(oil_shock_score, safe_haven_score, dollar_squeeze_score, risk_on_score, stagflation_score, deesc_score)),
+    }
+    component_scores = {
+        "oil_shock_headlines": min(100, oil_shock_headlines * 20),
+        "oil_change": round(clamp(oil_change * 18, -100, 100)),
+        "dxy_change": round(clamp(dxy.change_pct * 50, -100, 100)),
+        "yields_change_bps": round(clamp(us10y.change_abs * 100 * 8, -100, 100)),
+        "gold_change": round(clamp(gold.change_pct * 40, -100, 100)),
+    }
+    regime_trend = "escalade" if oil_shock_score >= 70 or stagflation_score >= 70 else "accalmie" if deesc_score >= 50 or risk_on_score >= 65 else "stable"
     if oil_shock_score >= 58:
-        return MarketRegimeAnalysis(
+        return finalize_market_regime(MarketRegimeAnalysis(
             name="Hormuz / Oil Shock",
             status="ACTIF",
             score=oil_shock_score,
@@ -5839,7 +6294,11 @@ def build_market_regime_analysis(
                 "Gold peut etre vendu pour liquidite tant que Brent/WTI, DXY ou les taux dominent."
             ),
             reasons=reasons[:6],
-        )
+            trend=regime_trend,
+            confirmed=oil_shock_score >= 70,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
 
     if oil_shock_headlines and oil_change <= -0.35:
         deesc_ctx = ExplanationContext(
@@ -5851,17 +6310,61 @@ def build_market_regime_analysis(
             impact="prime de risque qui sort de l'or si oil et volatilite se detendent",
             action="WATCH_SELL gold tant que oil baisse, sinon NO_TRADE refuge",
         )
-        return MarketRegimeAnalysis(
+        return finalize_market_regime(MarketRegimeAnalysis(
             name="De-escalation / Oil Relief",
             status="SURVEILLANCE",
             score=round(clamp(45 + oil_shock_headlines * 5, 0, 100)),
             gold_impact="prime de risque en reflux",
             summary=ExplanationLayer.geopolitical_regime(deesc_ctx),
             reasons=reasons[:6],
-        )
+            trend="accalmie",
+            confirmed=deesc_score >= 60,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
+
+    if stagflation_score >= 65:
+        return finalize_market_regime(MarketRegimeAnalysis(
+            name="Stagflation Fear",
+            status="ACTIF",
+            score=stagflation_score,
+            gold_impact="haussier mais volatil",
+            summary=(
+                "Regime Stagflation Fear: gold monte avec dollar et rendements. "
+                "Le marche price une inflation/stress reel qui depasse le simple effet taux."
+            ),
+            reasons=reasons[:6]
+            + [
+                f"Gold {gold.change_pct:+.2f}%, DXY {dxy.change_pct:+.2f}%, 10Y {us10y.change_abs * 100:+.1f} bps: combinaison stagflation potentielle."
+            ],
+            trend=regime_trend,
+            confirmed=stagflation_score >= 75,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
+
+    if risk_on_score >= 65:
+        return finalize_market_regime(MarketRegimeAnalysis(
+            name="Risk-On / Carry Trade",
+            status="ACTIF",
+            score=risk_on_score,
+            gold_impact="baissier/defensif",
+            summary=(
+                "Regime Risk-On / Carry Trade: dollar et rendements se detendent mais gold ne capte pas le flux. "
+                "Le capital favorise les actifs de risque plutot que la couverture or."
+            ),
+            reasons=reasons[:6]
+            + [
+                f"DXY {dxy.change_pct:+.2f}%, 10Y {us10y.change_abs * 100:+.1f} bps, gold {gold.change_pct:+.2f}%."
+            ],
+            trend="accalmie",
+            confirmed=risk_on_score >= 75,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
 
     if dxy_strong and gold_weak:
-        return MarketRegimeAnalysis(
+        return finalize_market_regime(MarketRegimeAnalysis(
             name="Dollar Liquidity Squeeze",
             status="ACTIF",
             score=round(clamp(52 + abs(dxy.change_pct) * 10 + abs(gold.change_pct) * 8, 0, 100)),
@@ -5870,10 +6373,14 @@ def build_market_regime_analysis(
                 "Le marche cherche surtout de la liquidite dollar: gold peut baisser meme si le contexte reste stressant."
             ),
             reasons=reasons[:6] or [f"DXY monte ({dxy.change_pct:+.2f}%) pendant que gold recule ({gold.change_pct:+.2f}%)."],
-        )
+            trend=regime_trend,
+            confirmed=dollar_squeeze_score >= 70,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
 
     if oil_shock_headlines and gold_strong and not dxy_strong:
-        return MarketRegimeAnalysis(
+        return finalize_market_regime(MarketRegimeAnalysis(
             name="Safe-Haven Gold",
             status="ACTIF",
             score=round(clamp(55 + oil_shock_headlines * 5 + max(gold.change_pct, 0) * 8, 0, 100)),
@@ -5882,16 +6389,24 @@ def build_market_regime_analysis(
                 "Le risque politique se transmet surtout par la demande de couverture sur l'or: gold confirme mieux que dollar/oil."
             ),
             reasons=reasons[:6] or ["Gold confirme le role refuge pendant que le dollar ne domine pas."],
-        )
+            trend=regime_trend,
+            confirmed=safe_haven_score >= 70,
+            probabilities=probabilities,
+            component_scores=component_scores,
+        ))
 
-    return MarketRegimeAnalysis(
+    return finalize_market_regime(MarketRegimeAnalysis(
         name="Normal Macro",
         status="NORMAL",
         score=oil_shock_score,
         gold_impact="neutre",
         summary="Pas de regime Hormuz/Oil Shock confirme: le gold reste surtout pilote par DXY, taux, technique et headlines.",
         reasons=reasons[:6] or ["Aucun choc petrole/geopolitique suffisamment confirme."],
-    )
+        trend="stable",
+        confirmed=False,
+        probabilities=probabilities,
+        component_scores=component_scores,
+    ))
 
 
 def normalize_agent_bias(verdict: str) -> str:
@@ -5945,6 +6460,37 @@ def price_action_levels(gold: SymbolSnapshot) -> dict[str, float]:
     }
 
 
+def detect_recent_swing_levels(points: list[PricePoint], source: str = "proxy GC=F") -> dict[str, Any]:
+    if len(points) < 18:
+        return {"status": "insufficient", "summary": "Historique intraday insuffisant pour swing M15."}
+    candles_5m = price_points_to_candles(points, "M5", source, iso_now())
+    candles = resample_candles(candles_5m, "M15") if candles_5m else []
+    if len(candles) < 8:
+        return {"status": "insufficient", "summary": "Bougies M15 insuffisantes pour swing."}
+    recent = candles[-12:]
+    swing_high = max(candle.high for candle in recent)
+    swing_low = min(candle.low for candle in recent)
+    last_close = recent[-1].close
+    if last_close > swing_high:
+        structure = "breakout"
+    elif last_close < swing_low:
+        structure = "breakdown"
+    elif last_close >= swing_high - (swing_high - swing_low) * 0.25:
+        structure = "pression resistance"
+    elif last_close <= swing_low + (swing_high - swing_low) * 0.25:
+        structure = "pression support"
+    else:
+        structure = "range intraday"
+    return {
+        "status": "ok",
+        "swing_high": round(swing_high, 2),
+        "swing_low": round(swing_low, 2),
+        "last_close": round(last_close, 2),
+        "structure": structure,
+        "summary": f"M15 {structure}: swing high {swing_high:.2f}, swing low {swing_low:.2f}, close {last_close:.2f}.",
+    }
+
+
 def classify_price_action_state(gold: SymbolSnapshot) -> tuple[str, int, list[str]]:
     position = price_range_position(gold)
     levels = price_action_levels(gold)
@@ -5993,6 +6539,8 @@ def geopolitical_agent_bias_from_regime(market_regime: MarketRegimeAnalysis | No
         "Safe-Haven Gold": "BUY",
         "De-escalation / Oil Relief": "SELL",
         "Dollar Liquidity Squeeze": "SELL",
+        "Risk-On / Carry Trade": "SELL",
+        "Stagflation Fear": "BUY",
         "Normal Macro": "NEUTRAL",
     }
     return mapping.get(market_regime.name, "NEUTRAL")
@@ -6089,6 +6637,7 @@ def build_passive_agent_results(
 
     price_state, price_score, price_reasons = classify_price_action_state(gold)
     price_levels = price_action_levels(gold)
+    swing_levels = detect_recent_swing_levels(gold.intraday_points or gold.points)
     range_position = price_range_position(gold)
     psych_level, psych_distance = nearest_psychological_level(gold.price)
     price_risks = []
@@ -6113,6 +6662,7 @@ def build_passive_agent_results(
                     "PriceAction v4",
                 ),
                 AgentEvidence("Structure prix", "; ".join(price_reasons[:3]), "PriceAction v4"),
+                AgentEvidence("Swing M15", str(swing_levels.get("summary", "indisponible")), "Chart Store OHLC"),
                 data_quality_evidence,
             ],
             risks=price_risks,
@@ -6167,6 +6717,10 @@ def build_passive_agent_results(
     ]
     if official_macro_rates and official_macro_rates.dgs2 is not None:
         macro_evidence.append(AgentEvidence("2Y US officiel", f"{official_macro_rates.dgs2.price:.2f}% ({official_macro_rates.dgs2.change_abs * 100:+.1f} bps)", "FRED DGS2"))
+    if official_macro_rates and official_macro_rates.dgs3m is not None:
+        macro_evidence.append(AgentEvidence("3M US officiel", f"{official_macro_rates.dgs3m.price:.2f}% ({official_macro_rates.dgs3m.change_abs * 100:+.1f} bps)", "FRED DGS3MO"))
+    if official_macro_rates and official_macro_rates.dgs30 is not None:
+        macro_evidence.append(AgentEvidence("30Y US officiel", f"{official_macro_rates.dgs30.price:.2f}% ({official_macro_rates.dgs30.change_abs * 100:+.1f} bps)", "FRED DGS30"))
     if official_macro_rates and official_macro_rates.t10yie is not None:
         macro_evidence.append(AgentEvidence("Breakeven 10Y", f"{official_macro_rates.t10yie.price:.2f}% ({official_macro_rates.t10yie.change_abs * 100:+.1f} bps)", "FRED T10YIE"))
     if real_yield is not None and len(macro_evidence) < 4:
@@ -6181,6 +6735,14 @@ def build_passive_agent_results(
                 "Prochain catalyseur",
                 f"{next_macro.title} ({format_macro_countdown(next_macro.minutes_to_event)})",
                 next_macro.source_name,
+            )
+        )
+    if macro_catalysts is not None:
+        macro_evidence.append(
+            AgentEvidence(
+                "Densite macro",
+                f"{macro_catalysts.density_status}: {macro_catalysts.high_impact_24h} HIGH / 24h; {macro_catalysts.pre_event_summary}",
+                "MacroCatalystCalendar",
             )
         )
     macro_freshness_age = headline_age_minutes(
@@ -6328,6 +6890,28 @@ def build_passive_agent_results(
             "CFTC COT officiel" if cftc_positioning else "News/OI proxy",
         ),
     ]
+    flow_risks = [
+        AgentRisk(
+            "Frequence COT",
+            "Le COT officiel est hebdomadaire; les ETF sont plus frequents mais cadrent les flux de fond, pas l'entree intraday.",
+            "medium",
+        )
+    ]
+    if cftc_positioning is not None:
+        flow_evidence.append(
+            AgentEvidence(
+                "Producers/Merchants",
+                (
+                    f"net {cftc_positioning.producer_net:+,} ({cftc_positioning.producer_net_change:+,} hebdo), "
+                    f"percentile 1a {cftc_positioning.producer_net_percentile_1y:.0f}/100"
+                ),
+                "CFTC COT officiel",
+            )
+        )
+        if cftc_positioning.managed_money_percentile_1y >= 90:
+            flow_risks.append(AgentRisk("Crowding Managed Money", "Managed Money dans le top 10% annuel: risque de retournement/prise de profit.", "medium"))
+        if cftc_positioning.producer_net_percentile_1y <= 10:
+            flow_risks.append(AgentRisk("Hedgers extremes", "Producers/Merchants tres vendeurs nets: signal de prudence contrarienne.", "medium"))
     if etf_flows_analysis is not None:
         flow_evidence.append(
             AgentEvidence(
@@ -6336,13 +6920,6 @@ def build_passive_agent_results(
                 etf_flows_analysis.source_name,
             )
         )
-    flow_risks = [
-        AgentRisk(
-            "Frequence COT",
-            "Le COT officiel est hebdomadaire; les ETF sont plus frequents mais cadrent les flux de fond, pas l'entree intraday.",
-            "medium",
-        )
-    ]
     if cftc_positioning is not None and etf_flows_analysis is not None:
         cot_side = "BUY" if cftc_positioning.score >= 56 else "SELL" if cftc_positioning.score <= 44 else "NEUTRAL"
         etf_side = "BUY" if etf_flows_analysis.score >= 56 else "SELL" if etf_flows_analysis.score <= 44 else "NEUTRAL"
@@ -6432,7 +7009,7 @@ def build_passive_agent_results(
             score=political_score,
             confidence=primary_statement.confidence if primary_statement else 0,
             summary=(
-                f"Declaration politique sourcee detectee: {primary_statement.theme} ({primary_statement.validation_level})."
+                f"Declaration politique sourcee detectee: {primary_statement.theme}; source tier {primary_statement.source_tier}, validation {primary_statement.validation_level}."
                 if primary_statement
                 else "Declaration politique detectee dans les headlines; impact a confirmer par source primaire."
                 if trump_news
@@ -6454,11 +7031,16 @@ def build_passive_agent_results(
                     primary_statement.market_chain if primary_statement else "impact politique a confirmer par source primaire",
                     "PoliticalStatements",
                 ),
+                AgentEvidence(
+                    "Verbal vs action",
+                    "Score fort seulement si la declaration est reliee a sanctions, decision officielle, militaire, tarifaire ou reaction oil/DXY.",
+                    "PoliticalStatements v4.5",
+                ),
             ],
             risks=[
                 AgentRisk(
-                    "Anti-rumeur",
-                    "Une declaration politique ne score fortement que si elle est officielle ou confirmee par source fiable.",
+                    "Filtre source",
+                    "Les citations non officielles ou non confirmees restent en surveillance et ne declenchent pas seules un trade.",
                     "high",
                 )
             ],
@@ -6666,6 +7248,13 @@ def build_dynamic_orchestrator_weights(
         if regime_name == "Hormuz / Oil Shock":
             adjust("geopolitical_oil", 0.03, "Hormuz/Oil Shock: oil shock prioritaire.")
             adjust("regime", 0.02, "Hormuz/Oil Shock: regime decisionnel augmente.")
+        if market_regime is not None and market_regime.confirmed:
+            adjust("regime", 0.04, "Regime confirme par persistance/probabilite: poids regime augmente.")
+        if regime_name == "Stagflation Fear":
+            adjust("macro", 0.03, "Stagflation Fear: macro/taux/inflation prioritaire.")
+            adjust("geopolitical_oil", 0.02, "Stagflation Fear: energie et stress prix surveilles.")
+        if regime_name == "Risk-On / Carry Trade":
+            adjust("cross_assets", 0.03, "Risk-On/Carry: cross-assets prioritaire.")
 
     if data_quality is None:
         adjust("data_quality", 0.04, "Data quality indisponible: poids gouvernance augmente.")
@@ -6707,6 +7296,10 @@ def regime_directional_score(market_regime: MarketRegimeAnalysis | None) -> tupl
         score = clamp_score(50 + market_regime.score * 0.35)
     elif market_regime.name in {"Hormuz / Oil Shock", "Dollar Liquidity Squeeze"}:
         score = clamp_score(50 - market_regime.score * 0.35)
+    elif market_regime.name == "Risk-On / Carry Trade":
+        score = clamp_score(50 - market_regime.score * 0.25)
+    elif market_regime.name == "Stagflation Fear":
+        score = clamp_score(50 + market_regime.score * 0.25)
     elif market_regime.name == "De-escalation / Oil Relief":
         score = clamp_score(50 - market_regime.score * 0.18)
     else:
@@ -6845,6 +7438,9 @@ def build_orchestrator_quality_gate(
             trade_blockers.append(f"Mode event extreme ({event_mode.score}/100): pas de TRADE_* automatique.")
         else:
             advisory_reasons.append(f"Mode event surveille ({event_mode.score}/100): confirmation d'entree exigee.")
+    regime_block = regime_direction_contradiction(market_regime, direction)
+    if regime_block:
+        trade_blockers.append(regime_block)
     if market_regime is not None and market_regime.name == "Hormuz / Oil Shock":
         if market_regime.score >= 70:
             trade_blockers.append("Regime geopolitique/petrole >= 70/100: setup seulement, pas de TRADE_* automatique.")
@@ -6880,7 +7476,7 @@ def build_orchestrator_quality_gate(
         hard_reasons.append("Zone centrale: aucune direction n'a assez d'avantage.")
     if hard_reasons:
         status = "NO_TRADE" if any("Preflight bloquant" in reason or "Data quality" in reason for reason in hard_reasons) else "WAIT"
-        return status, [*hard_reasons, *advisory_reasons][:7]
+        return status, unique_preserve_order([*hard_reasons, *advisory_reasons])[:7]
     if verdict == "BUY":
         status = "WATCH_BUY" if trade_blockers else "TRADE_BUY"
     elif verdict == "SELL":
@@ -6888,8 +7484,8 @@ def build_orchestrator_quality_gate(
     else:
         status = "WAIT"
     if trade_blockers:
-        return status, [*trade_blockers, *advisory_reasons, "Quality Gate v3: setup surveille, pas de trade verrouille."][:7]
-    return status, [*advisory_reasons, "Quality Gate v3 valide: trigger, sources, confirmations et risk/reward autorisent TRADE_*."][:7]
+        return status, unique_preserve_order([*trade_blockers, *advisory_reasons, "Quality Gate v3: setup surveille, pas de trade verrouille."])[:7]
+    return status, unique_preserve_order([*advisory_reasons, "Quality Gate v3 valide: trigger, sources, confirmations et risk/reward autorisent TRADE_*."])[:7]
 
 
 def build_orchestrator_decision(
@@ -7023,7 +7619,7 @@ def build_orchestrator_decision(
     display_verdict = recommendation_verdict if recommendation_verdict in {"BUY", "SELL"} else verdict
     summary = (
         f"Orchestrateur v3 {gate_status}: score pondere {bullish_score:.1f}/100, "
-        f"ancien moteur {legacy_recommendation.verdict} {legacy_recommendation.score}/100. "
+        f"reference initiale {legacy_recommendation.verdict} {legacy_recommendation.score}/100. "
         + ("Trade exploitable." if gate_status.startswith("TRADE_") else "Setup surveille." if gate_status.startswith("WATCH_") else "Pas de trade.")
     )
     recommendation = TradeRecommendation(
@@ -7069,7 +7665,7 @@ def update_orchestrator_agent(agent_results: list[AgentResult], decision: Orches
                 confidence=82 if decision.status.startswith("TRADE_") else 72 if decision.status.startswith("WATCH_") else 64,
                 summary=(
                     f"Orchestrateur v3 actif: verdict {decision.verdict} {decision.score}/100; "
-                    f"ancien moteur {decision.legacy_verdict} {decision.legacy_score}/100."
+                    f"reference initiale {decision.legacy_verdict} {decision.legacy_score}/100."
                 ),
                 evidence=[
                     AgentEvidence("Moteur", decision.engine, "Phase 29"),
@@ -8312,6 +8908,8 @@ def build_payload(
             "source": "FRED",
             "dgs10": macro_rate_payload(official_macro_rates.dgs10, "FRED DGS10"),
             "dgs2": macro_rate_payload(official_macro_rates.dgs2, "FRED DGS2"),
+            "dgs3m": macro_rate_payload(official_macro_rates.dgs3m, "FRED DGS3MO"),
+            "dgs30": macro_rate_payload(official_macro_rates.dgs30, "FRED DGS30"),
             "t10yie": macro_rate_payload(official_macro_rates.t10yie, "FRED T10YIE"),
             "dfii10": macro_rate_payload(official_macro_rates.dfii10, "FRED DFII10"),
             "yahoo_tnx_gap_bps": (
@@ -8458,6 +9056,10 @@ def build_cftc_positioning_from_payload(data: dict[str, Any] | None) -> CFTCPosi
         score=int(data.get("score", 50) or 50),
         status=str(data.get("status", "neutral positioning")),
         summary=str(data.get("summary", "COT officiel indisponible.")),
+        managed_money_percentile_1y=float(data.get("managed_money_percentile_1y", 50.0) or 50.0),
+        managed_money_percentile_5y=float(data.get("managed_money_percentile_5y", 50.0) or 50.0),
+        producer_net_percentile_1y=float(data.get("producer_net_percentile_1y", 50.0) or 50.0),
+        producer_net_percentile_5y=float(data.get("producer_net_percentile_5y", 50.0) or 50.0),
     )
 
 
@@ -8536,6 +9138,10 @@ def build_macro_catalyst_calendar_from_payload(data: dict[str, Any] | None) -> M
             for item in data.get("catalysts", [])
             if isinstance(item, dict)
         ],
+        high_impact_24h=int(data.get("high_impact_24h", 0) or 0),
+        density_status=str(data.get("density_status", "normal")),
+        pre_event_active=bool(data.get("pre_event_active", False)),
+        pre_event_summary=str(data.get("pre_event_summary", "")),
     )
 
 
@@ -8838,6 +9444,10 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
             gold_impact=str(market_regime_payload.get("gold_impact", "neutre")),
             summary=str(market_regime_payload.get("summary", "Regime de marche indisponible.")),
             reasons=list(market_regime_payload.get("reasons", [])),
+            trend=str(market_regime_payload.get("trend", "stable")),
+            confirmed=bool(market_regime_payload.get("confirmed", False)),
+            probabilities=dict(market_regime_payload.get("probabilities", {})),
+            component_scores=dict(market_regime_payload.get("component_scores", {})),
         )
         if isinstance(market_regime_payload, dict)
         else None
@@ -8846,6 +9456,8 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         OfficialMacroRates(
             dgs10=build_macro_rate_from_payload(official_macro_data.get("dgs10"), FRED_SERIES_LABELS["DGS10"]),
             dgs2=build_macro_rate_from_payload(official_macro_data.get("dgs2"), FRED_SERIES_LABELS["DGS2"]),
+            dgs3m=build_macro_rate_from_payload(official_macro_data.get("dgs3m"), FRED_SERIES_LABELS["DGS3MO"]),
+            dgs30=build_macro_rate_from_payload(official_macro_data.get("dgs30"), FRED_SERIES_LABELS["DGS30"]),
             t10yie=build_macro_rate_from_payload(official_macro_data.get("t10yie"), FRED_SERIES_LABELS["T10YIE"]),
             dfii10=build_macro_rate_from_payload(official_macro_data.get("dfii10"), FRED_SERIES_LABELS["DFII10"]),
             yahoo_tnx_gap_bps=parse_float(official_macro_data.get("yahoo_tnx_gap_bps")),
@@ -9442,7 +10054,7 @@ def render_report(
             [
                 "",
                 "## Fondation multi-agents",
-                "- Statut: orchestrateur actif depuis Phase 14; agents sources ponderes et ancien moteur conserve en comparaison.",
+                "- Statut: orchestrateur actif; agents sources ponderes et reference initiale conservee en comparaison interne.",
             ]
         )
         for agent in agent_results:
@@ -9986,6 +10598,8 @@ def render_cftc_positioning_panel(positioning: CFTCPositioning | None) -> str:
       <div class="geo-stat"><strong>Rapport</strong><span>{html.escape(positioning.report_date)}</span></div>
       <div class="geo-stat"><strong>Open interest</strong><span>{positioning.open_interest:,} ({positioning.open_interest_change:+,})</span></div>
       <div class="geo-stat"><strong>MM net / OI</strong><span>{positioning.managed_money_net_pct_oi:+.1f}%</span></div>
+      <div class="geo-stat"><strong>MM percentile</strong><span>{positioning.managed_money_percentile_1y:.0f}/100</span><small>1 an</small></div>
+      <div class="geo-stat"><strong>Producers percentile</strong><span>{positioning.producer_net_percentile_1y:.0f}/100</span><small>1 an</small></div>
       <div class="geo-stat"><strong>Code</strong><span>{html.escape(positioning.contract_code)}</span></div>
     </div>
     <div class="table-wrap">
@@ -10042,7 +10656,7 @@ def render_etf_flows_panel(analysis: ETFFlowsAnalysis | None) -> str:
         <tbody>{''.join(rows) or '<tr><td colspan="6">Aucun detail GLD/IAU disponible.</td></tr>'}</tbody>
       </table>
     </div>
-    <div class="metric-footnote">{html.escape(analysis.source_note)} {source_link}</div>
+    <div class="metric-footnote">{html.escape(analysis.source_name)} · {html.escape(analysis.source_note)} {source_link}</div>
     """.strip()
 
 
@@ -10120,6 +10734,8 @@ def render_macro_catalysts_panel(calendar: MacroCatalystCalendar | None) -> str:
     <div class="geo-grid">
       <div class="geo-stat"><strong>Prochain event</strong><span>{html.escape(next_event.event_type if next_event else "n/a")}</span></div>
       <div class="geo-stat"><strong>Countdown</strong><span>{html.escape(format_macro_countdown(next_event.minutes_to_event) if next_event else "n/a")}</span></div>
+      <div class="geo-stat"><strong>Densite 24h</strong><span>{html.escape(calendar.density_status)}</span><small>{calendar.high_impact_24h} HIGH</small></div>
+      <div class="geo-stat"><strong>Pre-event</strong><span>{'ON' if calendar.pre_event_active else 'OFF'}</span><small>{html.escape(calendar.pre_event_summary)}</small></div>
       <div class="geo-stat"><strong>FedWatch</strong><span>{html.escape(calendar.fedwatch_status)}</span></div>
       <div class="geo-stat"><strong>Refresh</strong><span>{html.escape(format_timestamp_for_humans(calendar.generated_at))}</span></div>
     </div>
@@ -11041,6 +11657,8 @@ def render_official_macro_panel(official_macro_rates: OfficialMacroRates | None,
     <div class="geo-grid">
       {rate_cell("10Y nominal officiel", official_macro_rates.dgs10, "FRED DGS10")}
       {rate_cell("2Y nominal officiel", official_macro_rates.dgs2, "FRED DGS2")}
+      {rate_cell("3M nominal officiel", official_macro_rates.dgs3m, "FRED DGS3MO")}
+      {rate_cell("30Y nominal officiel", official_macro_rates.dgs30, "FRED DGS30")}
       {rate_cell("Breakeven inflation 10Y", official_macro_rates.t10yie, "FRED T10YIE")}
       {rate_cell("10Y reel officiel", official_macro_rates.dfii10, "FRED DFII10")}
       <div class="geo-stat"><strong>Controle Yahoo ^TNX</strong><span>{yahoo_us10y.price:.2f}%</span><small>Ecart vs FRED DGS10: {html.escape(gap_line)}</small></div>
@@ -12527,6 +13145,7 @@ def fetch_local_free_context(
     us10y: SymbolSnapshot,
     news: list[NewsItem],
     technical_readings: list[TechnicalReading],
+    macro_catalysts: MacroCatalystCalendar | None = None,
 ) -> tuple[
     SymbolSnapshot | None,
     OfficialMacroRates,
@@ -12547,9 +13166,11 @@ def fetch_local_free_context(
 
     dgs10 = cached_snapshot("fred_dgs10", lambda: fetch_fred_series_snapshot("DGS10", FRED_SERIES_LABELS["DGS10"]))
     dgs2 = cached_snapshot("fred_dgs2", lambda: fetch_fred_series_snapshot("DGS2", FRED_SERIES_LABELS["DGS2"]))
+    dgs3m = cached_snapshot("fred_dgs3m", lambda: fetch_fred_series_snapshot("DGS3MO", FRED_SERIES_LABELS["DGS3MO"]))
+    dgs30 = cached_snapshot("fred_dgs30", lambda: fetch_fred_series_snapshot("DGS30", FRED_SERIES_LABELS["DGS30"]))
     breakeven_10y = cached_snapshot("fred_t10yie", lambda: fetch_fred_series_snapshot("T10YIE", FRED_SERIES_LABELS["T10YIE"]))
     real_yield = cached_snapshot("fred_dfii10", fetch_real_yield_snapshot)
-    official_macro_rates = build_official_macro_rates(dgs10, dgs2, breakeven_10y, real_yield, us10y)
+    official_macro_rates = build_official_macro_rates(dgs10, dgs2, dgs3m, dgs30, breakeven_10y, real_yield, us10y)
     dxy_cross = cached_snapshot(
         "dxy_cross",
         lambda: fetch_optional_symbol_snapshot("DX-Y.NYB", "US Dollar Index", interval="1d", data_range="6mo"),
@@ -12623,7 +13244,7 @@ def fetch_local_free_context(
         wti=wti,
         brent=brent,
     )
-    event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix)
+    event_mode = build_event_mode_analysis(gold, technical_readings, gvz, vix, macro_catalysts)
     market_regime = build_market_regime_analysis(gold, dxy, us10y, news, wti=wti, brent=brent, event_mode=event_mode)
     return real_yield, official_macro_rates, cross_asset, event_mode, market_regime, wti, brent
 
@@ -12643,6 +13264,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         us10y,
         live_bundle.news,
         technical_readings,
+        live_bundle.macro_catalysts,
     )
     analysis = analyze_market(
         gold,
@@ -12865,6 +13487,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         us10y,
         news,
         technical_readings,
+        macro_catalysts,
     )
     analysis = analyze_market(
         gold,

@@ -476,6 +476,107 @@ class NewsItem:
     is_breaking: bool = False
 
 
+SOURCE_CATEGORY_TO_LOGICAL: dict[str, str] = {
+    "critical_white_house_nitter": "geopolitical",
+    "critical_trump_nitter": "geopolitical",
+    "critical_trump_truth": "geopolitical",
+    "political_trump_truth": "geopolitical",
+    "political_trump_nitter": "geopolitical",
+    "political_white_house_nitter": "geopolitical",
+    "political_trump_iran": "geopolitical",
+    "political_netanyahu_iran": "geopolitical",
+    "political_white_house": "geopolitical",
+    "official_white_house": "geopolitical",
+    "fast_reuters": "geopolitical",
+    "fast_reuters_top": "geopolitical",
+    "fast_reuters_business": "geopolitical",
+    "fast_reuters_markets": "geopolitical",
+    "fast_bloomberg": "geopolitical",
+    "fast_bloomberg_markets": "geopolitical",
+    "fast_ap_business": "geopolitical",
+    "fast_ap_top": "geopolitical",
+    "fast_ap_search": "geopolitical",
+    "fast_cnbc_markets": "geopolitical",
+    "fast_cnbc_search": "geopolitical",
+    "official_fed_speeches": "macro_fed",
+    "official_fed_monetary": "macro_fed",
+    "official_fed_press_all": "macro_fed",
+    "official_treasury": "macro_fed",
+    "official_ecb": "macro_fed",
+    "official_boe": "macro_fed",
+    "official_boj": "macro_fed",
+    "political_trump_fed": "macro_fed",
+    "political_trump_dollar": "macro_fed",
+    "political_confirmed_wire": "geopolitical",
+    "official_bls": "macro_cpi",
+    "official_bea": "macro_cpi",
+    "official_cftc_press": "sentiment_cot",
+    "official_wgc": "physical_demand",
+}
+
+PRIORITY_NEWS_CATEGORIES: set[str] = {
+    "geopolitical",
+    "risk_vix",
+    "gold",
+    "events_fomc",
+    "events_calendar",
+    "macro_fed",
+    "macro_cpi",
+    "macro_nfp",
+    "sentiment_cot",
+    "sentiment_etf",
+    "sentiment_oi",
+    "physical_demand",
+}
+
+CATEGORY_PRIORITY: dict[str, int] = {
+    "geopolitical": 0,
+    "gold": 1,
+    "macro_fed": 2,
+    "macro_cpi": 3,
+    "macro_nfp": 4,
+    "events_fomc": 5,
+    "risk_vix": 6,
+    "sentiment_cot": 7,
+    "sentiment_etf": 8,
+    "sentiment_oi": 9,
+    "physical_demand": 10,
+    "events_calendar": 11,
+}
+
+
+def logical_category(item_or_category: NewsItem | str) -> str:
+    """Mappe une categorie source Phase 4.5 vers la categorie metier utilisee par les agents."""
+    if isinstance(item_or_category, str):
+        return SOURCE_CATEGORY_TO_LOGICAL.get(item_or_category, item_or_category)
+
+    raw_category = item_or_category.category
+    text = normalize_title_for_dedupe(item_or_category.title)
+
+    if raw_category in {"official_bls", "official_bea"}:
+        if text_contains_any(text, ("jobs", "employment", "payroll", "nfp", "nonfarm", "jobless", "claims")):
+            return "macro_nfp"
+        if text_contains_any(text, ("cpi", "pce", "inflation", "prices", "price index", "personal income", "outlays")):
+            return "macro_cpi"
+        return SOURCE_CATEGORY_TO_LOGICAL.get(raw_category, raw_category)
+
+    if raw_category.startswith("fast_") or raw_category.startswith("critical_") or raw_category.startswith("political_"):
+        if text_contains_any(text, ("fed", "fomc", "powell", "rate", "rates", "yields", "treasury", "dollar", "tariff", "sanction")):
+            return "macro_fed"
+        if text_contains_any(text, ("cpi", "pce", "inflation", "prices")):
+            return "macro_cpi"
+        if text_contains_any(text, ("jobs", "payroll", "employment", "nfp", "nonfarm")):
+            return "macro_nfp"
+        if text_contains_any(text, ("cot", "commitments of traders", "managed money")):
+            return "sentiment_cot"
+        if text_contains_any(text, ("etf", "gld", "iau", "inflow", "outflow", "holdings")):
+            return "sentiment_etf"
+        if text_contains_any(text, ("vix", "volatility", "risk aversion")):
+            return "risk_vix"
+
+    return SOURCE_CATEGORY_TO_LOGICAL.get(raw_category, raw_category)
+
+
 @dataclass
 class EventFact:
     title: str
@@ -6556,10 +6657,11 @@ def event_fact_direction(fact: NewsFact) -> str:
 
 
 def top_news_titles(news: list[NewsItem], categories: set[str] | None = None, limit: int = 2) -> str:
+    selected_categories = {logical_category(category) for category in categories} if categories else None
     selected = [
         clean_display_text(item.title)
         for item in news
-        if categories is None or item.category in categories
+        if selected_categories is None or logical_category(item) in selected_categories
     ][:limit]
     return " | ".join(selected) if selected else "aucun titre exploitable"
 
@@ -6951,7 +7053,7 @@ def build_passive_agent_results(
         event_score = clamp_score(sum(fact.confidence * weight for fact, weight in zip(qualified_facts, fact_weights)) / sum(fact_weights))
         buy_votes = sum(1 for fact in qualified_facts if event_fact_direction(fact) == "BUY")
         sell_votes = sum(1 for fact in qualified_facts if event_fact_direction(fact) == "SELL")
-        event_bias = "BUY" if buy_votes > sell_votes else "SELL" if sell_votes > buy_votes else "NEUTRAL"
+        event_bias = "BUY" if buy_votes > sell_votes else "SELL" if sell_votes > buy_votes else "CAUTION"
         primary_fact = sorted(
             qualified_facts,
             key=lambda fact: (
@@ -7731,7 +7833,8 @@ def classify_bias(score: int) -> str:
 
 
 def filter_news_by_categories(news: list[NewsItem], categories: set[str]) -> list[NewsItem]:
-    return [item for item in news if item.category in categories]
+    selected = {logical_category(category) for category in categories}
+    return [item for item in news if logical_category(item) in selected]
 
 
 def count_keyword_matches(items: list[NewsItem], keywords: set[str]) -> int:
@@ -8004,7 +8107,8 @@ def analyze_market(
 
     category_scores: dict[str, int] = {}
     for item in news:
-        category_scores[item.category] = category_scores.get(item.category, 0) + item.score
+        category = logical_category(item)
+        category_scores[category] = category_scores.get(category, 0) + item.score
 
     normalized_news_score = sum(clamp(value, -2, 2) for value in category_scores.values())
     news_score = round(clamp(normalized_news_score / 2, -4, 4))
@@ -8116,22 +8220,12 @@ def parse_iso_sort_key(iso_text: str) -> datetime:
         return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
-def headline_sort_key(item: NewsItem) -> tuple[int, datetime]:
-    category_priority = {
-        "geopolitical": 0,
-        "gold": 1,
-        "macro_fed": 2,
-        "macro_cpi": 3,
-        "macro_nfp": 4,
-        "events_fomc": 5,
-        "risk_vix": 6,
-        "sentiment_cot": 7,
-        "sentiment_etf": 8,
-        "sentiment_oi": 9,
-        "physical_demand": 10,
-        "events_calendar": 11,
-    }
-    return (category_priority.get(item.category, 99), parse_iso_sort_key(item.published_at))
+def headline_sort_key(item: NewsItem) -> tuple[int, int, int, float]:
+    priority = CATEGORY_PRIORITY.get(logical_category(item), 99)
+    newest_first = -parse_iso_sort_key(item.published_at).timestamp()
+    breaking_boost = 0 if item.is_breaking else 1
+    source_tier = news_source_tier(item.source, item.link)
+    return (priority, breaking_boost, source_tier, newest_first)
 
 
 def text_contains_any(text: str, patterns: tuple[str, ...]) -> bool:
@@ -8200,37 +8294,39 @@ def explain_headline_gold_impact(item: NewsItem) -> tuple[str, str]:
             ),
         )
 
-    if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "dovish", "pause")) or item.category == "macro_fed":
+    category = logical_category(item)
+
+    if text_contains_any(text, ("fed", "fomc", "powell", "minutes", "rate", "cut", "cuts", "dovish", "pause")) or category == "macro_fed":
         if item.score > 0:
             return ("bullish", "Une Fed percue comme moins restrictive est plutot favorable a l'or.")
         if item.score < 0:
             return ("bearish", "Une Fed plus restrictive soutient le dollar et les rendements, donc pese sur l'or.")
         return ("mixte", "Le message Fed n'est pas assez net pour donner un avantage clair a l'or.")
 
-    if text_contains_any(text, ("cpi", "inflation", "gasoline")) or item.category == "macro_cpi":
+    if text_contains_any(text, ("cpi", "inflation", "gasoline")) or category == "macro_cpi":
         if item.score > 0:
             return ("bullish", "Une inflation qui se calme peut reduire la pression sur les taux et aider l'or.")
         if item.score < 0:
             return ("bearish", "Une inflation qui repart complique les baisses de taux et peut penaliser l'or.")
         return ("mixte", "L'effet inflation est partage entre theme refuge et risque de Fed plus dure.")
 
-    if text_contains_any(text, ("jobs", "nfp", "nonfarm", "employment", "payroll")) or item.category == "macro_nfp":
+    if text_contains_any(text, ("jobs", "nfp", "nonfarm", "employment", "payroll")) or category == "macro_nfp":
         if item.score > 0:
             return ("bullish", "Un emploi plus faible peut detendre le dollar et les rendements, ce qui aide l'or.")
         if item.score < 0:
             return ("bearish", "Un emploi solide peut renforcer le dollar et retarder les baisses de taux.")
         return ("mixte", "Les chiffres de l'emploi ne donnent pas ici un signal directionnel clair.")
 
-    if text_contains_any(text, ("cot", "managed money", "speculative")) or item.category == "sentiment_cot":
+    if text_contains_any(text, ("cot", "managed money", "speculative")) or category == "sentiment_cot":
         return ("info", "Le COT ne bouge pas directement le prix intraday, mais il dit si le marche est deja trop charge.")
 
-    if text_contains_any(text, ("open interest",)) or item.category == "sentiment_oi":
+    if text_contains_any(text, ("open interest",)) or category == "sentiment_oi":
         return ("info", "L'open interest confirme surtout si le mouvement est alimente par de nouveaux engagements.")
 
-    if text_contains_any(text, ("etf", "gld", "iau")) or item.category == "sentiment_etf":
+    if text_contains_any(text, ("etf", "gld", "iau")) or category == "sentiment_etf":
         return ("info", "Les flux ETF sont utiles pour le fond de marche, plus que pour un declenchement intraday instantane.")
 
-    if text_contains_any(text, ("vix", "fear", "volatility")) or item.category == "risk_vix":
+    if text_contains_any(text, ("vix", "fear", "volatility")) or category == "risk_vix":
         return ("mixte", "Une hausse de la peur soutient la couverture, mais selon le contexte le dollar peut capter une partie de ces flux.")
 
     if item.score > 0:
@@ -8258,7 +8354,7 @@ def pick_story_headlines(news: list[NewsItem], limit: int = 6) -> list[NewsItem]
     sorted_news = sorted(news, key=headline_sort_key, reverse=False)
     for category in preferred_categories:
         for item in sorted_news:
-            if item.category != category:
+            if logical_category(item) != category:
                 continue
             key = normalize_title_for_dedupe(item.title)
             if key in seen:
@@ -8281,12 +8377,12 @@ def pick_story_headlines(news: list[NewsItem], limit: int = 6) -> list[NewsItem]
 
 
 def find_story_for_categories(news: list[NewsItem], *categories: str) -> NewsItem | None:
-    selected = set(categories)
+    selected = {logical_category(category) for category in categories}
     for item in pick_story_headlines(news, limit=max(10, len(selected) * 2)):
-        if item.category in selected:
+        if logical_category(item) in selected:
             return item
     for item in news:
-        if item.category in selected:
+        if logical_category(item) in selected:
             return item
     return None
 
@@ -8597,16 +8693,12 @@ def build_event_facts(
     gold: SymbolSnapshot | None = None,
 ) -> list[NewsFact]:
     """Construit les NewsFacts v3 avec deduplication semantique et snapshots marche."""
-    priority_categories = {
-        "geopolitical", "risk_vix", "gold", "events_fomc", "events_calendar",
-        "macro_fed", "macro_cpi", "macro_nfp", "sentiment_cot", "sentiment_etf", "sentiment_oi",
-    }
     candidates = [
         item
         for item in pick_story_headlines(news, limit=max(limit * 3, 18))
         if not should_skip_headline(item.title, item.source)
         and news_source_tier(item.source, item.link) <= 3
-        and (item.category in priority_categories or abs(item.score) >= 1)
+        and (logical_category(item) in PRIORITY_NEWS_CATEGORIES or abs(item.score) >= 1)
     ]
     raw_facts = [
         build_event_fact_from_news(item, wti=wti, brent=brent, dxy=dxy, us10y=us10y, gold=gold)
@@ -11229,8 +11321,8 @@ def render_news_flow_panel(
                 "impact": impact,
                 "url": item.link,
                 "confidence": min(100, max(30, 50 + abs(item.score) * 5)),
-                "kind": item.category or "Headline",
-                "summary": summarize_headline_for_user(item.title, item.source, item.category),
+                "kind": logical_category(item) or "Headline",
+                "summary": summarize_headline_for_user(item.title, item.source, logical_category(item)),
                 "detail": "; ".join(item.score_reasons[:2]),
             }
         )

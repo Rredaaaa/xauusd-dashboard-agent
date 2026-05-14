@@ -38,6 +38,7 @@ from xauusd_agent import (
     CRITICAL_FAST_FEEDS,
     FAST_NEWS_RSS_FEEDS,
     OFFICIAL_NEWS_RSS_FEEDS,
+    SOURCE_CATEGORY_TO_LOGICAL,
     append_audit_log_snapshot,
     apply_user_settings_to_agents,
     build_market_regime_analysis,
@@ -46,6 +47,7 @@ from xauusd_agent import (
     build_event_mode_analysis,
     build_official_macro_rates,
     build_event_facts,
+    build_geopolitical_analysis,
     build_data_quality_snapshot,
     build_trade_ledger_summary,
     build_replay_report,
@@ -54,6 +56,11 @@ from xauusd_agent import (
     build_political_statements,
     build_chart_store,
     detect_recent_swing_levels,
+    filter_news_by_categories,
+    find_story_for_categories,
+    headline_sort_key,
+    logical_category,
+    pick_story_headlines,
     parse_bea_release_schedule,
     parse_fed_rss_events,
     parse_fomc_calendar_events,
@@ -132,6 +139,107 @@ class HeadlineScoringTests(unittest.TestCase):
         self.assertEqual(classify_bias(0), "neutral")
         self.assertEqual(classify_bias(-2), "slightly bearish")
         self.assertEqual(classify_bias(-6), "bearish")
+
+
+class Phase45NewsCategoryMappingTests(unittest.TestCase):
+    def news_item(
+        self,
+        category: str,
+        title: str = "New attacks near Hormuz as White House says Iran cannot get nuclear weapon",
+        source: str = "Nitter White House",
+        link: str = "https://nitter.net/WhiteHouse/status/1234",
+        score: int = 0,
+    ) -> NewsItem:
+        return NewsItem(
+            title=title,
+            source=source,
+            link=link,
+            published_at="2026-05-14T10:52:00+00:00",
+            category=category,
+            score=score,
+            score_reasons=[],
+            is_breaking=True,
+        )
+
+    def test_phase45_source_categories_have_logical_mapping(self) -> None:
+        expected = {
+            "critical_white_house_nitter": "geopolitical",
+            "critical_trump_truth": "geopolitical",
+            "fast_reuters": "geopolitical",
+            "fast_bloomberg_markets": "geopolitical",
+            "official_white_house": "geopolitical",
+            "official_ecb": "macro_fed",
+            "official_fed_press_all": "macro_fed",
+            "official_bea": "macro_cpi",
+            "official_cftc_press": "sentiment_cot",
+            "political_trump_fed": "macro_fed",
+        }
+        for raw_category, expected_logical in expected.items():
+            self.assertEqual(SOURCE_CATEGORY_TO_LOGICAL[raw_category], expected_logical)
+            self.assertEqual(logical_category(raw_category), expected_logical)
+
+    def test_build_event_facts_accepts_phase45_categories_with_zero_keyword_score(self) -> None:
+        news = [
+            self.news_item("critical_white_house_nitter"),
+            self.news_item(
+                "fast_bloomberg_markets",
+                title="Two India-Bound LPG Tankers Add to Uptick in Hormuz Transits",
+                source="Bloomberg",
+            ),
+            self.news_item(
+                "fast_reuters",
+                title="New attacks on ships near Hormuz as Trump discusses Iran with Xi",
+                source="Reuters",
+            ),
+            self.news_item(
+                "official_ecb",
+                title="ECB President says inflation path still affects rate policy",
+                source="ECB",
+                link="https://www.ecb.europa.eu/press/pr/date/2026/html/test.en.html",
+            ),
+        ]
+
+        facts = build_event_facts(news, limit=6)
+
+        self.assertGreaterEqual(len(facts), 4)
+        categories = {fact.category for fact in facts}
+        self.assertIn("critical_white_house_nitter", categories)
+        self.assertIn("fast_bloomberg_markets", categories)
+        self.assertIn("fast_reuters", categories)
+        self.assertIn("official_ecb", categories)
+
+    def test_geopolitical_analysis_uses_phase45_categories(self) -> None:
+        analysis = build_geopolitical_analysis(
+            [
+                self.news_item("critical_white_house_nitter", title="War escalation and attack risk rises near Hormuz"),
+                self.news_item("fast_reuters", title="New attack near Hormuz raises geopolitical risk", source="Reuters"),
+            ]
+        )
+
+        self.assertEqual(analysis.risk_off_status, "actif")
+        self.assertGreaterEqual(analysis.score, 56)
+        self.assertTrue(analysis.event_watch)
+
+    def test_story_selection_and_filters_use_logical_categories(self) -> None:
+        critical = self.news_item("critical_white_house_nitter")
+        macro = self.news_item(
+            "official_fed_press_all",
+            title="Federal Reserve statement keeps rates under review",
+            source="Federal Reserve",
+        )
+        news = [macro, critical]
+
+        self.assertEqual(filter_news_by_categories(news, {"geopolitical"}), [critical])
+        self.assertEqual(find_story_for_categories(news, "macro_fed"), macro)
+        picked_categories = {logical_category(item) for item in pick_story_headlines(news, limit=2)}
+        self.assertIn("geopolitical", picked_categories)
+        self.assertIn("macro_fed", picked_categories)
+
+    def test_headline_sort_key_prioritizes_critical_categories(self) -> None:
+        critical = self.news_item("critical_white_house_nitter")
+        low_priority = self.news_item("unknown_feed", title="Generic market headline", source="RSS", score=0)
+
+        self.assertLess(headline_sort_key(critical)[0], headline_sort_key(low_priority)[0])
 
 
 class AnalysisShapeTests(unittest.TestCase):

@@ -63,6 +63,32 @@ Sources officielles:
 - Les erreurs et audits JSONL sont rotates quand le fichier grossit.
 - Si les feeds Trump/White House sont down, le dashboard doit signaler le mode degrade au lieu d'inventer un signal.
 
+## Hotfix categories news Phase 4.5
+
+Le rapport `fourniwell_v4_phase45_bugs_categories_news.md` a identifie que les nouvelles categories Phase 4.5 etaient collectees mais encore rejetees par plusieurs anciens filtres.
+
+Correction livree:
+
+- mapping central `SOURCE_CATEGORY_TO_LOGICAL`;
+- helper `logical_category(...)`;
+- `filter_news_by_categories(...)` base sur les categories logiques;
+- `headline_sort_key(...)` base sur categorie logique + source tier + breaking + publication;
+- `pick_story_headlines(...)` base sur categorie logique;
+- `find_story_for_categories(...)` base sur categorie logique;
+- `build_event_facts(...)` accepte les categories `critical_*`, `fast_*`, `official_*`, `political_*` via mapping logique;
+- `build_geopolitical_analysis(...)` recoit les nouvelles sources via `filter_news_by_categories`;
+- `explain_headline_gold_impact(...)` reconnait les categories logiques;
+- `EventFactsAgent` passe en `CAUTION` quand des faits qualifies existent mais que leur direction reste mixte, au lieu de rester `NEUTRAL`.
+
+Validation locale apres hotfix:
+
+- `python3 -m py_compile xauusd_agent.py news_facts.py`: OK;
+- `python3 -m unittest discover tests`: 126 tests OK;
+- regeneration `reports/xauusd_dashboard.html`, `reports/xauusd_report.md`, `reports/xauusd_data.json`: OK;
+- payload de validation: 24 headlines, 6 NewsFacts, categories `critical_white_house_nitter`, `fast_bloomberg_markets`, `official_fed_press_all`;
+- `EventFactsAgent`: `CAUTION`, score 87/100, confiance 87/100;
+- `geopolitical_analysis.event_watch`: 5 elements.
+
 ## Regimes de marche
 
 Regimes geres:

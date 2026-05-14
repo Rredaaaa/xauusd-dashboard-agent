@@ -101,6 +101,17 @@ Depuis la Phase 4.5:
 - si les feeds Trump/White House tombent tous, l'Inspector doit montrer le mode degrade;
 - aucun headline faible ne doit remplacer une source officielle disponible.
 
+Hotfix Phase 4.5 categories news:
+
+- les agents ne filtrent plus directement sur les categories brutes de source;
+- `logical_category(...)` route les categories `critical_*`, `fast_*`, `official_*` et `political_*` vers les categories metier;
+- Trump/White House/Reuters/Bloomberg/AP/CNBC rapides vont vers `geopolitical`, sauf titre clairement macro;
+- Fed/ECB/BOE/BOJ/Treasury vont vers `macro_fed`;
+- BLS/BEA vont vers `macro_cpi` ou `macro_nfp` selon le titre;
+- CFTC press va vers `sentiment_cot`;
+- WGC va vers `physical_demand`;
+- les filtres `build_event_facts`, `pick_story_headlines`, `build_geopolitical_analysis`, `find_story_for_categories` et `explain_headline_gold_impact` doivent utiliser ces categories logiques.
+
 ## Orchestrateur v3 et poids dynamiques
 
 Depuis la Phase 29, l'Orchestrateur v3 combine les composants suivants avec des poids contextuels:

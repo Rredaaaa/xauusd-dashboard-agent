@@ -773,6 +773,7 @@ Livraison effective:
 - ordre force BUY/SELL;
 - R/R TP1 minimal 1.50R;
 - sorties partielles 50/30/20;
+- quick win pre-Phase 7: sorties partielles exposees dans `Signal locked`, `Trade Tracker` et Inspector;
 - integration TechnicalDecisionEngine, GlobalRecommendation, OrchestratorDecision et TradePlan lock;
 - tests BUY/SELL/RR/setup.
 
@@ -822,9 +823,11 @@ Livrable:
 - moins de trades forces en range;
 - meilleur choix du setup dominant.
 
-## 11. Phase 8 - Calibration et backtest
+## 11. Phase 7.5 - Calibration Orchestrator Backtest
 
 Objectif: arreter les poids arbitraires et valider si le systeme peut etre rentable.
+
+Position officielle: cette phase doit etre executee juste apres la Phase 7 et avant toute phase UI/production. Elle bloque la suite si les poids restent non justifies.
 
 Actions:
 
@@ -854,7 +857,7 @@ Livrable:
 - poids justifies;
 - Go/No-Go pour interface finale et production.
 
-## 12. Phase 9 - Interface Fourniwell Signals
+## 12. Phase 8 - Interface Fourniwell Signals
 
 Objectif: rendre le produit lisible pour un utilisateur final.
 
@@ -923,7 +926,7 @@ Livrable:
 - separation viewer/admin;
 - interface vendable.
 
-## 13. Phase 10 - Preparation SaaS
+## 13. Phase 9 - Preparation SaaS
 
 Objectif: preparer les utilisateurs lecture seule et l'abonnement mensuel.
 
@@ -949,7 +952,7 @@ Livrable:
 
 - Fourniwell Signals pret pour abonnement mensuel.
 
-## 14. Phase 11 - QA, replay et validation
+## 14. Phase 10 - QA, replay et validation
 
 Objectif: valider avant de croire le systeme.
 
@@ -980,7 +983,7 @@ Livrable:
 - rapport de validation v4;
 - decision Go/No-Go production.
 
-## 15. Phase 12 - Deploiement VPS
+## 15. Phase 11 - Deploiement VPS
 
 Objectif: mettre Fourniwell Signals en ligne proprement.
 
@@ -1015,13 +1018,13 @@ Livrable:
 5. Phase 4 - Rebuild des agents. Statut: livre partiel, a completer par Phase 4.5.
 6. Phase 4.5 - Redressement exhaustif avant Phase 5. Statut: livree le 2026-05-14.
 7. Phase 5 - News Reaction Engine. Statut: livree le 2026-05-14.
-8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14.
+8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14, quick win UI partiels + fallback Trump livre le 2026-05-14.
 9. Phase 7 - Multi-Strategy Engine.
-10. Phase 8 - Calibration et backtest.
-11. Phase 9 - Interface Fourniwell Signals.
-12. Phase 10 - Preparation SaaS.
-13. Phase 11 - QA, replay et validation.
-14. Phase 12 - Deploiement VPS.
+10. Phase 7.5 - Calibration Orchestrator Backtest.
+11. Phase 8 - Interface Fourniwell Signals.
+12. Phase 9 - Preparation SaaS.
+13. Phase 10 - QA, replay et validation.
+14. Phase 11 - Deploiement VPS.
 
 ## 17. Regles de gouvernance
 
@@ -1042,5 +1045,11 @@ Cette roadmap v1.1 devient la base de travail v4.0 apres validation utilisateur.
 La prochaine phase officielle est:
 
 `Phase 7 - Multi-Strategy Engine`
+
+Correctifs pre-Phase 7 livres:
+
+- affichage des TP partiels 50/30/20 dans les vues trade;
+- fallback degrade Google News si tous les feeds Trump/White House directs tombent;
+- insertion officielle de la Phase 7.5 avant l'interface et la production.
 
 Phase 6 est livree. La prochaine phase officielle est Phase 7, sauf correction critique de validation Phase 6.

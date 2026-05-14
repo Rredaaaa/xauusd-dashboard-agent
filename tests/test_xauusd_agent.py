@@ -1,5 +1,6 @@
 import json
 import unittest
+import xml.etree.ElementTree as ET
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,7 @@ from xauusd_agent import (
     build_chart_store,
     detect_recent_swing_levels,
     filter_news_by_categories,
+    fetch_political_statement_news,
     find_story_for_categories,
     headline_sort_key,
     logical_category,
@@ -79,6 +81,8 @@ from xauusd_agent import (
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
     render_dashboard,
+    render_signal_locked_panel,
+    render_trade_tracker_panel,
     render_replay_report_markdown,
     write_reports_v3,
     load_user_settings,
@@ -857,7 +861,7 @@ class AnalysisShapeTests(unittest.TestCase):
         )
         dashboard = render_dashboard(bundle)
         self.assertIn("Dashboard XAUUSD", dashboard)
-        self.assertIn("Aureum Flux Trading Desk", dashboard)
+        self.assertIn("Fourniwell Signals Trading Desk", dashboard)
         self.assertIn("Decision exploitable et charte live", dashboard)
         self.assertIn("Chef de file", dashboard)
         self.assertIn("Signal locked", dashboard)
@@ -2969,6 +2973,93 @@ class Phase6TradeLevelsTests(unittest.TestCase):
         self.assertEqual(trade_setup_from_structure("breakout", "BUY"), "breakout")
         self.assertEqual(trade_setup_from_structure("range", "SELL"), "range")
         self.assertEqual(trade_setup_from_structure("reversal", "SELL"), "pivot_rejection")
+
+    def test_phase6_dashboard_exposes_partial_tp_plan(self) -> None:
+        plan = TradePlan(
+            trade_id="SELL-TEST",
+            created_at="2026-05-14T10:00:00+00:00",
+            updated_at="2026-05-14T10:00:00+00:00",
+            status="open",
+            direction="SELL",
+            entry_type="trend_continuation",
+            reference_price=2400.0,
+            entry_zone_low=2398.0,
+            entry_zone_high=2402.0,
+            stop_loss=2410.0,
+            tp1=2385.0,
+            tp2=2375.0,
+            tp3=2360.0,
+            risk_reward_tp1=1.5,
+            risk_reward_tp2=2.5,
+            risk_reward_tp3=4.0,
+            max_valid_until="2026-05-14T14:00:00+00:00",
+            source_signal_id="signal",
+            global_score_at_creation=72,
+            data_quality_score=82,
+            confidence_score=70,
+            market_regime="normal",
+            agents_validating=["TechnicalAgent"],
+            agents_contradicting=[],
+            evidence_sources=["test"],
+            event_facts_snapshot=[],
+            technical_snapshot="M15:SELL",
+            macro_snapshot="",
+            geopolitical_snapshot="",
+            elliott_wave_snapshot="",
+            invalidation_rules=[],
+            outcome="open",
+            outcome_reason="open",
+        )
+        ledger = TradeLedgerSummary(
+            ledger_path="reports/trade_ledger.jsonl",
+            generated_at="2026-05-14T10:00:00+00:00",
+            quality_gate_status="TRADE_SELL",
+            quality_gate_reasons=[],
+            active_trades=[plan],
+            recent_trades=[plan],
+            total_trades=1,
+        )
+        recommendation = TradeRecommendation("SELL", "SELL", 72, "resume", [], 2410.0, 2385.0, 2375.0, "source")
+        signal_html = render_signal_locked_panel(ledger, recommendation, None, None)
+        tracker_html = render_trade_tracker_panel(ledger)
+        self.assertIn("TP1 · 50%", signal_html)
+        self.assertIn("TP2 · 30%", signal_html)
+        self.assertIn("TP3 · 20%", signal_html)
+        self.assertIn("TP1 50%", tracker_html)
+        self.assertIn("TP2 30%", tracker_html)
+        self.assertIn("TP3 20%", tracker_html)
+
+    def test_phase6_trump_direct_down_uses_google_news_fallback(self) -> None:
+        rss = ET.fromstring(
+            """
+            <rss><channel><title>Google News</title>
+              <item>
+                <title>Reuters: Trump says Iran oil sanctions remain possible</title>
+                <link>https://www.reuters.com/world/trump-iran-oil</link>
+                <pubDate>Thu, 14 May 2026 10:00:00 GMT</pubDate>
+                <source>Reuters</source>
+              </item>
+            </channel></rss>
+            """
+        )
+
+        def fake_fetch_root(category: str, _url: str, **_kwargs):
+            if category == "political_trump_google_fallback":
+                return rss
+            return None
+
+        with patch("xauusd_agent.fetch_nitter_feed_with_fallback", return_value=None), patch("xauusd_agent.fetch_rss_root", side_effect=fake_fetch_root), patch("xauusd_agent.append_source_error") as append_error:
+            items = fetch_political_statement_news(limit=4)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].category, "political_trump_google_fallback")
+        self.assertIn("Trump", items[0].title)
+        append_error.assert_any_call(
+            "trump_political_direct_feeds",
+            unittest.mock.ANY,
+            "all_trump_white_house_direct_feeds_down",
+            criticality="high",
+        )
 
 
 if __name__ == "__main__":

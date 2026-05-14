@@ -4,6 +4,12 @@ Statut: livree le 2026-05-14.
 
 Objectif: remplacer les SL/TP mecaniques par des niveaux de marche verifiables, avec R/R minimal et sorties partielles.
 
+Patch pre-Phase 7 livre le 2026-05-14:
+
+- `Signal locked`, `Trade Tracker` et Inspector affichent maintenant explicitement `TP1 50%`, `TP2 30%`, `TP3 20%`;
+- fallback Google News politique active seulement si Truth Social, White House et tous les mirrors Nitter Trump/WhiteHouse sont indisponibles;
+- Phase 7.5 ajoutee a la roadmap juste apres Phase 7 pour calibrer l'Orchestrator par backtest avant l'interface et la production.
+
 ## Ce qui est livre
 
 ### 1. MarketTradeLevels
@@ -99,6 +105,8 @@ Tests ajoutes:
 - SELL: ordre des niveaux + R/R TP1 >= 1.5;
 - TechnicalDecision utilise les niveaux marche v4;
 - mapping structure -> setup.
+- UI: sorties partielles visibles dans les panneaux trade;
+- news politique: fallback Google News degrade si tous les feeds directs Trump/WhiteHouse tombent.
 
 ## Critere de reussite Phase 6
 

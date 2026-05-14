@@ -99,6 +99,11 @@ POLITICAL_STATEMENT_QUERIES = [
     ("political_confirmed_wire", '(Trump Iran oil gold OR Trump Fed dollar gold) (site:apnews.com OR site:reuters.com) when:14d'),
 ]
 
+POLITICAL_GOOGLE_FALLBACK_QUERIES = [
+    ("political_trump_google_fallback", '(Trump Iran oil gold OR "White House" Iran oil gold OR Trump Hormuz OR "US president" Iran oil market) when:2d'),
+    ("political_trump_google_fallback", '(Trump sanctions Iran oil OR Trump Powell rates gold OR "White House" dollar gold) when:2d'),
+]
+
 POLITICAL_RSS_FEEDS = [
     ("political_white_house", WHITE_HOUSE_NEWS_FEED_URL),
     ("political_trump_truth", TRUMP_TRUTH_SOCIAL_FEED_URL),
@@ -559,6 +564,7 @@ SOURCE_CATEGORY_TO_LOGICAL: dict[str, str] = {
     "critical_trump_truth": "geopolitical",
     "political_trump_truth": "geopolitical",
     "political_trump_nitter": "geopolitical",
+    "political_trump_google_fallback": "geopolitical",
     "political_white_house_nitter": "geopolitical",
     "political_trump_iran": "geopolitical",
     "political_netanyahu_iran": "geopolitical",
@@ -1506,6 +1512,11 @@ def fetch_nitter_feed_with_fallback(account: str, mirrors: list[str]) -> tuple[s
             return mirror_url, root
     append_source_error(f"nitter_{account}", ",".join(mirrors), "all_nitter_mirrors_down", criticality="high")
     return None
+
+
+def google_news_search_url(query: str) -> str:
+    encoded_query = urllib.parse.quote(query, safe='()":')
+    return f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
 
 def http_get_json(url: str) -> dict[str, Any]:
@@ -6256,6 +6267,7 @@ def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
     feed_hash_cache = load_feed_hash_cache()
     result_limit = max(limit, 12)
     deadline = time.time() + 12
+    direct_feed_ok = False
 
     for category, mirrors in (
         ("political_trump_nitter", TRUMP_NITTER_FEEDS),
@@ -6266,6 +6278,7 @@ def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
         fallback = fetch_nitter_feed_with_fallback(category, mirrors)
         if fallback is None:
             continue
+        direct_feed_ok = True
         _, root = fallback
         append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         items = keep_political_statement_candidates(items)
@@ -6277,18 +6290,39 @@ def fetch_political_statement_news(limit: int = 12) -> list[NewsItem]:
         root = fetch_rss_root(category, url, timeout=5, criticality="high")
         if root is None:
             continue
+        direct_feed_ok = True
         append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
         items = keep_political_statement_candidates(items)
         seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
 
+    if not direct_feed_ok:
+        append_source_error(
+            "trump_political_direct_feeds",
+            ",".join([TRUMP_TRUTH_SOCIAL_FEED_URL, WHITE_HOUSE_NEWS_FEED_URL, *TRUMP_NITTER_FEEDS, *WHITE_HOUSE_NITTER_FEEDS]),
+            "all_trump_white_house_direct_feeds_down",
+            criticality="high",
+        )
+        for category, query in POLITICAL_GOOGLE_FALLBACK_QUERIES:
+            if time.time() >= deadline or len(items) >= result_limit:
+                break
+            root = fetch_rss_root(category, google_news_search_url(query), timeout=6, criticality="low")
+            if root is None:
+                continue
+            append_rss_items(root, category, items, seen_titles, result_limit, feed_hash_cache=feed_hash_cache)
+            items = keep_political_statement_candidates(items)
+            seen_titles = {normalize_title_for_dedupe(item.title) for item in items}
+        if not items:
+            append_source_error(
+                "trump_political_google_fallback",
+                " | ".join(query for _category, query in POLITICAL_GOOGLE_FALLBACK_QUERIES),
+                "google_news_fallback_returned_no_political_statement",
+                criticality="medium",
+            )
+
     for category, query in POLITICAL_STATEMENT_QUERIES:
         if time.time() >= deadline or len(items) >= result_limit:
             break
-        encoded_query = urllib.parse.quote(query, safe='()":')
-        url = (
-            "https://news.google.com/rss/search"
-            f"?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
-        )
+        url = google_news_search_url(query)
         root = fetch_rss_root(category, url, timeout=6, criticality="low")
         if root is None:
             continue
@@ -11474,7 +11508,7 @@ def render_tradingview_chart(symbol: str = "OANDA:XAUUSD", interval: str = "15")
         allowtransparency="true"
         scrolling="no">
       </iframe>
-      <div class="footer-note">Charte live TradingView. Les niveaux internes restent calcules par Aureum Flux et ne remplacent pas la lecture graphique utilisateur.</div>
+      <div class="footer-note">Charte live TradingView. Les niveaux internes restent calcules par Fourniwell Signals et ne remplacent pas la lecture graphique utilisateur.</div>
     </div>
     """.strip()
 
@@ -11883,7 +11917,7 @@ def render_monitoring_inspector_panel(
                 <tr>
                   <td><strong>{html.escape(plan.trade_id)}</strong><br><span class="soft">{html.escape(format_timestamp_for_humans(plan.created_at))}</span></td>
                   <td>{html.escape(plan.direction)} @ {plan.reference_price:.2f}</td>
-                  <td>{plan.stop_loss:.2f} / {plan.tp1:.2f} / {plan.tp2:.2f} / {plan.tp3:.2f}</td>
+                  <td>SL {plan.stop_loss:.2f}<br>TP1 50% {plan.tp1:.2f}<br>TP2 30% {plan.tp2:.2f}<br>TP3 20% {plan.tp3:.2f}</td>
                   <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
                   <td>{html.escape(plan.outcome)}</td>
                   <td>{html.escape(plan.outcome_reason[:160])}</td>
@@ -11969,7 +12003,7 @@ def render_monitoring_inspector_panel(
     </div>
     <div class="table-wrap">
       <table class="technical-table">
-        <thead><tr><th>Trade</th><th>Entry</th><th>SL / TP1 / TP2 / TP3</th><th>Status</th><th>Outcome</th><th>Pourquoi</th></tr></thead>
+        <thead><tr><th>Trade</th><th>Entry</th><th>SL et sorties partielles</th><th>Status</th><th>Outcome</th><th>Pourquoi</th></tr></thead>
         <tbody>{''.join(trade_rows) or '<tr><td colspan="6">Aucun trade cree dans le ledger.</td></tr>'}</tbody>
       </table>
     </div>
@@ -12083,10 +12117,11 @@ def render_signal_locked_panel(
         <div class="trade-levels">
           <div><span>Entry</span><strong>{plan.reference_price:.2f}</strong></div>
           <div><span>SL</span><strong>{plan.stop_loss:.2f}</strong></div>
-          <div><span>TP1</span><strong>{plan.tp1:.2f}</strong></div>
-          <div><span>TP2</span><strong>{plan.tp2:.2f}</strong></div>
-          <div><span>TP3</span><strong>{plan.tp3:.2f}</strong></div>
+          <div><span>TP1 · 50%</span><strong>{plan.tp1:.2f}</strong></div>
+          <div><span>TP2 · 30%</span><strong>{plan.tp2:.2f}</strong></div>
+          <div><span>TP3 · 20%</span><strong>{plan.tp3:.2f}</strong></div>
         </div>
+        <p class="footer-note">Plan de sortie: fermer 50% a TP1, 30% a TP2, laisser 20% vers TP3.</p>
         <p class="trade-summary">TradePlan historise: les niveaux restent fixes meme si le signal live change.</p>
         """.strip()
     lead_status, lead_score, _lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
@@ -12360,7 +12395,7 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
               <td><strong>{html.escape(plan.direction)}</strong><br><span class="soft">{html.escape(plan.trade_id)}</span></td>
               <td>{plan.reference_price:.2f}<br><span class="soft">{plan.entry_zone_low:.2f} / {plan.entry_zone_high:.2f}</span></td>
               <td>{plan.stop_loss:.2f}</td>
-              <td>{plan.tp1:.2f} / {plan.tp2:.2f} / {plan.tp3:.2f}</td>
+              <td>TP1 50%: {plan.tp1:.2f}<br>TP2 30%: {plan.tp2:.2f}<br>TP3 20%: {plan.tp3:.2f}</td>
               <td class="{trade_status_class(plan.status)}">{html.escape(plan.status)}</td>
               <td>{html.escape(plan.outcome_reason[:120])}</td>
             </tr>
@@ -12423,7 +12458,7 @@ def render_trade_tracker_panel(ledger: TradeLedgerSummary | None) -> str:
     </div>
     <div class="table-wrap">
       <table class="technical-table">
-        <thead><tr><th>Trade</th><th>Entry / zone</th><th>SL</th><th>TP1 / TP2 / TP3</th><th>Status</th><th>Outcome reason</th></tr></thead>
+        <thead><tr><th>Trade</th><th>Entry / zone</th><th>SL</th><th>Sorties partielles</th><th>Status</th><th>Outcome reason</th></tr></thead>
         <tbody>{''.join(active_rows) or '<tr><td colspan="6">Aucun trade actif verrouille pour le moment.</td></tr>'}</tbody>
       </table>
     </div>
@@ -12596,7 +12631,7 @@ def render_terminal_state_board(
         """.strip()
         for label, status, detail, tone in cards
     )
-    return f'<section class="state-board" aria-label="Etats visuels Aureum Flux">{nodes}</section>'
+    return f'<section class="state-board" aria-label="Etats visuels Fourniwell Signals">{nodes}</section>'
 
 
 def render_cross_asset_panel(analysis: CrossAssetAnalysis | None, real_yield: SymbolSnapshot | None) -> str:
@@ -14028,7 +14063,7 @@ def render_dashboard_clarity_v2(
   <main class="page" id="dashboard-app">
     <div class="terminal-shell">
       <aside class="side-rail">
-        <div class="brand">AUREUM<br>FLUX</div>
+        <div class="brand">FOURNIWELL<br>SIGNALS</div>
         <div class="rail-card">
           <strong>Terminal XAUUSD</strong>
           <span>Gold/USD intraday intelligence</span>
@@ -14040,7 +14075,7 @@ def render_dashboard_clarity_v2(
       </aside>
       <div class="workspace">
         <header class="topbar">
-          <div class="topbar-brand">AUREUM FLUX</div>
+          <div class="topbar-brand">FOURNIWELL SIGNALS</div>
           <nav class="top-nav" aria-label="Navigation mobile">
             {nav_links("top-nav-link")}
           </nav>
@@ -14055,7 +14090,7 @@ def render_dashboard_clarity_v2(
         <section class="terminal-header">
           <div>
             <div class="section-kicker">Institutional analytics package</div>
-            <h1>Aureum Flux Trading Desk</h1>
+            <h1>Fourniwell Signals Trading Desk</h1>
             <p>Prix, chef de file, biais, charte live et signal locked. Les details internes restent dans Inspector.</p>
           </div>
           <div class="sync-pill">Ready for export</div>

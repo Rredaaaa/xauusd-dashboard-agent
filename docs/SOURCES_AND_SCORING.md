@@ -79,6 +79,7 @@ Le moteur regarde les relations attendues avec gold:
 | Fast news feeds | AP, CNBC, Reuters direct, Bloomberg direct | SentimentNewsAgent, EventFactsAgent |
 | Critical fast feeds | Truth Social, Nitter Trump, Nitter White House, White House, Fed, BEA, Reuters, Bloomberg, AP | SentimentNewsAgent, EventFactsAgent, TrumpPoliticalStatementsAgent |
 | Google News RSS cible | Discovery secondaire Tier 5, filtre strict | SentimentNewsAgent, EventFactsAgent |
+| Google News Trump fallback | Plan B degrade uniquement si Truth Social, White House et tous les mirrors Nitter Trump/WhiteHouse tombent | TrumpPoliticalStatementsAgent |
 | White House feed | Declarations officielles | TrumpPoliticalStatementsAgent |
 
 Les headlines seules ne suffisent pas. Les agents cherchent:
@@ -99,6 +100,7 @@ Depuis la Phase 4.5:
 - les erreurs source sont ecrites dans `reports/source_errors.jsonl`;
 - `reports/feed_hash_cache.json` sert a detecter les nouveaux titres;
 - si les feeds Trump/White House tombent tous, l'Inspector doit montrer le mode degrade;
+- si tous les feeds directs Trump/WhiteHouse tombent, le systeme lance le fallback Google News cible `political_trump_google_fallback`, logge `trump_political_direct_feeds` dans `source_errors.jsonl`, et garde ces titres en mode degrade/faible poids;
 - aucun headline faible ne doit remplacer une source officielle disponible.
 
 Hotfix Phase 4.5 categories news:
@@ -214,6 +216,7 @@ Depuis la Phase 6 v4, les niveaux de trade passent par `MarketTradeLevels`:
 - ordre obligatoire: BUY = `SL < entry < TP1 < TP2 < TP3`, SELL = `TP3 < TP2 < TP1 < entry < SL`;
 - R/R TP1 minimal: `1.50R`;
 - sorties partielles: TP1 50%, TP2 30%, TP3 20%.
+- affichage pre-Phase 7: `Signal locked`, `Trade Tracker` et Inspector doivent afficher explicitement `TP1 50%`, `TP2 30%`, `TP3 20%`.
 
 Le verdict `WAIT` ne doit pas etre force uniquement parce que:
 

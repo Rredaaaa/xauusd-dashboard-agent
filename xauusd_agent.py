@@ -1313,6 +1313,27 @@ class TradeRecommendation:
 
 
 @dataclass
+class MarketTradeLevels:
+    direction: str
+    setup_type: str
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    risk_reward_tp1: float
+    risk_reward_tp2: float
+    risk_reward_tp3: float
+    validity_minutes: int
+    validity_timeframe: str
+    partial_tp1_pct: int
+    partial_tp2_pct: int
+    partial_tp3_pct: int
+    reasons: list[str]
+
+
+@dataclass
 class TechnicalDecision:
     status: str
     direction: str
@@ -2611,13 +2632,37 @@ def build_trade_plan_from_signal(
 
     direction = global_recommendation.verdict
     entry = gold.price
-    zone_padding = max(1.0, abs(entry - global_recommendation.stop_loss) * 0.12)
-    if direction == "BUY":
-        entry_low, entry_high = entry - zone_padding, entry + zone_padding
-        tp3 = entry + abs(global_recommendation.take_profit_2 - entry) * 1.618
+    if technical_decision is not None and trade_direction_from_text(technical_decision.direction) == direction:
+        entry_low = technical_decision.entry_zone_low
+        entry_high = technical_decision.entry_zone_high
+        stop_loss = technical_decision.stop_loss
+        tp1 = technical_decision.tp1
+        tp2 = technical_decision.tp2
+        tp3 = technical_decision.tp3
+        level_reasons = [f"Niveaux repris du TechnicalDecisionEngine v4 ({technical_decision.structure})."]
     else:
-        entry_low, entry_high = entry - zone_padding, entry + zone_padding
-        tp3 = entry - abs(global_recommendation.take_profit_2 - entry) * 1.618
+        market_levels = build_market_trade_levels(
+            gold,
+            direction,
+            "trend_continuation",
+            atr=max(abs(global_recommendation.take_profit_1 - entry), 6.0),
+            readings=technical_readings,
+            proxy_price=technical_readings[-1].close if technical_readings else None,
+            min_rr=(settings or default_user_settings()).minimum_risk_reward,
+            event_mode=event_mode,
+        )
+        entry_low = market_levels.entry_zone_low
+        entry_high = market_levels.entry_zone_high
+        stop_loss = market_levels.stop_loss
+        tp1 = market_levels.tp1
+        tp2 = market_levels.tp2
+        tp3 = market_levels.tp3
+        level_reasons = market_levels.reasons[:2]
+    min_rr = (settings or default_user_settings()).minimum_risk_reward
+    rr1 = compute_risk_reward(direction, entry, stop_loss, tp1)
+    if rr1 < min_rr:
+        reasons.append(f"Trade refuse: niveaux v4 donnent R/R TP1 {rr1:.2f}R < {min_rr:.2f}R.")
+        return None, reasons
     signal_id = trade_signal_id(direction, market_regime.name if market_regime else "Normal Macro", entry, global_recommendation.score)
     technical_snapshot = "; ".join(
         f"{reading.timeframe}:{reading.verdict}/{reading.score:+.1f}"
@@ -2645,13 +2690,13 @@ def build_trade_plan_from_signal(
         reference_price=round(entry, 2),
         entry_zone_low=round(entry_low, 2),
         entry_zone_high=round(entry_high, 2),
-        stop_loss=round(global_recommendation.stop_loss, 2),
-        tp1=round(global_recommendation.take_profit_1, 2),
-        tp2=round(global_recommendation.take_profit_2, 2),
+        stop_loss=round(stop_loss, 2),
+        tp1=round(tp1, 2),
+        tp2=round(tp2, 2),
         tp3=round(tp3, 2),
-        risk_reward_tp1=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_1),
-        risk_reward_tp2=compute_risk_reward(direction, entry, global_recommendation.stop_loss, global_recommendation.take_profit_2),
-        risk_reward_tp3=compute_risk_reward(direction, entry, global_recommendation.stop_loss, tp3),
+        risk_reward_tp1=rr1,
+        risk_reward_tp2=compute_risk_reward(direction, entry, stop_loss, tp2),
+        risk_reward_tp3=compute_risk_reward(direction, entry, stop_loss, tp3),
         max_valid_until=(reference + timedelta(minutes=validity_minutes)).replace(microsecond=0).isoformat(),
         source_signal_id=signal_id,
         global_score_at_creation=global_recommendation.score,
@@ -2667,9 +2712,11 @@ def build_trade_plan_from_signal(
         geopolitical_snapshot=next((agent.summary for agent in agent_results if agent.name == "GeopoliticalOilShockAgent"), ""),
         elliott_wave_snapshot="",
         invalidation_rules=[
-            f"Invalidation principale si prix touche SL {global_recommendation.stop_loss:.2f}.",
+            f"Invalidation principale si prix touche SL {stop_loss:.2f}.",
             "Invalidation contextuelle si Data Quality passe sous 60/100 ou si un fait Tier 1 contredit le scenario.",
             f"Validite dynamique: {validity_timeframe}, {validity_minutes} minutes.",
+            "Sorties partielles: TP1 50%, TP2 30%, TP3 20%.",
+            *level_reasons,
         ],
         outcome="open",
         outcome_reason="Trade Snapshot cree par Quality Gate; SL/TP figes.",
@@ -5144,6 +5191,190 @@ def build_trade_levels(price: float, atr: float, verdict: str, stop_multiplier: 
     )
 
 
+def psychological_levels_around(price: float, atr: float, depth: int = 8) -> tuple[list[float], list[float]]:
+    step = 25.0 if atr >= 10.0 else 50.0
+    anchor = (price // step) * step
+    levels = sorted({round(anchor + step * offset, 2) for offset in range(-depth, depth + 1)})
+    below = [level for level in levels if level < price]
+    above = [level for level in levels if level > price]
+    return below, above
+
+
+def trade_setup_from_structure(structure: str, direction: str = "BUY") -> str:
+    text = structure.lower()
+    if "breakout" in text or "breakdown" in text or "cassure" in text:
+        return "breakout"
+    if "range" in text:
+        return "range"
+    if "reversal" in text or "pivot" in text or "rejet" in text:
+        return "pivot_rejection"
+    if "pullback" in text:
+        return "trend_continuation"
+    if "mean" in text or "extreme" in text:
+        return "mean_reversion"
+    return "trend_continuation" if direction in {"BUY", "SELL"} else "range"
+
+
+def setup_level_profile(setup_type: str) -> tuple[float, float, float, float]:
+    profiles = {
+        "trend_continuation": (0.85, 1.65, 2.65, 4.00),
+        "breakout": (0.95, 1.80, 3.00, 4.60),
+        "range": (0.70, 1.50, 2.20, 3.00),
+        "mean_reversion": (0.75, 1.55, 2.30, 3.20),
+        "pivot_rejection": (0.80, 1.60, 2.45, 3.50),
+        "news_reaction": (0.72, 1.65, 2.65, 4.00),
+    }
+    return profiles.get(setup_type, profiles["trend_continuation"])
+
+
+def sorted_unique_levels(levels: list[float], price: float, direction: str) -> list[float]:
+    clean = sorted({round(level, 2) for level in levels if level and level > 0})
+    if direction == "BUY":
+        return [level for level in clean if level > price]
+    return sorted([level for level in clean if level < price], reverse=True)
+
+
+def market_structure_reference_levels(
+    gold: SymbolSnapshot,
+    atr: float,
+    readings: list[TechnicalReading] | None = None,
+    proxy_price: float | None = None,
+) -> tuple[list[float], list[float], list[str]]:
+    levels = price_action_levels(gold)
+    lower = [
+        levels.get("support"),
+        levels.get("camarilla_s3"),
+        levels.get("camarilla_s4"),
+        gold.day_low,
+        gold.support,
+    ]
+    upper = [
+        levels.get("resistance"),
+        levels.get("camarilla_r3"),
+        levels.get("camarilla_r4"),
+        gold.day_high,
+        gold.resistance,
+    ]
+    reasons = ["Niveaux marche: support/resistance jour + pivots Camarilla."]
+    swing = detect_recent_swing_levels(gold.intraday_points or gold.points)
+    if swing.get("status") == "ok":
+        lower.append(float(swing["swing_low"]))
+        upper.append(float(swing["swing_high"]))
+        reasons.append(str(swing["summary"]))
+    psych_below, psych_above = psychological_levels_around(gold.price, atr)
+    lower.extend(psych_below[-3:])
+    upper.extend(psych_above[:3])
+    reasons.append("Niveaux psychologiques: 00/50, avec 25 en volatilite elevee.")
+    if readings and proxy_price is not None:
+        ema_values: list[float] = []
+        for reading in readings:
+            if reading.timeframe in {"4H", "1H", "15m"}:
+                ema_values.extend([reading.ema20, reading.ema50, reading.ema100, reading.ema200])
+        adjusted = [adjust_proxy_level_to_spot(value, gold.price, proxy_price) for value in ema_values if value > 0]
+        lower.extend([value for value in adjusted if value < gold.price])
+        upper.extend([value for value in adjusted if value > gold.price])
+        reasons.append("Niveaux EMA H1/H4/M15 ajustes du proxy GC=F vers le spot.")
+    return (
+        sorted({round(level, 2) for level in lower if level is not None and level > 0}),
+        sorted({round(level, 2) for level in upper if level is not None and level > 0}),
+        reasons,
+    )
+
+
+def ensure_target_sequence(direction: str, entry: float, stop_loss: float, targets: list[float], min_rr: float = 1.5) -> tuple[float, float, float, float, float, float]:
+    risk = max(abs(entry - stop_loss), 1.0)
+    if direction == "BUY":
+        min_targets = [entry + risk * min_rr, entry + risk * 2.35, entry + risk * 3.35]
+        selected: list[float] = []
+        for fallback in min_targets:
+            candidate = next((target for target in targets if target >= fallback), fallback)
+            selected.append(max(candidate, fallback))
+        tp1, tp2, tp3 = selected
+        if not (stop_loss < entry < tp1 < tp2 < tp3):
+            tp1, tp2, tp3 = min_targets
+    else:
+        min_targets = [entry - risk * min_rr, entry - risk * 2.35, entry - risk * 3.35]
+        selected = []
+        for fallback in min_targets:
+            candidate = next((target for target in targets if target <= fallback), fallback)
+            selected.append(min(candidate, fallback))
+        tp1, tp2, tp3 = selected
+        if not (stop_loss > entry > tp1 > tp2 > tp3):
+            tp1, tp2, tp3 = min_targets
+    rr1 = compute_risk_reward(direction, entry, stop_loss, tp1)
+    rr2 = compute_risk_reward(direction, entry, stop_loss, tp2)
+    rr3 = compute_risk_reward(direction, entry, stop_loss, tp3)
+    return round(tp1, 2), round(tp2, 2), round(tp3, 2), rr1, rr2, rr3
+
+
+def build_market_trade_levels(
+    gold: SymbolSnapshot,
+    direction: str,
+    setup_type: str,
+    atr: float,
+    readings: list[TechnicalReading] | None = None,
+    proxy_price: float | None = None,
+    min_rr: float = 1.5,
+    event_mode: EventModeAnalysis | None = None,
+) -> MarketTradeLevels:
+    direction = "BUY" if "BUY" in direction.upper() else "SELL"
+    setup_type = setup_type or "trend_continuation"
+    entry = gold.price
+    atr = max(atr, 3.0)
+    if event_mode is not None and event_mode.active:
+        atr *= max(1.0, event_mode.stop_multiplier)
+    stop_mult, tp1_mult, tp2_mult, tp3_mult = setup_level_profile(setup_type)
+    lower_levels, upper_levels, reasons = market_structure_reference_levels(gold, atr, readings, proxy_price)
+    min_risk = max(atr * stop_mult, 3.0)
+    buffer = max(atr * 0.18, 1.5)
+    if direction == "BUY":
+        below = [level for level in lower_levels if level < entry]
+        structural_stop = (max(below) - buffer) if below else entry - min_risk
+        stop_loss = min(structural_stop, entry - min_risk)
+        candidate_targets = sorted_unique_levels(upper_levels + [entry + atr * tp1_mult, entry + atr * tp2_mult, entry + atr * tp3_mult], entry, "BUY")
+    else:
+        above = [level for level in upper_levels if level > entry]
+        structural_stop = (min(above) + buffer) if above else entry + min_risk
+        stop_loss = max(structural_stop, entry + min_risk)
+        candidate_targets = sorted_unique_levels(lower_levels + [entry - atr * tp1_mult, entry - atr * tp2_mult, entry - atr * tp3_mult], entry, "SELL")
+    tp1, tp2, tp3, rr1, rr2, rr3 = ensure_target_sequence(direction, entry, stop_loss, candidate_targets, min_rr=min_rr)
+    risk = abs(entry - stop_loss)
+    entry_padding = max(1.0, min(risk * 0.16, atr * 0.35))
+    validity_map = {
+        "news_reaction": (30, "NEWS"),
+        "breakout": (240, "M15"),
+        "range": (120, "M5"),
+        "mean_reversion": (240, "M15"),
+        "pivot_rejection": (720, "H1"),
+        "trend_continuation": (720, "H1"),
+    }
+    validity_minutes, validity_timeframe = validity_map.get(setup_type, (240, "M15"))
+    if event_mode is not None and event_mode.active:
+        validity_minutes = max(30, round(validity_minutes * 0.75))
+    reasons.append(
+        f"Setup {setup_type}: risque {risk:.2f}, TP partiels 50/30/20, R/R TP1 {rr1:.2f}."
+    )
+    return MarketTradeLevels(
+        direction=direction,
+        setup_type=setup_type,
+        entry_zone_low=round(entry - entry_padding, 2),
+        entry_zone_high=round(entry + entry_padding, 2),
+        stop_loss=round(stop_loss, 2),
+        tp1=tp1,
+        tp2=tp2,
+        tp3=tp3,
+        risk_reward_tp1=rr1,
+        risk_reward_tp2=rr2,
+        risk_reward_tp3=rr3,
+        validity_minutes=validity_minutes,
+        validity_timeframe=validity_timeframe,
+        partial_tp1_pct=50,
+        partial_tp2_pct=30,
+        partial_tp3_pct=20,
+        reasons=reasons[:6],
+    )
+
+
 def build_mtf_alignment_note(readings: list[TechnicalReading], verdict: str) -> tuple[int, str]:
     higher_timeframes = [reading for reading in readings if reading.timeframe in {"1D", "4H", "1H"}]
     if not higher_timeframes:
@@ -5426,30 +5657,25 @@ def build_technical_decision(
     alignment_score, alignment_note = build_mtf_alignment_note(readings, raw_direction)
     structure = classify_technical_structure(readings, raw_direction, weighted_score)
     atr_15m = next((reading.atr14 for reading in readings if reading.timeframe == "15m"), readings[-1].atr14)
-    event_multiplier = event_mode.stop_multiplier if event_mode is not None else 1.0
-    atr_for_levels = max(atr_15m, 6.0) * event_multiplier
-    stop_loss, tp1, tp2 = build_trade_levels(
-        spot.price,
-        atr=atr_for_levels,
-        verdict=raw_direction,
-        stop_multiplier=1.0,
-        tp1_multiplier=1.1,
-        tp2_multiplier=2.1,
+    setup_type = trade_setup_from_structure(structure, raw_direction)
+    market_levels = build_market_trade_levels(
+        spot,
+        raw_direction,
+        setup_type,
+        atr=max(atr_15m, 6.0),
+        readings=readings,
+        proxy_price=proxy_price,
+        min_rr=1.5,
+        event_mode=event_mode,
     )
     if raw_direction == "BUY":
-        tp3 = spot.price + (atr_for_levels * 3.2)
-        entry_zone_low = spot.price - (atr_for_levels * 0.18)
-        entry_zone_high = spot.price + (atr_for_levels * 0.10)
-        trigger_level = max(spot.resistance or spot.price, spot.price + atr_for_levels * 0.35)
-        invalidation_level = min(spot.support or stop_loss, stop_loss)
+        trigger_level = max(spot.resistance or spot.price, market_levels.entry_zone_high)
+        invalidation_level = min(spot.support or market_levels.stop_loss, market_levels.stop_loss)
         trigger = f"BUY seulement si cloture M15 au-dessus de {trigger_level:.2f} avec RSI > 50 et MACD histogramme positif."
         invalidation = f"Invalidation BUY si cloture M15 sous {invalidation_level:.2f} ou si DXY/10Y reprennent fortement."
     else:
-        tp3 = spot.price - (atr_for_levels * 3.2)
-        entry_zone_low = spot.price - (atr_for_levels * 0.10)
-        entry_zone_high = spot.price + (atr_for_levels * 0.18)
-        trigger_level = min(spot.support or spot.price, spot.price - atr_for_levels * 0.35)
-        invalidation_level = max(spot.resistance or stop_loss, stop_loss)
+        trigger_level = min(spot.support or spot.price, market_levels.entry_zone_low)
+        invalidation_level = max(spot.resistance or market_levels.stop_loss, market_levels.stop_loss)
         trigger = f"SELL seulement si cloture M15 sous {trigger_level:.2f} avec RSI < 50 et MACD histogramme negatif."
         invalidation = f"Invalidation SELL si cloture M15 au-dessus de {invalidation_level:.2f} ou si l'or repasse en refuge confirme."
 
@@ -5460,6 +5686,7 @@ def build_technical_decision(
     reasons = [
         alignment_note,
         f"Structure detectee: {structure}. Score technique brut {weighted_score:+.2f}.",
+        *market_levels.reasons[:3],
     ]
 
     for reading in readings:
@@ -5499,12 +5726,12 @@ def build_technical_decision(
         confidence=confidence,
         trigger=trigger,
         invalidation=invalidation,
-        entry_zone_low=round(entry_zone_low, 2),
-        entry_zone_high=round(entry_zone_high, 2),
-        stop_loss=round(stop_loss, 2),
-        tp1=round(tp1, 2),
-        tp2=round(tp2, 2),
-        tp3=round(tp3, 2),
+        entry_zone_low=market_levels.entry_zone_low,
+        entry_zone_high=market_levels.entry_zone_high,
+        stop_loss=market_levels.stop_loss,
+        tp1=market_levels.tp1,
+        tp2=market_levels.tp2,
+        tp3=market_levels.tp3,
         reasons=reasons[:7],
         contradictions=contradictions[:5],
     )
@@ -5713,26 +5940,23 @@ def build_global_recommendation(
     conviction = bullish_score if verdict == "BUY" else 100 - bullish_score
     score = round(clamp(conviction, 52, 92))
 
-    stop_default, tp1_default, tp2_default = build_trade_levels(
-        gold.price,
-        atr=max(abs(fundamental.take_profit_1 - gold.price), abs(technical.take_profit_1 - gold.price), 6.0),
-        verdict=verdict,
-        stop_multiplier=1.0,
-        tp1_multiplier=1.0,
-        tp2_multiplier=2.0,
-    )
-    stop_losses, take_profit_1, take_profit_2 = collect_directional_levels(
-        gold.price,
+    setup_type = "trend_continuation" if fundamental.verdict == technical.verdict == verdict else "pivot_rejection"
+    market_levels = build_market_trade_levels(
+        gold,
         verdict,
-        [fundamental, technical],
+        setup_type,
+        atr=max(abs(fundamental.take_profit_1 - gold.price), abs(technical.take_profit_1 - gold.price), 6.0),
+        min_rr=1.5,
+        event_mode=event_mode,
     )
-    stop_loss = average_or_default(stop_losses, stop_default)
-    tp1 = average_or_default(take_profit_1, tp1_default)
-    tp2 = average_or_default(take_profit_2, tp2_default)
+    stop_loss = market_levels.stop_loss
+    tp1 = market_levels.tp1
+    tp2 = market_levels.tp2
 
     reasons = [
         f"Technique {technical.verdict} a {technical.score}/100.",
         f"Fondamental {fundamental.verdict} a {fundamental.score}/100.",
+        f"Niveaux v4 {market_levels.setup_type}: SL/TP bases sur structure, pivots, psychologiques et R/R TP1 {market_levels.risk_reward_tp1:.2f}R.",
     ]
     if geopolitical is not None:
         reasons.append(f"Geopolitique/sentiment/flux a {geopolitical.score}/100.")
@@ -8322,23 +8546,18 @@ def build_orchestrator_decision(
         if "SELL" in recommendation_verdict
         else legacy_recommendation.verdict
     )
-    if level_direction == "BUY":
-        stop_loss, tp1, tp2 = build_trade_levels(
-            gold.price,
+    if level_direction in {"BUY", "SELL"}:
+        orchestrator_levels = build_market_trade_levels(
+            gold,
+            level_direction,
+            "trend_continuation" if gate_status.startswith("TRADE_") else "pivot_rejection",
             atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
-            verdict="BUY",
-            stop_multiplier=1.0,
-            tp1_multiplier=1.15,
-            tp2_multiplier=2.1,
+            min_rr=1.5,
+            event_mode=event_mode,
         )
-    elif level_direction == "SELL":
-        stop_loss, tp1, tp2 = build_trade_levels(
-            gold.price,
-            atr=max(abs(legacy_recommendation.take_profit_1 - gold.price), 6.0),
-            verdict="SELL",
-            stop_multiplier=1.0,
-            tp1_multiplier=1.15,
-            tp2_multiplier=2.1,
+        stop_loss, tp1, tp2 = orchestrator_levels.stop_loss, orchestrator_levels.tp1, orchestrator_levels.tp2
+        top_reasons.append(
+            f"Niveaux v4: {orchestrator_levels.setup_type}, R/R TP1 {orchestrator_levels.risk_reward_tp1:.2f}R, sorties 50/30/20."
         )
     else:
         stop_loss, tp1, tp2 = legacy_recommendation.stop_loss, legacy_recommendation.take_profit_1, legacy_recommendation.take_profit_2
@@ -11780,11 +11999,10 @@ def recommendation_levels_are_valid(recommendation: TradeRecommendation | None) 
     if recommendation is None:
         return False
     direction = trade_direction_from_text(recommendation.verdict)
-    entry = recommendation.take_profit_1
     if direction == "BUY":
-        return recommendation.stop_loss < entry < recommendation.take_profit_2
+        return recommendation.stop_loss < recommendation.take_profit_1 < recommendation.take_profit_2
     if direction == "SELL":
-        return recommendation.stop_loss > entry > recommendation.take_profit_2
+        return recommendation.stop_loss > recommendation.take_profit_1 > recommendation.take_profit_2
     return False
 
 

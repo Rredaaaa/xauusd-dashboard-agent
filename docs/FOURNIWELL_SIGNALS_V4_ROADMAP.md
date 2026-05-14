@@ -204,9 +204,9 @@ Points a reprendre en Phase 4.5:
 
 La prochaine phase a lancer est:
 
-`Phase 6 - Refonte Trade Levels`
+`Phase 7 - Multi-Strategy Engine`
 
-Phase 4.5 a ete livree et testee le 2026-05-14. Phase 5 a ete livree le 2026-05-14 avec `News Reaction Engine`, signal `NEWS_REACTION`, confirmation prix/cross-assets et affichage dashboard.
+Phase 4.5 a ete livree et testee le 2026-05-14. Phase 5 a ete livree le 2026-05-14 avec `News Reaction Engine`. Phase 6 a ete livree le 2026-05-14 avec `MarketTradeLevels`, SL/TP structures, R/R minimum et sorties partielles.
 
 ## 7. Phase 4.5 - Redressement exhaustif avant Phase 5
 
@@ -718,6 +718,8 @@ Livraison effective:
 
 ## 9. Phase 6 - Refonte Trade Levels
 
+Statut: livree le 2026-05-14.
+
 Objectif: remplacer les SL/TP mecaniques par des niveaux de marche.
 
 Actions:
@@ -762,6 +764,17 @@ Livrable:
 - niveaux plus realistes;
 - moins de SL/TP absurdes;
 - trade plan mieux justifie.
+
+Livraison effective:
+
+- nouveau modele `MarketTradeLevels`;
+- sources de niveaux: swing M15, pivots Camarilla, range jour, support/resistance, niveaux psychologiques 00/50/25, ATR, EMA H1/H4/M15 ajustees proxy -> spot;
+- mapping setup: trend continuation, range, breakout, mean reversion, pivot rejection, news reaction;
+- ordre force BUY/SELL;
+- R/R TP1 minimal 1.50R;
+- sorties partielles 50/30/20;
+- integration TechnicalDecisionEngine, GlobalRecommendation, OrchestratorDecision et TradePlan lock;
+- tests BUY/SELL/RR/setup.
 
 ## 10. Phase 7 - Multi-Strategy Engine
 
@@ -1002,7 +1015,7 @@ Livrable:
 5. Phase 4 - Rebuild des agents. Statut: livre partiel, a completer par Phase 4.5.
 6. Phase 4.5 - Redressement exhaustif avant Phase 5. Statut: livree le 2026-05-14.
 7. Phase 5 - News Reaction Engine. Statut: livree le 2026-05-14.
-8. Phase 6 - Refonte Trade Levels.
+8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14.
 9. Phase 7 - Multi-Strategy Engine.
 10. Phase 8 - Calibration et backtest.
 11. Phase 9 - Interface Fourniwell Signals.
@@ -1028,6 +1041,6 @@ Cette roadmap v1.1 devient la base de travail v4.0 apres validation utilisateur.
 
 La prochaine phase officielle est:
 
-`Phase 6 - Refonte Trade Levels`
+`Phase 7 - Multi-Strategy Engine`
 
-Phase 5 est livree. La prochaine phase officielle est Phase 6, sauf correction critique de validation Phase 5.
+Phase 6 est livree. La prochaine phase officielle est Phase 7, sauf correction critique de validation Phase 6.

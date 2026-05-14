@@ -207,6 +207,14 @@ Phase 30A ajoute une separation stricte entre scoring interne et affichage utili
 - `Inspector` est le seul endroit autorise pour les chaines marche, validations internes, details source, preflight et bruit moteur;
 - les SL/TP ne doivent etre visibles comme trade que si le signal est `TRADE_BUY` ou `TRADE_SELL` et que l'ordre des niveaux est coherent.
 
+Depuis la Phase 6 v4, les niveaux de trade passent par `MarketTradeLevels`:
+
+- niveaux de marche: swing M15, pivots Camarilla, support/resistance jour, niveaux psychologiques 00/50/25, ATR, EMA H1/H4/M15 ajustees;
+- setups reconnus: trend continuation, range, breakout, mean reversion, pivot rejection, news reaction;
+- ordre obligatoire: BUY = `SL < entry < TP1 < TP2 < TP3`, SELL = `TP3 < TP2 < TP1 < entry < SL`;
+- R/R TP1 minimal: `1.50R`;
+- sorties partielles: TP1 50%, TP2 30%, TP3 20%.
+
 Le verdict `WAIT` ne doit pas etre force uniquement parce que:
 
 - data quality est `DEGRADED` mais prix principal, macro et cross-assets restent exploitables;

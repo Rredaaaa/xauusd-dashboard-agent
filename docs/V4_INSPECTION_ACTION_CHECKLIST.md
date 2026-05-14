@@ -59,7 +59,7 @@ Statuts autorises:
 - [ ] Calibrer poids multi-timeframe sur backtest.
 - [x] Exiger trigger reel avant conversion WATCH -> TRADE.
 - [x] Verifier cloture M15 au-dessus/sous trigger.
-- [ ] Adapter SL/TP selon structure: trend, range, breakout, reversal.
+- [x] Adapter SL/TP selon structure: trend, range, breakout, reversal.
 - [x] Baisser confidence en cas de contradiction intra-timeframe.
 - [x] Documenter structure technique dans payload.
 - [ ] Migrer vers vraies bougies XAU/USD spot quand Chart Store v3 est fiable.
@@ -188,16 +188,16 @@ Statuts autorises:
 
 ## 14. TradeLevels
 
-- [ ] Remplacer niveaux purement mecaniques ATR.
-- [ ] Utiliser swing high/low.
-- [ ] Utiliser pivots.
-- [ ] Utiliser range.
-- [ ] Utiliser breakout/retest.
-- [ ] Utiliser niveaux psychologiques.
-- [ ] Adapter SL/TP a la strategie.
-- [ ] Verifier R/R final.
-- [ ] Refuser si R/R < 1.5.
-- [ ] Ajouter tests BUY/SELL: SL et TP doivent etre dans le bon sens.
+- [x] Remplacer niveaux purement mecaniques ATR.
+- [x] Utiliser swing high/low.
+- [x] Utiliser pivots.
+- [x] Utiliser range.
+- [x] Utiliser breakout/retest.
+- [x] Utiliser niveaux psychologiques.
+- [x] Adapter SL/TP a la strategie.
+- [x] Verifier R/R final.
+- [x] Refuser si R/R < 1.5.
+- [x] Ajouter tests BUY/SELL: SL et TP doivent etre dans le bon sens.
 
 ## 15. OrchestratorDecision v3
 

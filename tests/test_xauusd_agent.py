@@ -42,6 +42,7 @@ from xauusd_agent import (
     SOURCE_CATEGORY_TO_LOGICAL,
     append_audit_log_snapshot,
     apply_user_settings_to_agents,
+    build_market_trade_levels,
     build_market_regime_analysis,
     build_monitoring_inspector_payload,
     build_cross_asset_analysis,
@@ -88,6 +89,8 @@ from xauusd_agent import (
     score_headline_v2,
     set_agent_enabled,
     should_skip_headline,
+    trade_plan_levels_are_valid,
+    trade_setup_from_structure,
     update_orchestrator_agent,
 )
 
@@ -1228,8 +1231,10 @@ class AnalysisShapeTests(unittest.TestCase):
             self.assertEqual(len(summary.active_trades), 1)
             plan = summary.active_trades[0]
             self.assertEqual(plan.reference_price, 2400.0)
-            self.assertEqual(plan.stop_loss, 2380.0)
-            self.assertEqual(plan.tp1, 2432.0)
+            self.assertTrue(trade_plan_levels_are_valid(plan))
+            self.assertGreaterEqual(plan.risk_reward_tp1, 1.5)
+            self.assertLess(plan.stop_loss, plan.reference_price)
+            self.assertGreater(plan.tp1, plan.reference_price)
 
             second = build_trade_ledger_summary(
                 gold,
@@ -1244,7 +1249,7 @@ class AnalysisShapeTests(unittest.TestCase):
             )
             self.assertIn("Cooldown actif", second.quality_gate_reasons[0])
             self.assertEqual(second.active_trades[0].reference_price, 2400.0)
-            self.assertEqual(second.active_trades[0].stop_loss, 2380.0)
+            self.assertEqual(second.active_trades[0].stop_loss, plan.stop_loss)
 
     def test_trade_ledger_evaluates_sl_outcome(self) -> None:
         gold = self.snapshot("XAU/USD", 2400.0, 2390.0)
@@ -1267,7 +1272,7 @@ class AnalysisShapeTests(unittest.TestCase):
         ]
         with TemporaryDirectory() as tmpdir:
             ledger_path = Path(tmpdir) / "trade_ledger.jsonl"
-            build_trade_ledger_summary(
+            initial = build_trade_ledger_summary(
                 gold,
                 recommendation,
                 quality,
@@ -1278,7 +1283,8 @@ class AnalysisShapeTests(unittest.TestCase):
                 path=ledger_path,
                 now=datetime(2026, 4, 24, 10, tzinfo=timezone.utc),
             )
-            gold.price = 2379.0
+            self.assertTrue(initial.active_trades)
+            gold.price = initial.active_trades[0].stop_loss - 1.0
             summary = build_trade_ledger_summary(
                 gold,
                 recommendation,
@@ -2884,6 +2890,85 @@ class Phase5NewsReactionEngineTests(unittest.TestCase):
         )
         self.assertEqual(plan.status, "SUSPENDED")
         self.assertEqual(plan.event_type, "MULTI_EVENT_COLLISION")
+
+
+class Phase6TradeLevelsTests(unittest.TestCase):
+    def snapshot(self, price: float = 2400.0) -> SymbolSnapshot:
+        points = [
+            PricePoint(timestamp=1_700_000_000 + index * 300, close=price - 18 + index, high=price - 16 + index, low=price - 20 + index)
+            for index in range(40)
+        ]
+        return SymbolSnapshot(
+            symbol="XAU/USD",
+            label="XAU/USD",
+            price=price,
+            previous_close=price - 6,
+            change_abs=6,
+            change_pct=0.25,
+            period_change_pct=0.25,
+            day_high=price + 18,
+            day_low=price - 28,
+            support=price - 22,
+            resistance=price + 20,
+            fetched_at="2026-05-14T10:05:00+00:00",
+            points=points,
+            intraday_points=points,
+        )
+
+    def readings(self, verdict: str = "BUY") -> list[TechnicalReading]:
+        return [
+            TechnicalReading(
+                timeframe=timeframe,
+                close=2395.0,
+                ema20=2392.0,
+                ema50=2388.0,
+                ema100=2380.0,
+                ema200=2365.0,
+                rsi7=55.0 if verdict == "BUY" else 42.0,
+                macd_line=1.0,
+                macd_signal=0.5,
+                macd_histogram=0.5 if verdict == "BUY" else -0.5,
+                volume_ratio=1.1,
+                atr14=8.0,
+                score=4.0 if verdict == "BUY" else -4.0,
+                verdict=verdict,
+                reasons=[],
+            )
+            for timeframe in ["1D", "4H", "1H", "15m", "5m"]
+        ]
+
+    def test_phase6_buy_levels_are_ordered_and_rr_valid(self) -> None:
+        gold = self.snapshot(2400.0)
+        levels = build_market_trade_levels(gold, "BUY", "trend_continuation", atr=8.0, readings=self.readings("BUY"), proxy_price=2395.0)
+        self.assertLess(levels.stop_loss, gold.price)
+        self.assertGreater(levels.tp1, gold.price)
+        self.assertGreater(levels.tp2, levels.tp1)
+        self.assertGreater(levels.tp3, levels.tp2)
+        self.assertGreaterEqual(levels.risk_reward_tp1, 1.5)
+        self.assertEqual((levels.partial_tp1_pct, levels.partial_tp2_pct, levels.partial_tp3_pct), (50, 30, 20))
+
+    def test_phase6_sell_levels_are_ordered_and_rr_valid(self) -> None:
+        gold = self.snapshot(2400.0)
+        levels = build_market_trade_levels(gold, "SELL", "pivot_rejection", atr=8.0, readings=self.readings("SELL"), proxy_price=2395.0)
+        self.assertGreater(levels.stop_loss, gold.price)
+        self.assertLess(levels.tp1, gold.price)
+        self.assertLess(levels.tp2, levels.tp1)
+        self.assertLess(levels.tp3, levels.tp2)
+        self.assertGreaterEqual(levels.risk_reward_tp1, 1.5)
+
+    def test_phase6_technical_decision_uses_market_levels(self) -> None:
+        gold = self.snapshot(2400.0)
+        decision = build_technical_decision(gold, self.readings("BUY"), proxy_price=2395.0)
+        self.assertLess(decision.stop_loss, gold.price)
+        self.assertGreater(decision.tp1, gold.price)
+        self.assertGreater(decision.tp2, decision.tp1)
+        self.assertGreater(decision.tp3, decision.tp2)
+        self.assertTrue(any("Niveaux" in reason or "Setup" in reason for reason in decision.reasons))
+
+    def test_phase6_setup_classifier_maps_breakout_and_range(self) -> None:
+        self.assertEqual(trade_setup_from_structure("breakout", "BUY"), "breakout")
+        self.assertEqual(trade_setup_from_structure("range", "SELL"), "range")
+        self.assertEqual(trade_setup_from_structure("reversal", "SELL"), "pivot_rejection")
 
 
 if __name__ == "__main__":

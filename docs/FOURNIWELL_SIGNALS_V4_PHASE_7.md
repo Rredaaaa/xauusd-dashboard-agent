@@ -1,6 +1,6 @@
 # Fourniwell Signals v4 - Phase 7
 
-Statut: en cours.
+Statut: Phase 7A, 7B et 7C livrees.
 
 Objectif: remplacer la logique mono-setup par un moteur multi-strategies capable de produire plusieurs candidates auditees avant selection du setup dominant.
 
@@ -41,7 +41,7 @@ La Phase 7B ne modifie pas encore:
 - le dashboard;
 - les poids de l'orchestrateur.
 
-Cette separation est volontaire: la selection du setup dominant arrive en Phase 7C.
+Cette separation etait volontaire: la selection du setup dominant est livree en Phase 7C, sans impact sur le verdict final.
 
 ## Strategies livrees
 
@@ -161,9 +161,68 @@ Verification:
 
 ## Prochaine etape
 
-Phase 7C:
+## Phase 7C livree
 
-- creer le `StrategyCoordinator`;
-- classer les candidates selon priorite, session, score, event mode, cooldown et R/R;
-- produire un seul setup dominant;
-- ne brancher le dashboard qu'apres validation du coordinateur.
+Livree le 2026-05-15.
+
+Contenu:
+
+- `StrategySelection`;
+- `StrategyCoordinator`;
+- `build_strategy_selection`;
+- ranking des candidates Phase 7B;
+- selection d'un setup dominant;
+- rejet explicite des candidates non eligibles;
+- exposition dans le payload via `strategy_candidates` et `strategy_selection`;
+- aucun changement du chef de file, du trade lock ou du dashboard.
+
+Le coordinateur classe les candidates selon:
+
+- statut `TRADE_READY` ou `WATCH`;
+- direction exploitable `BUY` ou `SELL`;
+- priorite metier;
+- compatibilite session;
+- score de confiance;
+- score de confluence;
+- R/R TP1 minimum;
+- mode event;
+- cooldown lie aux trades recents.
+
+Priorites appliquees:
+
+1. `NewsReactionSetup`;
+2. `TrendContinuationSetup`;
+3. `BreakoutDuJourSetup`;
+4. `RangeTradingSetup`;
+5. `MeanReversionSetup`;
+6. `PivotRejectionSetup`.
+
+Regles importantes:
+
+- `NewsReactionSetup` recoit un bonus si `event_mode.active`;
+- `TrendContinuationSetup` et `BreakoutDuJourSetup` sont penalises si le mode event est actif;
+- `BreakoutDuJourSetup` exige `R/R TP1 >= 2.0R`;
+- les autres setups exigent le R/R minimum utilisateur;
+- un trade actif dans la meme direction bloque une nouvelle selection;
+- une perte recente dans la meme direction active le cooldown propre a la candidate.
+
+Tests ajoutes:
+
+- NewsReaction prioritaire en mode event;
+- TrendContinuation prioritaire en London/NY overlap hors event;
+- Breakout refuse sous 2.0R;
+- cooldown apres perte recente;
+- aucun setup si toutes les candidates sont du bruit.
+
+Verification:
+
+- `python -m unittest tests.test_xauusd_agent.Phase7CStrategyCoordinatorTests`
+- `python -m unittest tests/test_xauusd_agent.py`
+- `python -m py_compile xauusd_agent.py`
+
+## Prochaine etape
+
+Phase 7D ou Phase 7.5 selon decision:
+
+- soit brancher prudemment la selection dominante dans l'Inspector uniquement;
+- soit passer directement a la Phase 7.5 de calibration/backtest avant tout impact sur le chef de file.

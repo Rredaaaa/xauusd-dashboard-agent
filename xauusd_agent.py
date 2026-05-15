@@ -852,6 +852,18 @@ class SetupCandidate:
 
 
 @dataclass
+class StrategySelection:
+    status: str
+    selected_setup: SetupCandidate | None
+    selected_score: int
+    session: str
+    event_mode_active: bool
+    reasons: list[str]
+    ranked_candidates: list[dict[str, Any]]
+    rejected_candidates: list[dict[str, Any]]
+
+
+@dataclass
 class ReversalSetup:
     horizon: str
     status: str
@@ -8303,6 +8315,229 @@ def build_strategy_candidates(
     ]
 
 
+STRATEGY_BASE_PRIORITY = {
+    "NewsReactionSetup": 100,
+    "TrendContinuationSetup": 82,
+    "BreakoutDuJourSetup": 74,
+    "RangeTradingSetup": 62,
+    "MeanReversionSetup": 54,
+    "PivotRejectionSetup": 46,
+}
+
+
+class StrategyCoordinator:
+    """Classe les setups Phase 7 sans modifier le verdict final."""
+
+    def __init__(self, min_rr: float = 1.5) -> None:
+        self.min_rr = min_rr
+
+    def select(
+        self,
+        candidates: list[SetupCandidate],
+        session: str,
+        event_mode: EventModeAnalysis | None = None,
+        trade_ledger: TradeLedgerSummary | None = None,
+        now: datetime | None = None,
+    ) -> StrategySelection:
+        reference = now or datetime.now(timezone.utc)
+        event_active = bool(event_mode and event_mode.active)
+        ranked: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            score_data = self.score_candidate(candidate, session, event_active, trade_ledger, reference)
+            if score_data["eligible"]:
+                ranked.append(score_data)
+            else:
+                rejected.append(score_data)
+
+        ranked.sort(key=lambda item: (item["score"], item["priority"], item["confidence"]), reverse=True)
+        if not ranked:
+            return StrategySelection(
+                status="NO_SETUP",
+                selected_setup=None,
+                selected_score=0,
+                session=session,
+                event_mode_active=event_active,
+                reasons=["Aucune strategie Phase 7 eligible apres priorite, session, R/R et cooldown."],
+                ranked_candidates=[],
+                rejected_candidates=rejected,
+            )
+
+        winner = ranked[0]
+        selected = winner["candidate"]
+        status = "TRADE_READY" if selected.status == "TRADE_READY" else "WATCH"
+        reasons = [
+            f"Setup dominant: {selected.name} {selected.direction} ({winner['score']}/100).",
+            f"Priorite {winner['priority']}/100, session {session}, R/R TP1 {selected.rr_tp1:.2f}R.",
+        ]
+        if event_active:
+            reasons.append("Mode event actif: NewsReaction favorisee, continuations mecaniques penalisees.")
+        reasons.extend(winner["reasons"][:3])
+        public_ranked = [self.public_rank(item) for item in ranked]
+        public_rejected = [self.public_rank(item) for item in rejected]
+        return StrategySelection(
+            status=status,
+            selected_setup=selected,
+            selected_score=int(winner["score"]),
+            session=session,
+            event_mode_active=event_active,
+            reasons=unique_preserve_order(reasons)[:8],
+            ranked_candidates=public_ranked,
+            rejected_candidates=public_rejected,
+        )
+
+    def score_candidate(
+        self,
+        candidate: SetupCandidate,
+        session: str,
+        event_active: bool,
+        trade_ledger: TradeLedgerSummary | None,
+        reference: datetime,
+    ) -> dict[str, Any]:
+        priority = STRATEGY_BASE_PRIORITY.get(candidate.name, 30)
+        reasons: list[str] = []
+        blockers: list[str] = list(candidate.blockers)
+        eligible = True
+
+        if candidate.status not in {"TRADE_READY", "WATCH"}:
+            eligible = False
+            blockers.append(f"Statut {candidate.status}: setup non exploitable.")
+        if candidate.direction not in {"BUY", "SELL"}:
+            eligible = False
+            blockers.append("Direction non exploitable.")
+        rr_min = 2.0 if candidate.name == "BreakoutDuJourSetup" else self.min_rr
+        if candidate.rr_tp1 < rr_min:
+            eligible = False
+            blockers.append(f"R/R TP1 {candidate.rr_tp1:.2f}R < minimum {rr_min:.2f}R.")
+
+        cooldown = self.cooldown_reason(candidate, trade_ledger, reference)
+        if cooldown:
+            eligible = False
+            blockers.append(cooldown)
+
+        session_bonus = self.session_bonus(candidate, session)
+        status_bonus = 14 if candidate.status == "TRADE_READY" else 2
+        rr_bonus = min(12, max(0, (candidate.rr_tp1 - rr_min) * 8))
+        event_bonus = 0
+        if event_active and candidate.name == "NewsReactionSetup":
+            event_bonus = 18
+            reasons.append("NewsReaction prioritaire en mode event.")
+        elif event_active and candidate.name in {"TrendContinuationSetup", "BreakoutDuJourSetup"}:
+            event_bonus = -10
+            reasons.append("Mode event: setup directionnel mecanique penalise.")
+
+        raw_score = (
+            priority * 0.24
+            + candidate.confidence * 0.30
+            + candidate.confluence_score * 0.22
+            + status_bonus
+            + session_bonus
+            + rr_bonus
+            + event_bonus
+            - len(candidate.blockers) * 4
+        )
+        score = clamp_score(raw_score)
+        if session_bonus > 0:
+            reasons.append(f"Session compatible: {session}.")
+        if candidate.rr_tp1 >= rr_min:
+            reasons.append(f"R/R TP1 valide: {candidate.rr_tp1:.2f}R.")
+        if candidate.conditions_met:
+            reasons.append(f"{len(candidate.conditions_met)} condition(s) validee(s).")
+
+        return {
+            "candidate": candidate,
+            "name": candidate.name,
+            "status": candidate.status,
+            "direction": candidate.direction,
+            "score": score,
+            "priority": priority,
+            "confidence": candidate.confidence,
+            "confluence_score": candidate.confluence_score,
+            "rr_tp1": candidate.rr_tp1,
+            "session_bonus": session_bonus,
+            "eligible": eligible,
+            "reasons": unique_preserve_order(reasons),
+            "blockers": unique_preserve_order(blockers),
+        }
+
+    def session_bonus(self, candidate: SetupCandidate, session: str) -> int:
+        if candidate.name == "NewsReactionSetup":
+            return 10
+        if candidate.name == "TrendContinuationSetup" and session == "london_ny_overlap":
+            return 14
+        if candidate.name == "BreakoutDuJourSetup" and session in {"london_open", "london_ny_overlap"}:
+            return 14
+        if candidate.name == "RangeTradingSetup" and session == "asian":
+            return 14
+        if candidate.preferred_session in {"all", session}:
+            return 8
+        return 0
+
+    def cooldown_reason(
+        self,
+        candidate: SetupCandidate,
+        trade_ledger: TradeLedgerSummary | None,
+        reference: datetime,
+    ) -> str | None:
+        if trade_ledger is None:
+            return None
+        for plan in [*trade_ledger.active_trades, *trade_ledger.recent_trades]:
+            if plan.direction != candidate.direction:
+                continue
+            if not trade_plan_closed(plan):
+                return f"Trade {plan.direction} deja actif: nouveau setup bloque."
+            closed_reference = parse_iso_datetime(plan.closed_at or plan.updated_at or plan.created_at)
+            if closed_reference is None:
+                continue
+            if plan.outcome == "loss":
+                cooldown = candidate.cooldown_after_loss_minutes
+            elif plan.outcome == "win":
+                cooldown = candidate.cooldown_after_win_minutes
+            elif plan.outcome == "expired":
+                cooldown = 60
+            else:
+                cooldown = 90
+            elapsed_minutes = (reference - closed_reference).total_seconds() / 60.0
+            if 0 <= elapsed_minutes <= cooldown:
+                return f"Cooldown {candidate.name}: dernier trade {plan.outcome} il y a {elapsed_minutes:.0f} min, attendre {cooldown} min."
+        return None
+
+    @staticmethod
+    def public_rank(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": item["name"],
+            "status": item["status"],
+            "direction": item["direction"],
+            "score": item["score"],
+            "priority": item["priority"],
+            "confidence": item["confidence"],
+            "confluence_score": item["confluence_score"],
+            "rr_tp1": item["rr_tp1"],
+            "session_bonus": item["session_bonus"],
+            "eligible": item["eligible"],
+            "reasons": item["reasons"],
+            "blockers": item["blockers"],
+        }
+
+
+def build_strategy_selection(
+    candidates: list[SetupCandidate],
+    event_mode: EventModeAnalysis | None = None,
+    trade_ledger: TradeLedgerSummary | None = None,
+    now: datetime | None = None,
+    min_rr: float = 1.5,
+) -> StrategySelection:
+    session = detect_current_session(now)
+    return StrategyCoordinator(min_rr=min_rr).select(
+        candidates,
+        session=session,
+        event_mode=event_mode,
+        trade_ledger=trade_ledger,
+        now=now,
+    )
+
+
 def build_news_reaction_trade_plan(
     event: FastNewsEvent,
     reaction: PriceReactionSignal,
@@ -10688,6 +10923,8 @@ def build_payload(
     chart_store: ChartStore | None = None,
     news_reaction_setup: NewsReactionTradePlan | None = None,
     reversal_engine: dict[str, ReversalSetup] | None = None,
+    strategy_candidates: list[SetupCandidate] | None = None,
+    strategy_selection: StrategySelection | None = None,
     settings: UserSettings | None = None,
     settings_validation: SettingsValidation | None = None,
 ) -> dict[str, Any]:
@@ -10829,6 +11066,10 @@ def build_payload(
         payload["news_reaction_setup"] = asdict(news_reaction_setup)
     if reversal_engine:
         payload["reversal_engine"] = {key: asdict(value) for key, value in reversal_engine.items()}
+    if strategy_candidates:
+        payload["strategy_candidates"] = [asdict(candidate) for candidate in strategy_candidates]
+    if strategy_selection:
+        payload["strategy_selection"] = asdict(strategy_selection)
     if settings:
         payload["settings"] = asdict(settings)
     if settings_validation:
@@ -15633,6 +15874,19 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         technical_decision=technical_decision,
         event_mode=event_mode,
     )
+    strategy_candidates = build_strategy_candidates(
+        gold,
+        technical_readings,
+        chart_store,
+        news_reaction_setup=news_reaction_setup,
+        event_mode=event_mode,
+    )
+    strategy_selection = build_strategy_selection(
+        strategy_candidates,
+        event_mode=event_mode,
+        trade_ledger=trade_ledger,
+        min_rr=user_settings.minimum_risk_reward,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -15664,6 +15918,8 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
         reversal_engine=reversal_engine,
+        strategy_candidates=strategy_candidates,
+        strategy_selection=strategy_selection,
         settings=user_settings,
         settings_validation=settings_validation,
     )
@@ -15867,6 +16123,19 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         technical_decision=technical_decision,
         event_mode=event_mode,
     )
+    strategy_candidates = build_strategy_candidates(
+        gold,
+        technical_readings,
+        chart_store,
+        news_reaction_setup=news_reaction_setup,
+        event_mode=event_mode,
+    )
+    strategy_selection = build_strategy_selection(
+        strategy_candidates,
+        event_mode=event_mode,
+        trade_ledger=trade_ledger,
+        min_rr=user_settings.minimum_risk_reward,
+    )
     payload = build_payload(
         gold,
         dxy,
@@ -15898,6 +16167,8 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
         reversal_engine=reversal_engine,
+        strategy_candidates=strategy_candidates,
+        strategy_selection=strategy_selection,
         settings=user_settings,
         settings_validation=settings_validation,
     )

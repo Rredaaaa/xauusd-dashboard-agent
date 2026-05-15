@@ -85,6 +85,7 @@ from xauusd_agent import (
     evaluate_range_trading_setup,
     evaluate_trend_continuation_setup,
     build_reversal_engine,
+    build_strategy_selection,
     classify_news_reaction_event,
     detect_news_reaction_price,
     detect_rsi_divergence,
@@ -3780,6 +3781,145 @@ class Phase7BStrategyCandidateTests(unittest.TestCase):
         self.assertEqual(len(candidates), 6)
         self.assertEqual(candidates[-1].name, "NewsReactionSetup")
         self.assertTrue({candidate.name for candidate in candidates}.issuperset({"PivotRejectionSetup", "MeanReversionSetup", "RangeTradingSetup", "TrendContinuationSetup", "BreakoutDuJourSetup"}))
+
+
+class Phase7CStrategyCoordinatorTests(unittest.TestCase):
+    reference = datetime(2026, 5, 15, 13, 30, tzinfo=timezone.utc)
+
+    def candidate(
+        self,
+        name: str,
+        status: str = "TRADE_READY",
+        direction: str = "BUY",
+        confidence: int = 75,
+        confluence: int = 75,
+        rr: float = 2.0,
+        preferred_session: str = "all",
+        blockers: list[str] | None = None,
+    ) -> SetupCandidate:
+        return SetupCandidate(
+            name=name,
+            status=status,
+            direction=direction,
+            confidence=confidence,
+            confluence_score=confluence,
+            conditions_met=["condition_a", "condition_b", "condition_c"],
+            entry_zone_low=99.0,
+            entry_zone_high=101.0,
+            stop_loss=95.0 if direction == "BUY" else 105.0,
+            tp1=110.0 if direction == "BUY" else 90.0,
+            tp2=115.0 if direction == "BUY" else 85.0,
+            tp3=120.0 if direction == "BUY" else 80.0,
+            rr_tp1=rr,
+            rr_tp2=rr + 1.0,
+            rr_tp3=rr + 2.0,
+            validity_minutes=240,
+            cooldown_after_loss_minutes=240,
+            cooldown_after_win_minutes=60,
+            preferred_session=preferred_session,
+            reasons=["test candidate"],
+            blockers=blockers or [],
+            detected_at=self.reference.isoformat(),
+            metadata={},
+        )
+
+    def trade_plan(self, outcome: str = "loss", direction: str = "BUY", minutes_ago: int = 30) -> TradePlan:
+        closed_at = (self.reference - timedelta(minutes=minutes_ago)).isoformat()
+        return TradePlan(
+            trade_id="test-trade",
+            created_at=(self.reference - timedelta(minutes=minutes_ago + 30)).isoformat(),
+            updated_at=closed_at,
+            status="sl_hit" if outcome == "loss" else "tp3_hit",
+            direction=direction,
+            entry_type="market_reference",
+            reference_price=100.0,
+            entry_zone_low=99.0,
+            entry_zone_high=101.0,
+            stop_loss=95.0,
+            tp1=110.0,
+            tp2=115.0,
+            tp3=120.0,
+            risk_reward_tp1=2.0,
+            risk_reward_tp2=3.0,
+            risk_reward_tp3=4.0,
+            max_valid_until=(self.reference + timedelta(hours=4)).isoformat(),
+            source_signal_id="test",
+            global_score_at_creation=80,
+            data_quality_score=80,
+            confidence_score=80,
+            market_regime="Normal Macro",
+            agents_validating=["TechnicalAgent", "MacroAgent", "RiskManagerAgent"],
+            agents_contradicting=[],
+            evidence_sources=[],
+            event_facts_snapshot=[],
+            technical_snapshot="test",
+            macro_snapshot="test",
+            geopolitical_snapshot="test",
+            elliott_wave_snapshot="disabled",
+            invalidation_rules=[],
+            outcome=outcome,
+            outcome_reason="test",
+            closed_at=closed_at,
+        )
+
+    def test_phase7c_news_reaction_wins_when_event_mode_active(self) -> None:
+        selection = build_strategy_selection(
+            [
+                self.candidate("TrendContinuationSetup", confidence=95, confluence=95, preferred_session="london_ny_overlap"),
+                self.candidate("NewsReactionSetup", confidence=80, confluence=80),
+            ],
+            event_mode=EventModeAnalysis(True, 80, "ACTIVE", "freeze", 1.5, ["event"]),
+            now=self.reference,
+        )
+        self.assertEqual(selection.status, "TRADE_READY")
+        self.assertIsNotNone(selection.selected_setup)
+        self.assertEqual(selection.selected_setup.name, "NewsReactionSetup")
+        self.assertTrue(selection.event_mode_active)
+
+    def test_phase7c_trend_continuation_wins_london_ny_overlap_without_event(self) -> None:
+        selection = build_strategy_selection(
+            [
+                self.candidate("PivotRejectionSetup", confidence=90, confluence=90),
+                self.candidate("TrendContinuationSetup", confidence=78, confluence=78, preferred_session="london_ny_overlap"),
+            ],
+            now=self.reference,
+        )
+        self.assertIsNotNone(selection.selected_setup)
+        self.assertEqual(selection.selected_setup.name, "TrendContinuationSetup")
+        self.assertEqual(selection.session, "london_ny_overlap")
+
+    def test_phase7c_breakout_requires_two_r_minimum(self) -> None:
+        selection = build_strategy_selection(
+            [self.candidate("BreakoutDuJourSetup", rr=1.8, preferred_session="london_open")],
+            now=datetime(2026, 5, 15, 7, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertIn("R/R TP1 1.80R < minimum 2.00R.", selection.rejected_candidates[0]["blockers"])
+
+    def test_phase7c_cooldown_blocks_recent_same_direction_loss(self) -> None:
+        ledger = TradeLedgerSummary(
+            ledger_path="test",
+            generated_at=self.reference.isoformat(),
+            quality_gate_status="OK",
+            quality_gate_reasons=[],
+            recent_trades=[self.trade_plan(outcome="loss", direction="BUY", minutes_ago=30)],
+        )
+        selection = build_strategy_selection(
+            [self.candidate("MeanReversionSetup", direction="BUY", rr=2.2)],
+            trade_ledger=ledger,
+            now=self.reference,
+        )
+        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertIn("Cooldown MeanReversionSetup", selection.rejected_candidates[0]["blockers"][0])
+
+    def test_phase7c_no_setup_when_all_candidates_are_noise(self) -> None:
+        selection = build_strategy_selection(
+            [self.candidate("RangeTradingSetup", status="NO_SETUP", direction="NEUTRAL", rr=0.0)],
+            now=self.reference,
+        )
+        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertIsNone(selection.selected_setup)
+        self.assertEqual(selection.ranked_candidates, [])
 
 
 if __name__ == "__main__":

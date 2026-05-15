@@ -13,6 +13,7 @@ from xauusd_agent import (
     BriefingBundle,
     CFTCPositioning,
     ChartStore,
+    ChartTimeframe,
     CrossAssetAnalysis,
     DataQualitySnapshot,
     ETFFlowsAnalysis,
@@ -25,10 +26,12 @@ from xauusd_agent import (
     MarketRegimeAnalysis,
     NewsItem,
     OfficialMacroRates,
+    OHLCCandle,
     OrchestratorDecision,
     PoliticalStatement,
     PreflightCheck,
     PricePoint,
+    ReversalSetup,
     SourceSnapshot,
     SymbolSnapshot,
     TechnicalDecision,
@@ -73,8 +76,10 @@ from xauusd_agent import (
     build_passive_agent_results,
     build_payload,
     build_news_reaction_engine,
+    build_reversal_engine,
     classify_news_reaction_event,
     detect_news_reaction_price,
+    detect_rsi_divergence,
     build_orchestrator_decision,
     build_scenario_plan,
     build_technical_decision,
@@ -83,6 +88,7 @@ from xauusd_agent import (
     parse_ishares_iau_official_data,
     render_dashboard,
     render_desk_position_summary,
+    render_reversal_panels,
     render_signal_locked_panel,
     render_trade_tracker_panel,
     render_replay_report_markdown,
@@ -198,7 +204,7 @@ class HeadlineScoringTests(unittest.TestCase):
         self.assertTrue(should_skip_headline("XAUUSD analysis today and forecast", "FXEmpire"))
 
     def test_phase3_news_flow_deduplicates_common_prefix_and_keeps_fresh_impact(self) -> None:
-        recent = "2026-05-13T10:00:00+00:00"
+        recent = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         items = [
             NewsItem(
                 title="Fed announces emergency liquidity facility as dollar jumps",
@@ -3138,7 +3144,7 @@ class Phase6TradeLevelsTests(unittest.TestCase):
         self.assertIn("4634.19", html)
         self.assertIn("4625.00", html)
         self.assertIn("4610.04", html)
-        self.assertIn("Locked trade", html)
+        self.assertIn("Position historisee", html)
         self.assertNotIn("4704.90", html)
         self.assertNotIn("4575.72", html)
         self.assertNotIn("4524.04", html)
@@ -3178,7 +3184,8 @@ class Phase6TradeLevelsTests(unittest.TestCase):
             total_trades=0,
         )
         html = render_desk_position_summary(live_recommendation, orchestrator, None, ledger)
-        self.assertIn("Signal live sans trade locked", html)
+        self.assertIn("Aucune position active", html)
+        self.assertNotIn("Signal live sans trade locked", html)
         self.assertNotIn("4704.90", html)
         self.assertNotIn("4575.72", html)
         self.assertNotIn("4524.04", html)
@@ -3240,6 +3247,181 @@ class Phase6TradeLevelsTests(unittest.TestCase):
             self.assertEqual(summary.active_trades[0].trade_id, "OPEN-BUY")
             self.assertEqual(len(payload["plans"]), 1)
             self.assertEqual(payload["plans"][0]["trade_id"], "OPEN-BUY")
+
+
+class PrePhase7ReversalEngineTests(unittest.TestCase):
+    def snapshot(self, price: float = 100.0) -> SymbolSnapshot:
+        return SymbolSnapshot(
+            symbol="XAU/USD",
+            label="XAU/USD",
+            price=price,
+            previous_close=98.0,
+            change_abs=2.0,
+            change_pct=2.0,
+            period_change_pct=1.0,
+            day_high=125.0,
+            day_low=95.0,
+            support=95.0,
+            resistance=125.0,
+            fetched_at="2026-05-15T00:00:00+00:00",
+            points=[PricePoint(timestamp=1, close=price)],
+        )
+
+    def reading(self, timeframe: str, rsi: float = 14.0, volume_ratio: float = 1.9) -> TechnicalReading:
+        return TechnicalReading(
+            timeframe=timeframe,
+            close=100.0,
+            ema20=101.0,
+            ema50=102.0,
+            ema100=103.0,
+            ema200=104.0,
+            rsi7=rsi,
+            macd_line=-1.0,
+            macd_signal=-1.2,
+            macd_histogram=0.2,
+            volume_ratio=volume_ratio,
+            atr14=4.0,
+            score=0.0,
+            verdict="NEUTRAL",
+            reasons=[],
+        )
+
+    def buy_rejection_candles(self, timeframe: str) -> list[OHLCCandle]:
+        candles: list[OHLCCandle] = []
+        closes = [108, 106, 104, 102, 100, 99, 98, 97, 96, 95.5, 96.2, 96.8, 98.5]
+        for index, close in enumerate(closes):
+            low = close - 0.6
+            high = close + 0.9
+            if index == len(closes) - 1:
+                low = 94.7
+                high = 100.6
+                close = 99.2
+            candles.append(
+                OHLCCandle(
+                    timestamp=1_700_000_000 + index * 300,
+                    open=close - 0.2,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=1000 + index,
+                    source="test",
+                    timeframe=timeframe,
+                    fetched_at="2026-05-15T00:00:00+00:00",
+                )
+            )
+        return candles
+
+    def chart_store(self) -> ChartStore:
+        timeframes = [
+            ChartTimeframe("M5", "READY", self.buy_rejection_candles("M5")),
+            ChartTimeframe("M15", "READY", self.buy_rejection_candles("M15")),
+            ChartTimeframe("H1", "READY", self.buy_rejection_candles("H1")),
+            ChartTimeframe("H4", "READY", self.buy_rejection_candles("H4")),
+        ]
+        return ChartStore(
+            generated_at="2026-05-15T00:00:00+00:00",
+            symbol="GC=F",
+            source="test",
+            status="READY",
+            summary="ready",
+            timeframes=timeframes,
+        )
+
+    def test_pre_phase7_detects_bullish_and_bearish_rsi_divergence(self) -> None:
+        bullish = detect_rsi_divergence(
+            [100, 99, 98, 97, 96, 97, 95],
+            [30, 28, 24, 20, 18, 22, 25],
+            window=7,
+        )
+        bearish = detect_rsi_divergence(
+            [100, 101, 102, 103, 104, 103, 105],
+            [70, 74, 80, 84, 86, 82, 76],
+            window=7,
+        )
+        self.assertEqual(bullish["direction"], "BUY")
+        self.assertEqual(bearish["direction"], "SELL")
+
+    def test_pre_phase7_reversal_engine_exposes_three_horizons(self) -> None:
+        readings = [
+            self.reading("5m"),
+            self.reading("15m"),
+            self.reading("1H"),
+            self.reading("4H", rsi=45.0, volume_ratio=1.0),
+        ]
+        engine = build_reversal_engine(self.snapshot(), readings, self.chart_store())
+        self.assertEqual(set(engine), {"scalp", "intraday", "swing"})
+        self.assertTrue(all(setup.status == "REVERSAL_BUY" for setup in engine.values()))
+        self.assertTrue(all(setup.tp1 > setup.entry_zone_high for setup in engine.values()))
+        self.assertTrue(all(setup.stop_loss < setup.entry_zone_low for setup in engine.values()))
+
+    def test_pre_phase7_reversal_engine_returns_no_trade_when_conditions_are_weak(self) -> None:
+        readings = [
+            self.reading("5m", rsi=48.0, volume_ratio=1.0),
+            self.reading("15m", rsi=48.0, volume_ratio=1.0),
+            self.reading("1H", rsi=48.0, volume_ratio=1.0),
+            self.reading("4H", rsi=48.0, volume_ratio=1.0),
+        ]
+        engine = build_reversal_engine(self.snapshot(price=110.0), readings, self.chart_store())
+        self.assertTrue(all(setup.status == "NO_REVERSAL_TRADE" for setup in engine.values()))
+
+    def test_pre_phase7_render_reversal_panels_uses_only_visible_statuses(self) -> None:
+        setup = ReversalSetup(
+            horizon="scalp",
+            status="REVERSAL_BUY",
+            direction="BUY",
+            tf_signal="5m",
+            tf_context="15m",
+            confluence_score=4,
+            conditions_met=["rsi_extreme", "swing_rejection", "volume_spike", "range_position"],
+            entry_zone_low=99.5,
+            entry_zone_high=100.5,
+            stop_loss=94.0,
+            tp1=108.0,
+            tp2=112.0,
+            tp3=118.0,
+            risk_reward_tp1=1.6,
+            validity_minutes=30,
+            reasons=["RSI7 en survente extreme."],
+            blockers=[],
+            detected_at="2026-05-15T00:00:00+00:00",
+        )
+        html = render_reversal_panels({"scalp": setup})
+        self.assertIn("REVERSAL BUY", html)
+        self.assertIn("NO REVERSAL TRADE", html)
+        self.assertNotIn("WATCH BUY", html)
+        self.assertNotIn("BLOCKED", html)
+
+    def test_pre_phase7_desk_clean_hides_internal_gate_language(self) -> None:
+        recommendation = TradeRecommendation(
+            "global",
+            "SELL",
+            59,
+            "Orchestrateur v3 NO_TRADE: score pondere 23.9/100, reference initiale SELL 62/100. Pas de trade.",
+            [],
+            0.0,
+            0.0,
+            0.0,
+            "test",
+        )
+        orchestrator = OrchestratorDecision(
+            verdict="SELL",
+            score=59,
+            status="NO_TRADE",
+            engine="orchestrator_v3",
+            bullish_score=23.9,
+            legacy_verdict="SELL",
+            legacy_score=62,
+            top_reasons=[],
+            counter_reasons=[],
+            contradictions=[],
+            quality_gate_reasons=["Quality Gate v3: setup surveille."],
+        )
+        html = render_desk_position_summary(recommendation, orchestrator, None, None)
+        locked_html = render_signal_locked_panel(None, recommendation, orchestrator, None)
+        combined = html + locked_html
+        self.assertIn("Aucune position active", combined)
+        for hidden in ["Orchestrateur v3", "score pondere", "reference initiale", "Quality Gate", "SURVEILLER", "WATCH BUY", "BLOCKED", "Signal live"]:
+            self.assertNotIn(hidden, combined)
 
 
 if __name__ == "__main__":

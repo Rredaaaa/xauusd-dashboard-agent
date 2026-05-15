@@ -825,6 +825,28 @@ class NewsReactionTradePlan:
 
 
 @dataclass
+class ReversalSetup:
+    horizon: str
+    status: str
+    direction: str
+    tf_signal: str
+    tf_context: str
+    confluence_score: int
+    conditions_met: list[str]
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    risk_reward_tp1: float
+    validity_minutes: int
+    reasons: list[str]
+    blockers: list[str]
+    detected_at: str
+
+
+@dataclass
 class MarketRegimeAnalysis:
     name: str
     status: str
@@ -1303,6 +1325,7 @@ class BriefingBundle:
     orchestrator_decision: OrchestratorDecision | None = None
     chart_store: ChartStore | None = None
     news_reaction_setup: NewsReactionTradePlan | None = None
+    reversal_engine: dict[str, ReversalSetup] = field(default_factory=dict)
 
 
 @dataclass
@@ -5240,6 +5263,9 @@ def setup_level_profile(setup_type: str) -> tuple[float, float, float, float]:
         "mean_reversion": (0.75, 1.55, 2.30, 3.20),
         "pivot_rejection": (0.80, 1.60, 2.45, 3.50),
         "news_reaction": (0.72, 1.65, 2.65, 4.00),
+        "reversal_scalp": (0.55, 1.55, 2.40, 3.30),
+        "reversal_intraday": (0.65, 1.60, 2.50, 3.60),
+        "reversal_swing": (0.75, 1.70, 2.65, 4.00),
     }
     return profiles.get(setup_type, profiles["trend_continuation"])
 
@@ -5359,6 +5385,9 @@ def build_market_trade_levels(
     entry_padding = max(1.0, min(risk * 0.16, atr * 0.35))
     validity_map = {
         "news_reaction": (30, "NEWS"),
+        "reversal_scalp": (30, "M5"),
+        "reversal_intraday": (90, "M15"),
+        "reversal_swing": (720, "H1"),
         "breakout": (240, "M15"),
         "range": (120, "M5"),
         "mean_reversion": (240, "M15"),
@@ -5390,6 +5419,251 @@ def build_market_trade_levels(
         partial_tp3_pct=20,
         reasons=reasons[:6],
     )
+
+
+def reading_for_timeframe(readings: list[TechnicalReading], timeframe: str) -> TechnicalReading | None:
+    aliases = {
+        "M5": "5m",
+        "M15": "15m",
+        "H1": "1H",
+        "H4": "4H",
+        "D1": "1D",
+    }
+    target = aliases.get(timeframe, timeframe)
+    return next((reading for reading in readings if reading.timeframe == target), None)
+
+
+def candles_for_timeframe(chart_store: ChartStore | None, timeframe: str) -> list[OHLCCandle]:
+    if chart_store is None:
+        return []
+    aliases = {
+        "5m": "M5",
+        "15m": "M15",
+        "1H": "H1",
+        "4H": "H4",
+        "1D": "D1",
+    }
+    target = aliases.get(timeframe, timeframe)
+    for item in chart_store.timeframes:
+        if item.timeframe == target and item.status == "READY":
+            return item.candles
+    return []
+
+
+def detect_rsi_divergence(closes: list[float], rsi_values: list[float | None], window: int = 8) -> dict[str, Any] | None:
+    paired = [
+        (float(close), float(rsi))
+        for close, rsi in zip(closes[-window:], rsi_values[-window:])
+        if rsi is not None
+    ]
+    if len(paired) < 5:
+        return None
+    prices = [item[0] for item in paired]
+    rsis = [item[1] for item in paired]
+    latest_index = len(paired) - 1
+    latest_price = prices[-1]
+    latest_rsi = rsis[-1]
+    previous_prices = prices[:-1]
+    previous_rsis = rsis[:-1]
+    if not previous_prices:
+        return None
+
+    previous_low_index = min(range(len(previous_prices)), key=lambda index: previous_prices[index])
+    previous_high_index = max(range(len(previous_prices)), key=lambda index: previous_prices[index])
+    previous_low_price = previous_prices[previous_low_index]
+    previous_high_price = previous_prices[previous_high_index]
+    previous_low_rsi = previous_rsis[previous_low_index]
+    previous_high_rsi = previous_rsis[previous_high_index]
+
+    if latest_price < previous_low_price and latest_rsi > previous_low_rsi:
+        strength = min(1.0, ((previous_low_price - latest_price) / max(abs(previous_low_price), 1.0) * 100) + ((latest_rsi - previous_low_rsi) / 20))
+        return {"direction": "BUY", "strength": round(strength, 2), "latest_index": latest_index}
+    if latest_price > previous_high_price and latest_rsi < previous_high_rsi:
+        strength = min(1.0, ((latest_price - previous_high_price) / max(abs(previous_high_price), 1.0) * 100) + ((previous_high_rsi - latest_rsi) / 20))
+        return {"direction": "SELL", "strength": round(strength, 2), "latest_index": latest_index}
+    return None
+
+
+def reversal_no_trade(
+    horizon: str,
+    direction: str,
+    tf_signal: str,
+    tf_context: str,
+    validity_minutes: int,
+    reason: str,
+    confluence_score: int = 0,
+    detected_at: str | None = None,
+    blockers: list[str] | None = None,
+) -> ReversalSetup:
+    return ReversalSetup(
+        horizon=horizon,
+        status="NO_REVERSAL_TRADE",
+        direction=direction if direction in {"BUY", "SELL"} else "NEUTRAL",
+        tf_signal=tf_signal,
+        tf_context=tf_context,
+        confluence_score=confluence_score,
+        conditions_met=[],
+        entry_zone_low=0.0,
+        entry_zone_high=0.0,
+        stop_loss=0.0,
+        tp1=0.0,
+        tp2=0.0,
+        tp3=0.0,
+        risk_reward_tp1=0.0,
+        validity_minutes=validity_minutes,
+        reasons=[reason],
+        blockers=blockers or [],
+        detected_at=detected_at or iso_now(),
+    )
+
+
+def check_reversal_conditions(
+    direction: str,
+    reading: TechnicalReading,
+    candles: list[OHLCCandle],
+    gold: SymbolSnapshot,
+) -> list[dict[str, Any]]:
+    if len(candles) < 12:
+        return [
+            {"name": "history", "met": False, "reason": "Historique OHLC insuffisant pour detecter un retournement."}
+        ]
+    closes = [candle.close for candle in candles]
+    rsi_values = rsi_series(closes, 7)
+    divergence = detect_rsi_divergence(closes, rsi_values, window=8)
+    last = candles[-1]
+    previous = candles[-13:-1]
+    swing_low = min(candle.low for candle in previous)
+    swing_high = max(candle.high for candle in previous)
+    range_position = price_range_position(gold)
+    if direction == "BUY":
+        return [
+            {"name": "rsi_extreme", "met": reading.rsi7 <= 18, "reason": f"RSI7 {reading.rsi7:.1f} en survente extreme."},
+            {"name": "divergence", "met": bool(divergence and divergence["direction"] == "BUY"), "reason": "Divergence bullish: prix plus bas, RSI plus haut."},
+            {"name": "swing_rejection", "met": last.low <= swing_low and last.close > swing_low, "reason": f"Rejet du swing low {swing_low:.2f}, cloture {last.close:.2f} au-dessus."},
+            {"name": "volume_spike", "met": reading.volume_ratio > 1.5, "reason": f"Volume proxy {reading.volume_ratio:.2f}x moyenne."},
+            {"name": "range_position", "met": range_position <= 20, "reason": f"Prix dans les {range_position:.0f}% inferieurs du range jour."},
+        ]
+    return [
+        {"name": "rsi_extreme", "met": reading.rsi7 >= 82, "reason": f"RSI7 {reading.rsi7:.1f} en surachat extreme."},
+        {"name": "divergence", "met": bool(divergence and divergence["direction"] == "SELL"), "reason": "Divergence bearish: prix plus haut, RSI plus bas."},
+        {"name": "swing_rejection", "met": last.high >= swing_high and last.close < swing_high, "reason": f"Rejet du swing high {swing_high:.2f}, cloture {last.close:.2f} en dessous."},
+        {"name": "volume_spike", "met": reading.volume_ratio > 1.5, "reason": f"Volume proxy {reading.volume_ratio:.2f}x moyenne."},
+        {"name": "range_position", "met": range_position >= 80, "reason": f"Prix dans les {100 - range_position:.0f}% superieurs du range jour."},
+    ]
+
+
+def check_reversal_context_filter(
+    direction: str,
+    context_reading: TechnicalReading | None,
+    context_candles: list[OHLCCandle],
+) -> str | None:
+    if context_reading is None:
+        return "Timeframe contexte indisponible."
+    closes = [candle.close for candle in context_candles]
+    rsi_values = [value for value in rsi_series(closes, 7) if value is not None]
+    recent = rsi_values[-5:]
+    if direction == "BUY" and context_reading.rsi7 <= 25 and len(recent) >= 5 and all(value <= 30 for value in recent):
+        return f"Contexte {context_reading.timeframe} encore en tendance baissiere forte."
+    if direction == "SELL" and context_reading.rsi7 >= 75 and len(recent) >= 5 and all(value >= 70 for value in recent):
+        return f"Contexte {context_reading.timeframe} encore en tendance haussiere forte."
+    return None
+
+
+def detect_reversal_setup(
+    horizon: str,
+    tf_signal: str,
+    tf_context: str,
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    validity_minutes: int,
+    now: datetime | None = None,
+) -> ReversalSetup:
+    detected_at = (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
+    signal_reading = reading_for_timeframe(readings, tf_signal)
+    context_reading = reading_for_timeframe(readings, tf_context)
+    signal_candles = candles_for_timeframe(chart_store, tf_signal)
+    context_candles = candles_for_timeframe(chart_store, tf_context)
+    if signal_reading is None or not signal_candles:
+        return reversal_no_trade(horizon, "NEUTRAL", tf_signal, tf_context, validity_minutes, "Donnees signal indisponibles.", detected_at=detected_at)
+
+    buy_conditions = check_reversal_conditions("BUY", signal_reading, signal_candles, gold)
+    sell_conditions = check_reversal_conditions("SELL", signal_reading, signal_candles, gold)
+    buy_met = [item for item in buy_conditions if item["met"]]
+    sell_met = [item for item in sell_conditions if item["met"]]
+    if len(buy_met) >= 3 and len(buy_met) > len(sell_met):
+        direction = "BUY"
+        selected = buy_met
+        all_selected = buy_conditions
+    elif len(sell_met) >= 3 and len(sell_met) > len(buy_met):
+        direction = "SELL"
+        selected = sell_met
+        all_selected = sell_conditions
+    else:
+        best = max(len(buy_met), len(sell_met))
+        reason = f"Conditions reversal insuffisantes: BUY {len(buy_met)}/5, SELL {len(sell_met)}/5."
+        return reversal_no_trade(horizon, "NEUTRAL", tf_signal, tf_context, validity_minutes, reason, confluence_score=best, detected_at=detected_at)
+
+    context_blocker = check_reversal_context_filter(direction, context_reading, context_candles)
+    if context_blocker:
+        return reversal_no_trade(horizon, direction, tf_signal, tf_context, validity_minutes, context_blocker, confluence_score=len(selected), detected_at=detected_at, blockers=[context_blocker])
+
+    setup_type = f"reversal_{horizon}"
+    levels = build_market_trade_levels(
+        gold,
+        direction,
+        setup_type,
+        atr=max(signal_reading.atr14, 3.0),
+        readings=readings,
+        proxy_price=signal_reading.close,
+        min_rr=1.5,
+    )
+    condition_names = [item["name"] for item in selected]
+    can_trade = len(selected) >= 4 or (
+        len(selected) >= 3
+        and {"divergence", "swing_rejection"}.issubset(set(condition_names))
+        and levels.risk_reward_tp1 >= 1.8
+    )
+    if not can_trade:
+        reason = f"Setup incomplet: {len(selected)}/5 conditions, divergence/rejet/RR pas assez forts."
+        return reversal_no_trade(horizon, direction, tf_signal, tf_context, validity_minutes, reason, confluence_score=len(selected), detected_at=detected_at)
+    if levels.risk_reward_tp1 < 1.5:
+        reason = f"R/R TP1 insuffisant: {levels.risk_reward_tp1:.2f}R."
+        return reversal_no_trade(horizon, direction, tf_signal, tf_context, validity_minutes, reason, confluence_score=len(selected), detected_at=detected_at, blockers=[reason])
+
+    return ReversalSetup(
+        horizon=horizon,
+        status=f"REVERSAL_{direction}",
+        direction=direction,
+        tf_signal=tf_signal,
+        tf_context=tf_context,
+        confluence_score=len(selected),
+        conditions_met=condition_names,
+        entry_zone_low=levels.entry_zone_low,
+        entry_zone_high=levels.entry_zone_high,
+        stop_loss=levels.stop_loss,
+        tp1=levels.tp1,
+        tp2=levels.tp2,
+        tp3=levels.tp3,
+        risk_reward_tp1=levels.risk_reward_tp1,
+        validity_minutes=validity_minutes,
+        reasons=[item["reason"] for item in all_selected if item["met"]][:5],
+        blockers=[],
+        detected_at=detected_at,
+    )
+
+
+def build_reversal_engine(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    now: datetime | None = None,
+) -> dict[str, ReversalSetup]:
+    return {
+        "scalp": detect_reversal_setup("scalp", "5m", "15m", gold, readings, chart_store, 30, now=now),
+        "intraday": detect_reversal_setup("intraday", "15m", "1H", gold, readings, chart_store, 90, now=now),
+        "swing": detect_reversal_setup("swing", "1H", "4H", gold, readings, chart_store, 720, now=now),
+    }
 
 
 def build_mtf_alignment_note(readings: list[TechnicalReading], verdict: str) -> tuple[int, str]:
@@ -9786,6 +10060,7 @@ def build_payload(
     orchestrator_decision: OrchestratorDecision | None = None,
     chart_store: ChartStore | None = None,
     news_reaction_setup: NewsReactionTradePlan | None = None,
+    reversal_engine: dict[str, ReversalSetup] | None = None,
     settings: UserSettings | None = None,
     settings_validation: SettingsValidation | None = None,
 ) -> dict[str, Any]:
@@ -9925,6 +10200,8 @@ def build_payload(
         payload["orchestrator_decision"] = asdict(orchestrator_decision)
     if news_reaction_setup:
         payload["news_reaction_setup"] = asdict(news_reaction_setup)
+    if reversal_engine:
+        payload["reversal_engine"] = {key: asdict(value) for key, value in reversal_engine.items()}
     if settings:
         payload["settings"] = asdict(settings)
     if settings_validation:
@@ -10247,6 +10524,40 @@ def build_news_reaction_from_payload(data: dict[str, Any] | None) -> NewsReactio
         reasons=[str(item) for item in data.get("reasons", [])],
         blockers=[str(item) for item in data.get("blockers", [])],
     )
+
+
+def build_reversal_setup_from_payload(data: dict[str, Any]) -> ReversalSetup:
+    return ReversalSetup(
+        horizon=str(data.get("horizon", "")),
+        status=str(data.get("status", "NO_REVERSAL_TRADE")),
+        direction=str(data.get("direction", "NEUTRAL")),
+        tf_signal=str(data.get("tf_signal", "")),
+        tf_context=str(data.get("tf_context", "")),
+        confluence_score=int(data.get("confluence_score", 0) or 0),
+        conditions_met=[str(item) for item in data.get("conditions_met", [])],
+        entry_zone_low=float(data.get("entry_zone_low", 0.0) or 0.0),
+        entry_zone_high=float(data.get("entry_zone_high", 0.0) or 0.0),
+        stop_loss=float(data.get("stop_loss", 0.0) or 0.0),
+        tp1=float(data.get("tp1", 0.0) or 0.0),
+        tp2=float(data.get("tp2", 0.0) or 0.0),
+        tp3=float(data.get("tp3", 0.0) or 0.0),
+        risk_reward_tp1=float(data.get("risk_reward_tp1", 0.0) or 0.0),
+        validity_minutes=int(data.get("validity_minutes", 0) or 0),
+        reasons=[str(item) for item in data.get("reasons", [])],
+        blockers=[str(item) for item in data.get("blockers", [])],
+        detected_at=str(data.get("detected_at", iso_now())),
+    )
+
+
+def build_reversal_engine_from_payload(data: dict[str, Any] | None) -> dict[str, ReversalSetup]:
+    if not isinstance(data, dict):
+        return {}
+    setups: dict[str, ReversalSetup] = {}
+    for key in ("scalp", "intraday", "swing"):
+        item = data.get(key)
+        if isinstance(item, dict):
+            setups[key] = build_reversal_setup_from_payload(item)
+    return setups
 
 
 def build_orchestrator_component_from_payload(data: dict[str, Any]) -> OrchestratorComponent:
@@ -10606,6 +10917,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
     ]
     agent_results = parse_agent_results(payload.get("agent_results", []))
     news_reaction_setup = build_news_reaction_from_payload(payload.get("news_reaction_setup"))
+    reversal_engine = build_reversal_engine_from_payload(payload.get("reversal_engine"))
     event_facts = [
         build_event_fact_from_payload(item)
         for item in payload.get("event_facts", [])
@@ -10658,6 +10970,7 @@ def build_bundle_from_payload(payload: dict[str, Any]) -> BriefingBundle:
         trade_ledger=trade_ledger,
         orchestrator_decision=orchestrator_decision,
         news_reaction_setup=news_reaction_setup,
+        reversal_engine=reversal_engine,
     )
 
 
@@ -12081,6 +12394,71 @@ def find_locked_trade_for_status(trade_ledger: TradeLedgerSummary | None, lead_s
     return None
 
 
+def render_reversal_status(setup: ReversalSetup) -> str:
+    if setup.status == "REVERSAL_BUY":
+        return "REVERSAL BUY"
+    if setup.status == "REVERSAL_SELL":
+        return "REVERSAL SELL"
+    return "NO REVERSAL TRADE"
+
+
+def render_reversal_panels(reversal_engine: dict[str, ReversalSetup] | None) -> str:
+    labels = [
+        ("scalp", "Scalp Reversal"),
+        ("intraday", "Intraday Reversal"),
+        ("swing", "Swing Reversal"),
+    ]
+    cards: list[str] = []
+    for key, label in labels:
+        setup = (reversal_engine or {}).get(key)
+        if setup is None:
+            setup = reversal_no_trade(
+                key,
+                "NEUTRAL",
+                {"scalp": "5m", "intraday": "15m", "swing": "1H"}[key],
+                {"scalp": "15m", "intraday": "1H", "swing": "4H"}[key],
+                {"scalp": 30, "intraday": 90, "swing": 720}[key],
+                "Moteur reversal indisponible sur ce snapshot.",
+            )
+        status_label = render_reversal_status(setup)
+        tone = "bullish" if setup.status == "REVERSAL_BUY" else "bearish" if setup.status == "REVERSAL_SELL" else "neutral"
+        reason_items = "".join(f"<li>{html.escape(reason)}</li>" for reason in setup.reasons[:4])
+        if not reason_items:
+            reason_items = "<li>Aucune condition de retournement exploitable.</li>"
+        levels = ""
+        if setup.status in {"REVERSAL_BUY", "REVERSAL_SELL"}:
+            levels = f"""
+            <div class="trade-levels reversal-levels">
+              <div><span>Entry</span><strong>{setup.entry_zone_low:.2f} / {setup.entry_zone_high:.2f}</strong></div>
+              <div><span>SL</span><strong>{setup.stop_loss:.2f}</strong></div>
+              <div><span>TP1 · 50%</span><strong>{setup.tp1:.2f}</strong></div>
+              <div><span>TP2 · 30%</span><strong>{setup.tp2:.2f}</strong></div>
+              <div><span>TP3 · 20%</span><strong>{setup.tp3:.2f}</strong></div>
+            </div>
+            """.strip()
+        cards.append(
+            f"""
+            <div class="reversal-card {tone}">
+              <div class="reversal-head">
+                <div>
+                  <strong>{html.escape(label)}</strong>
+                  <span>{html.escape(setup.tf_signal)} avec contexte {html.escape(setup.tf_context)}</span>
+                </div>
+                <div class="trade-verdict {tone}">{html.escape(status_label)}</div>
+              </div>
+              <div class="reversal-meta">
+                <span>Confluence {setup.confluence_score}/5</span>
+                <span>Validite {setup.validity_minutes} min</span>
+                <span>R/R TP1 {setup.risk_reward_tp1:.2f}R</span>
+              </div>
+              {levels}
+              <ul class="reversal-reasons">{reason_items}</ul>
+            </div>
+            """.strip()
+        )
+    return f'<div class="reversal-grid">{"".join(cards)}</div>'
+
+
 def render_desk_position_summary(
     global_recommendation: TradeRecommendation,
     orchestrator_decision: OrchestratorDecision | None,
@@ -12103,20 +12481,20 @@ def render_desk_position_summary(
           <div><span>TP2 · 30%</span><strong>{locked_trade.tp2:.2f}</strong></div>
           <div><span>TP3 · 20%</span><strong>{locked_trade.tp3:.2f}</strong></div>
         </div>
-        <p class="trade-summary">Locked trade: niveaux figes depuis {html.escape(locked_at)} · R/R TP1 {locked_trade.risk_reward_tp1:.2f}R · ID {html.escape(locked_trade.trade_id)}.</p>
+        <p class="trade-summary">Position historisee depuis {html.escape(locked_at)} · R/R TP1 {locked_trade.risk_reward_tp1:.2f}R · ID {html.escape(locked_trade.trade_id)}.</p>
         """.strip()
     elif is_trade:
         level_html = f"""
         <div class="decision-item caution">
-          <strong>Signal live sans trade locked</strong>
-          <span>Statut actuel: {html.escape(lead_status)}. Aucun TradePlan actif correspondant n'est verrouille dans le ledger; les niveaux live ne sont pas affiches car ils changent au refresh.</span>
+          <strong>Aucune position active</strong>
+          <span>Le chef de file detecte {html.escape(lead_status)}, mais aucun TradePlan n'est encore historise.</span>
         </div>
         """.strip()
     else:
         level_html = f"""
         <div class="decision-item">
-          <strong>Aucun trade verrouille</strong>
-          <span>Statut actuel: {html.escape(lead_status)}. Le Desk affiche une surveillance, pas une position exploitable avec SL/TP.</span>
+          <strong>Aucune position active</strong>
+          <span>Chef de file {html.escape(lead_bias)} · {lead_score}/100.</span>
         </div>
         """.strip()
     return f"""
@@ -12124,10 +12502,9 @@ def render_desk_position_summary(
       <strong class="{tone}">{html.escape(lead_status)}</strong>
       <span>Chef de file: {html.escape(lead_bias)} · Score {lead_score}/100</span>
     </div>
-    <p class="global-summary">{html.escape(global_recommendation.summary)}</p>
     {level_html}
     <div class="scenario-plan-grid">
-      <div class="technical-decision-block"><strong>Declencheur attendu</strong><p>{html.escape(trigger)}</p></div>
+      <div class="technical-decision-block"><strong>Niveau utile</strong><p>{html.escape(trigger)}</p></div>
       <div class="technical-decision-block"><strong>Invalidation</strong><p>{html.escape(invalidation)}</p></div>
     </div>
     """.strip()
@@ -12156,15 +12533,9 @@ def render_signal_locked_panel(
         <p class="footer-note">Plan de sortie: fermer 50% a TP1, 30% a TP2, laisser 20% vers TP3.</p>
         <p class="trade-summary">TradePlan historise: les niveaux restent fixes meme si le signal live change.</p>
         """.strip()
-    lead_status, lead_score, _lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
-    action = scenario_plan.action if scenario_plan else "Attendre."
     return f"""
-    <div class="trade-verdict {state_tone_class(lead_status)}">Pas de signal locked</div>
-    <div class="decision-grid">
-      <div class="decision-item"><strong>Signal live</strong><span>{html.escape(lead_status)} · {lead_score}/100</span></div>
-      <div class="decision-item"><strong>Prochaine action</strong><span>{html.escape(action)}</span></div>
-    </div>
-    <p class="trade-summary">Le terminal ne transforme pas une surveillance en trade tant que le Quality Gate ne valide pas une entree exploitable.</p>
+    <div class="trade-verdict neutral">AUCUNE POSITION ACTIVE</div>
+    <p class="trade-summary">Aucun TradePlan n'est historise pour le moment.</p>
     """.strip()
 
 
@@ -13275,6 +13646,7 @@ def render_dashboard_clarity_v2(
             cross_asset=cross_asset_analysis,
             data_quality=data_quality,
         )
+    reversal_engine = bundle.reversal_engine or build_reversal_engine(gold, technical_readings, chart_store)
     agent_results = bundle.agent_results or build_passive_agent_results(
         gold,
         dxy,
@@ -13750,6 +14122,11 @@ def render_dashboard_clarity_v2(
       align-items: start;
       min-width: 0;
     }}
+    .layout-desk {{ grid-template-columns: repeat(12, minmax(0, 1fr)); }}
+    .layout-desk .span-4 {{ grid-column: span 4; }}
+    .layout-desk .span-6 {{ grid-column: span 6; }}
+    .layout-desk .span-8 {{ grid-column: span 8; }}
+    .layout-desk .span-12 {{ grid-column: 1 / -1; }}
     .span-3,
     .span-4,
     .span-5,
@@ -13966,6 +14343,18 @@ def render_dashboard_clarity_v2(
     .tradingview-panel iframe {{ display: block; width: 100%; height: 520px; border: 0; }}
     .tradingview-panel .footer-note {{ padding: 10px 12px; border-top: 1px solid var(--line); }}
     .technical-decision-card {{ border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 7px; padding: 14px; background: var(--panel-2); }}
+    .reversal-grid {{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }}
+    .reversal-card {{ padding: 14px; border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 8px; background: var(--panel-2); min-width: 0; }}
+    .reversal-card.bullish {{ border-left-color: rgba(78, 222, 163, 0.72); }}
+    .reversal-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.72); }}
+    .reversal-card.neutral {{ border-left-color: rgba(138, 180, 255, 0.72); }}
+    .reversal-head {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }}
+    .reversal-head strong {{ display: block; font-size: 16px; color: var(--text); }}
+    .reversal-head span,
+    .reversal-meta span {{ color: var(--soft); font-size: 12px; }}
+    .reversal-meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }}
+    .reversal-meta span {{ padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; background: rgba(6, 14, 32, 0.55); }}
+    .reversal-reasons {{ margin: 10px 0 0; padding-left: 18px; color: var(--soft); font-size: 13px; line-height: 1.5; }}
     .scenario-plan-card {{ border: 1px solid var(--line); border-left: 5px solid var(--line); border-radius: 7px; padding: 14px; background: var(--panel-2); }}
     .technical-decision-card.bullish {{ border-left-color: rgba(78, 222, 163, 0.72); }}
     .technical-decision-card.bearish {{ border-left-color: rgba(255, 180, 171, 0.72); }}
@@ -14191,19 +14580,14 @@ def render_dashboard_clarity_v2(
               {render_signal_locked_panel(trade_ledger, global_recommendation, orchestrator_decision, scenario_plan)}
             </article>
             <article class="panel span-12">
-              <div class="section-kicker">News Reaction Engine</div>
-              <h2>Flash exploitable ou non exploitable</h2>
-              {render_news_reaction_panel(news_reaction_setup)}
+              <div class="section-kicker">Reversal Engine</div>
+              <h2>Scalp, Intraday, Swing</h2>
+              {render_reversal_panels(reversal_engine)}
             </article>
-            <article class="panel span-6">
+            <article class="panel span-12">
               <div class="section-kicker">Charte live TradingView</div>
               <h2>XAU/USD live chart</h2>
               {tradingview_chart}
-            </article>
-            <article class="panel span-6">
-              <div class="section-kicker">Scenario</div>
-              <h2>Ce qu'il faut attendre</h2>
-              {render_scenario_plan_panel(scenario_plan)}
             </article>
           </section>
         </section>
@@ -14533,6 +14917,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         cross_asset=cross_asset_analysis,
         data_quality=data_quality,
     )
+    reversal_engine = build_reversal_engine(gold, technical_readings, chart_store)
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -14576,6 +14961,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
+        reversal_engine=reversal_engine,
         settings=user_settings,
         settings_validation=settings_validation,
     )
@@ -14613,6 +14999,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.orchestrator_decision = orchestrator_decision
     live_bundle.chart_store = chart_store
     live_bundle.news_reaction_setup = news_reaction_setup
+    live_bundle.reversal_engine = reversal_engine
     return live_bundle
 
 
@@ -14764,6 +15151,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         cross_asset=cross_asset_analysis,
         data_quality=data_quality,
     )
+    reversal_engine = build_reversal_engine(gold, technical_readings, chart_store)
     trade_ledger = build_trade_ledger_summary(
         gold,
         global_recommendation,
@@ -14807,6 +15195,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
+        reversal_engine=reversal_engine,
         settings=user_settings,
         settings_validation=settings_validation,
     )
@@ -14849,6 +15238,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         orchestrator_decision=orchestrator_decision,
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
+        reversal_engine=reversal_engine,
     )
 
 

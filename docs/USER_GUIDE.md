@@ -331,3 +331,52 @@ Ce fichier trace:
 - Un regime Hormuz/Oil Shock peut inverser la lecture classique geopolitique -> gold.
 - Si le petrole capte la liquidite et que le dollar monte, gold peut baisser malgre le risque geopolitique.
 - Le spread, l'heure, la volatilite et le calendrier macro doivent etre verifies avant toute decision.
+
+## Reversal setups pre-Phase 7
+
+Le Desk doit afficher trois lectures de retournement:
+
+- `Scalp Reversal`;
+- `Intraday Reversal`;
+- `Swing Reversal`.
+
+Chaque lecture peut afficher:
+
+- `REVERSAL BUY`: position reversal BUY exploitable sur cet horizon;
+- `REVERSAL SELL`: position reversal SELL exploitable sur cet horizon;
+- `NO REVERSAL TRADE`: pas de position reversal exploitable maintenant.
+
+Le Desk ne doit pas afficher `WATCH BUY`, `WATCH SELL` ou `BLOCKED` pour un reversal.
+Si un setup est incomplet, il reste interne et l'utilisateur voit `NO REVERSAL TRADE` avec une raison courte.
+
+Le chef de file reste separe:
+
+- il peut dire `NO_TRADE` ou `SELL`;
+- un panneau reversal peut quand meme dire `REVERSAL BUY`;
+- cela signifie qu'un retournement technique existe sur un horizon precis, pas que tout le terminal a change de biais.
+
+## Desk propre
+
+La page principale doit rester courte.
+
+Elle doit afficher:
+
+- prix;
+- chef de file;
+- biais;
+- signal locked;
+- IG Weekend Gold si disponible;
+- charte TradingView;
+- trois panneaux reversal.
+
+Elle ne doit pas afficher:
+
+- details `Orchestrateur v3`;
+- `score pondere`;
+- `reference initiale`;
+- `Quality Gate`;
+- `SURVEILLER_BUY` ou `SURVEILLER_SELL`;
+- doublons `Signal live`;
+- longues phrases internes expliquant pourquoi un trade n'est pas verrouille.
+
+Ces informations sont reservees a `Inspector`.

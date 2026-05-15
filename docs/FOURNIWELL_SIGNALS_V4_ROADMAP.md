@@ -777,7 +777,156 @@ Livraison effective:
 - integration TechnicalDecisionEngine, GlobalRecommendation, OrchestratorDecision et TradePlan lock;
 - tests BUY/SELL/RR/setup.
 
-## 10. Phase 7 - Multi-Strategy Engine
+## 10. Correctif obligatoire pre-Phase 7 - ReversalSetup Engine + Desk Cleanup
+
+Statut: a lancer avant la Phase 7.
+
+Source de correction:
+
+- `/Users/reda/Desktop/fourniwell_v4_reversal_setup_engine.md`
+- retours utilisateur du 2026-05-15 sur l'affichage Desk trop bruyant et les retournements rates.
+
+Objectif: corriger deux defauts bloquants avant de construire le Multi-Strategy Engine:
+
+- le terminal rate les retournements techniques parce qu'il attend que le chef de file et plusieurs agents pivotent;
+- la page Desk affiche encore trop de texte interne (`Orchestrateur v3`, `score pondere`, `Quality Gate`, `SURVEILLER_SELL`, `WATCH_SELL`) alors que l'utilisateur veut une decision de trading lisible.
+
+### 10.1 ReversalSetup Engine
+
+Le ReversalSetup Engine est un moteur separe du chef de file.
+
+Il doit calculer les trois horizons a chaque refresh:
+
+1. `Scalp Reversal`
+   - signal: M5;
+   - contexte: M15;
+   - validite: 30 minutes;
+   - objectif: capter un retournement court.
+2. `Intraday Reversal`
+   - signal: M15;
+   - contexte: H1;
+   - validite: 90 minutes;
+   - objectif: capter un retournement de session.
+3. `Swing Reversal`
+   - signal: H1;
+   - contexte: H4/D1;
+   - validite: 12 heures;
+   - objectif: capter un retournement plus large.
+
+Les trois horizons doivent etre presents dans le payload et dans le Desk.
+Il est interdit d'implementer seulement `Intraday` et de reporter `Scalp` ou `Swing`.
+
+### 10.2 Conditions de detection
+
+Chaque horizon utilise les memes familles de preuves:
+
+- RSI extreme:
+  - BUY: RSI7 <= 18;
+  - SELL: RSI7 >= 82.
+- divergence RSI/prix:
+  - BUY: prix fait un plus bas plus bas, RSI fait un plus bas plus haut;
+  - SELL: prix fait un plus haut plus haut, RSI fait un plus haut plus bas.
+- rejet de swing:
+  - BUY: meche sous swing low puis cloture au-dessus;
+  - SELL: meche au-dessus swing high puis cloture en dessous.
+- volume spike proxy:
+  - volume_ratio > 1.5.
+- position dans le range du jour:
+  - BUY: prix dans les 20% inferieurs du range;
+  - SELL: prix dans les 20% superieurs du range.
+
+Un trade reversal visible exige:
+
+- direction claire BUY ou SELL;
+- au moins 4 conditions sur 5 ou une configuration 3/5 avec rejet swing + divergence + R/R >= 1.80R;
+- SL/TP ordonnes:
+  - BUY: `SL < entry < TP1 < TP2 < TP3`;
+  - SELL: `TP3 < TP2 < TP1 < entry < SL`;
+- R/R TP1 minimum 1.50R;
+- contexte non oppose par une tendance forte du timeframe superieur.
+
+Si ces conditions ne sont pas reunies, l'utilisateur voit `NO REVERSAL TRADE`.
+
+### 10.3 Statuts visibles autorises
+
+Sur le Desk, les seuls statuts visibles pour le moteur reversal sont:
+
+- `REVERSAL BUY`;
+- `REVERSAL SELL`;
+- `NO REVERSAL TRADE`.
+
+Les statuts internes comme `WATCH`, `SUSPENDED`, `BLOCKED`, `candidate`, `Quality Gate`, `SURVEILLER_BUY` ou `SURVEILLER_SELL` sont interdits dans l'interface utilisateur principale.
+Ils peuvent exister en interne ou dans Inspector, mais jamais dans le Desk.
+
+### 10.4 Affichage Desk cible
+
+La premiere page doit afficher uniquement ce qui aide a agir:
+
+- prix XAU/USD;
+- chef de file;
+- biais;
+- signal locked;
+- IG Weekend Gold quand disponible;
+- TradingView live chart;
+- trois panneaux reversal:
+  - `Scalp Reversal`;
+  - `Intraday Reversal`;
+  - `Swing Reversal`.
+
+Chaque panneau reversal doit etre une rubrique lisible, de preference en pleine largeur ou sans texte comprime.
+Les niveaux internes du panneau peuvent rester en mini-grille:
+
+- Entry;
+- SL;
+- TP1;
+- TP2;
+- TP3;
+- validite;
+- raison principale.
+
+La page Desk ne doit plus afficher:
+
+- `Orchestrateur v3 NO_TRADE...`;
+- `score pondere...`;
+- `reference initiale...`;
+- `Statut actuel: NO_TRADE...`;
+- `Quality Gate`;
+- `SURVEILLER_SELL` / `SURVEILLER_BUY`;
+- blocs dupliques `Signal live`.
+
+Ces details vont dans `Inspector`.
+
+### 10.5 Livrables du correctif pre-Phase 7
+
+- documentation mise a jour avant code;
+- dataclass `ReversalSetup`;
+- fonctions de detection divergence RSI, conditions BUY/SELL, filtre contexte, niveaux reversal;
+- `build_reversal_engine()` retournant `scalp`, `intraday`, `swing`;
+- payload `reversal_engine`;
+- rendu Desk des trois panneaux;
+- nettoyage Desk pour supprimer le bruit interne;
+- tests unitaires:
+  - detection bullish divergence;
+  - detection bearish divergence;
+  - aucun reversal quand conditions insuffisantes;
+  - reversal BUY/SELL niveaux ordonnes;
+  - `scalp`, `intraday`, `swing` toujours exposes;
+  - le verdict orchestrator ne change pas;
+  - le Desk ne contient plus `Orchestrateur v3`, `Quality Gate`, `SURVEILLER_`, `WATCH BUY`, `BLOCKED`.
+
+### 10.6 Definition de done
+
+Le correctif pre-Phase 7 est valide seulement si:
+
+- les documents sont mis a jour avant le code;
+- le dashboard affiche les trois horizons reversal;
+- aucun horizon n'est masque ou reporte;
+- aucun statut technique interne n'apparait sur le Desk;
+- aucun SL/TP reversal incoherent n'est visible;
+- tous les tests passent;
+- un commit dedie est pousse sur GitHub.
+
+## 11. Phase 7 - Multi-Strategy Engine
 
 Objectif: ne plus dependre d'une seule logique directionnelle.
 
@@ -823,7 +972,7 @@ Livrable:
 - moins de trades forces en range;
 - meilleur choix du setup dominant.
 
-## 11. Phase 7.5 - Calibration Orchestrator Backtest
+## 12. Phase 7.5 - Calibration Orchestrator Backtest
 
 Objectif: arreter les poids arbitraires et valider si le systeme peut etre rentable.
 
@@ -857,7 +1006,7 @@ Livrable:
 - poids justifies;
 - Go/No-Go pour interface finale et production.
 
-## 12. Phase 8 - Interface Fourniwell Signals
+## 13. Phase 8 - Interface Fourniwell Signals
 
 Objectif: rendre le produit lisible pour un utilisateur final.
 
@@ -1019,12 +1168,13 @@ Livrable:
 6. Phase 4.5 - Redressement exhaustif avant Phase 5. Statut: livree le 2026-05-14.
 7. Phase 5 - News Reaction Engine. Statut: livree le 2026-05-14.
 8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14, quick win UI partiels + fallback Trump livre le 2026-05-14, hot-fix P0 Desk locked-vs-live livre le 2026-05-15.
-9. Phase 7 - Multi-Strategy Engine.
-10. Phase 7.5 - Calibration Orchestrator Backtest.
-11. Phase 8 - Interface Fourniwell Signals.
-12. Phase 9 - Preparation SaaS.
-13. Phase 10 - QA, replay et validation.
-14. Phase 11 - Deploiement VPS.
+9. Correctif obligatoire pre-Phase 7 - ReversalSetup Engine + Desk Cleanup. Statut: prochain travail a livrer avant Phase 7.
+10. Phase 7 - Multi-Strategy Engine.
+11. Phase 7.5 - Calibration Orchestrator Backtest.
+12. Phase 8 - Interface Fourniwell Signals.
+13. Phase 9 - Preparation SaaS.
+14. Phase 10 - QA, replay et validation.
+15. Phase 11 - Deploiement VPS.
 
 ## 17. Regles de gouvernance
 
@@ -1042,9 +1192,9 @@ Livrable:
 
 Cette roadmap v1.1 devient la base de travail v4.0 apres validation utilisateur.
 
-La prochaine phase officielle est:
+La prochaine action officielle est:
 
-`Phase 7 - Multi-Strategy Engine`
+`Correctif obligatoire pre-Phase 7 - ReversalSetup Engine + Desk Cleanup`
 
 Correctifs pre-Phase 7 livres:
 
@@ -1052,4 +1202,4 @@ Correctifs pre-Phase 7 livres:
 - fallback degrade Google News si tous les feeds Trump/White House directs tombent;
 - insertion officielle de la Phase 7.5 avant l'interface et la production.
 
-Phase 6 est livree. La prochaine phase officielle est Phase 7, sauf correction critique de validation Phase 6.
+Phase 6 est livree. La Phase 7 ne doit pas commencer tant que le ReversalSetup Engine `scalp/intraday/swing` et le nettoyage Desk ne sont pas livres, testes et pousses sur GitHub.

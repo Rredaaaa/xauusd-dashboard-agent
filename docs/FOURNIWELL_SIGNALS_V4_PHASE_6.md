@@ -18,6 +18,15 @@ Hot-fix P0 livre le 2026-05-15:
 - le payload expose `plans` comme alias de `active_trades` pour compatibilite avec les audits externes;
 - `active_trades` est maintenant base sur `outcome=open/partial` et `status=pending/active/tp1_hit`.
 
+Correctif obligatoire suivant, avant Phase 7:
+
+- livrer `ReversalSetup Engine` complet sur les trois horizons `scalp`, `intraday`, `swing`;
+- nettoyer le Desk pour retirer le bruit interne (`Orchestrateur v3`, `Quality Gate`, `SURVEILLER_*`, `score pondere`, doublons `Signal live`);
+- afficher seulement `REVERSAL BUY`, `REVERSAL SELL` ou `NO REVERSAL TRADE` pour les reversals;
+- conserver le chef de file separe du moteur reversal.
+
+Document de reference: `docs/FOURNIWELL_SIGNALS_V4_PRE_PHASE_7_REVERSAL_ENGINE.md`.
+
 ## Ce qui est livre
 
 ### 1. MarketTradeLevels

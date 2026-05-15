@@ -218,6 +218,81 @@ Depuis la Phase 6 v4, les niveaux de trade passent par `MarketTradeLevels`:
 - sorties partielles: TP1 50%, TP2 30%, TP3 20%.
 - affichage pre-Phase 7: `Signal locked`, `Trade Tracker` et Inspector doivent afficher explicitement `TP1 50%`, `TP2 30%`, `TP3 20%`.
 
+## ReversalSetup Engine pre-Phase 7
+
+Le ReversalSetup Engine est ajoute avant la Phase 7 pour corriger les retournements rates.
+
+Il ne modifie pas directement le chef de file.
+Il produit trois lectures separees:
+
+- `scalp`: M5 signal + M15 contexte;
+- `intraday`: M15 signal + H1 contexte;
+- `swing`: H1 signal + H4/D1 contexte.
+
+Les trois horizons sont obligatoires.
+Aucun horizon ne doit etre reporte.
+
+### Conditions de scoring reversal
+
+Chaque horizon score cinq preuves:
+
+- RSI extreme;
+- divergence RSI/prix;
+- rejet de swing;
+- volume spike;
+- position dans le range du jour.
+
+Seuils:
+
+- `REVERSAL BUY` visible si conditions BUY suffisantes, SL/TP coherents et R/R TP1 >= `1.50R`;
+- `REVERSAL SELL` visible si conditions SELL suffisantes, SL/TP coherents et R/R TP1 >= `1.50R`;
+- `NO REVERSAL TRADE` visible dans tous les autres cas.
+
+Les statuts `WATCH_BUY`, `WATCH_SELL`, `BLOCKED`, `SUSPENDED`, `SURVEILLER_BUY`, `SURVEILLER_SELL` sont internes.
+Ils ne doivent pas apparaitre sur la page Desk.
+
+### Role dans le scoring global
+
+Le ReversalSetup Engine est un moteur d'opportunite.
+Il est separe de l'Orchestrator.
+
+Regle:
+
+- le chef de file peut rester `SELL` ou `NO_TRADE`;
+- le ReversalSetup Engine peut afficher `REVERSAL BUY` sur un horizon donne;
+- cela ne change pas automatiquement le verdict global;
+- cela indique a l'utilisateur qu'un setup de retournement exploitable existe sur cet horizon.
+
+Cette separation evite de forcer tout le terminal a changer de direction trop tot, tout en evitant de rater un retournement exploitable.
+
+## Regles d'affichage Desk
+
+Le Desk est reserve a l'action trader.
+
+Informations autorisees:
+
+- prix XAU/USD;
+- chef de file;
+- biais;
+- signal locked;
+- IG Weekend Gold si disponible;
+- TradingView;
+- Scalp/Intraday/Swing Reversal;
+- scenario surveille en une ligne courte.
+
+Informations interdites sur le Desk:
+
+- details `Orchestrateur v3`;
+- `score pondere`;
+- `reference initiale`;
+- `Quality Gate`;
+- `SURVEILLER_BUY` / `SURVEILLER_SELL`;
+- statuts internes `WATCH` ou `BLOCKED`;
+- doublons `Signal live`;
+- paragraphes expliquant pourquoi le moteur ne verrouille pas un trade.
+
+Ces informations vont dans `Inspector`.
+
 Le verdict `WAIT` ne doit pas etre force uniquement parce que:
 
 - data quality est `DEGRADED` mais prix principal, macro et cross-assets restent exploitables;

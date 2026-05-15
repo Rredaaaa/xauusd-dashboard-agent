@@ -12586,6 +12586,80 @@ def news_reason_for_user(item: dict[str, Any]) -> str:
     return "Impact XAU/USD: aucune direction exploitable detectee."
 
 
+def news_flow_entry_key(item: dict[str, Any]) -> str:
+    title = strip_source_suffix(str(item.get("title", "")), str(item.get("source", "")))
+    return normalize_title_for_dedupe(title)
+
+
+def news_flow_kind_priority(kind: str) -> int:
+    kind_lower = kind.lower()
+    if "political" in kind_lower:
+        return 4
+    if "fact" in kind_lower:
+        return 3
+    if "geopolitical" in kind_lower:
+        return 2
+    return 1
+
+
+def news_flow_entry_rank(item: dict[str, Any]) -> tuple[int, int, int, float]:
+    source_tier = news_source_tier(str(item.get("source", "")), str(item.get("url", "")))
+    confidence = int(item.get("confidence", 0) or 0)
+    kind = str(item.get("kind", ""))
+    published = parse_news_sort_key(str(item.get("published_at", "")))
+    return (5 - source_tier, confidence, news_flow_kind_priority(kind), published)
+
+
+def merge_news_flow_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    for entry in entries:
+        key = news_flow_entry_key(entry)
+        if not key:
+            continue
+        matching_key = next(
+            (
+                existing
+                for existing in ordered_keys
+                if existing == key
+                or existing.startswith(" ".join(key.split()[:7]))
+                or key.startswith(" ".join(existing.split()[:7]))
+                or news_similarity(existing, key) >= 0.82
+            ),
+            "",
+        )
+        target_key = matching_key or key
+        kind = str(entry.get("kind", "Headline"))
+        if not matching_key:
+            copied = dict(entry)
+            copied["kinds"] = [kind]
+            merged[target_key] = copied
+            ordered_keys.append(target_key)
+            continue
+        current = merged[target_key]
+        kinds = unique_preserve_order([*current.get("kinds", [str(current.get("kind", "Headline"))]), kind])
+        if news_flow_entry_rank(entry) > news_flow_entry_rank(current):
+            replacement = dict(entry)
+            replacement["kinds"] = kinds
+            merged[target_key] = replacement
+        else:
+            current["kinds"] = kinds
+        merged[target_key]["kind"] = " / ".join(merged[target_key]["kinds"])
+        merged[target_key]["confidence"] = max(int(merged[target_key].get("confidence", 0) or 0), int(entry.get("confidence", 0) or 0))
+    return list(merged.values())
+
+
+def news_flow_card_summary(item: dict[str, Any]) -> str:
+    summary = str(item.get("summary", "")).strip()
+    title_key = normalize_title_for_dedupe(str(item.get("title", "")))
+    summary_key = normalize_title_for_dedupe(summary)
+    if title_key and title_key in summary_key:
+        source = str(item.get("source", "Source inconnue"))
+        kind = str(item.get("kind", "Headline"))
+        return f"Information sourcee par {source}. Classification: {kind}."
+    return summary
+
+
 def render_news_flow_panel(
     news: list[NewsItem],
     event_facts: list[EventFact],
@@ -12647,6 +12721,7 @@ def render_news_flow_panel(
             }
         )
 
+    entries = merge_news_flow_entries(entries)
     entries.sort(key=lambda item: parse_news_sort_key(str(item["published_at"])), reverse=True)
     cards = []
     for item in entries[:limit]:
@@ -12665,7 +12740,7 @@ def render_news_flow_panel(
                 <span>{html.escape(format_timestamp_for_humans(str(item["published_at"])))}</span>
               </div>
               <h3>{html.escape(str(item["title"]))}</h3>
-              <p class="trade-summary"><strong>Résumé:</strong> {html.escape(str(item.get("summary", "")))}</p>
+              <p class="trade-summary"><strong>Résumé:</strong> {html.escape(news_flow_card_summary(item))}</p>
               <p class="footer-note"><strong>Lecture XAU/USD:</strong> {html.escape(news_reason_for_user(item))}</p>
               <div class="tag-row">
                 <span class="source-tag {tone}">{impact}</span>

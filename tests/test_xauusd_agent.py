@@ -88,6 +88,7 @@ from xauusd_agent import (
     parse_ishares_iau_official_data,
     render_dashboard,
     render_desk_position_summary,
+    render_news_flow_panel,
     render_reversal_panels,
     render_signal_locked_panel,
     render_trade_tracker_panel,
@@ -228,6 +229,53 @@ class HeadlineScoringTests(unittest.TestCase):
         merged = merge_news_items(items, [], 10)
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0].source, "Reuters")
+
+    def test_news_flow_renders_one_card_for_same_story_across_agents(self) -> None:
+        published = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        title = "Trump says Iran conflict should end quickly as oil markets react"
+        fact = EventFact(
+            title=title,
+            source="Reuters",
+            source_url="https://www.reuters.com/world/test",
+            published_at=published,
+            category="geopolitical",
+            actors=["Trump"],
+            locations=["Iran"],
+            themes=["geopolitical", "oil"],
+            confirmation_level="confirmed",
+            market_chain="source -> oil -> dollar -> gold",
+            gold_impact="Impact XAU/USD: reaction politique sourcee.",
+            impact_bias="BULLISH",
+            confidence=80,
+        )
+        statement = PoliticalStatement(
+            title=title,
+            source="Reuters",
+            source_url="https://www.reuters.com/world/test",
+            published_at=published,
+            theme="Iran / oil",
+            validation_level="confirmed",
+            source_tier=2,
+            gold_impact="Impact XAU/USD: declaration politique sourcee.",
+            oil_impact="oil impact",
+            usd_impact="usd impact",
+            market_chain="political -> oil -> gold",
+            score=2,
+            confidence=78,
+        )
+        headline = NewsItem(
+            title=title,
+            source="Reuters",
+            link="https://www.reuters.com/world/test",
+            published_at=published,
+            category="geopolitical",
+            score=2,
+            score_reasons=["bullish:war"],
+        )
+        html = render_news_flow_panel([headline], [fact], [statement], limit=12)
+        self.assertEqual(html.count('<article class="headline-card'), 1)
+        self.assertEqual(html.count(title), 1)
+        self.assertIn("Fact / Political / geopolitical", html)
 
     def test_bias_buckets(self) -> None:
         self.assertEqual(classify_bias(6), "bullish")

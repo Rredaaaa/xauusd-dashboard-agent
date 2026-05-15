@@ -25,6 +25,7 @@ from xauusd_agent import (
     MacroCatalystCalendar,
     MarketRegimeAnalysis,
     NewsItem,
+    NewsReactionTradePlan,
     OfficialMacroRates,
     OHLCCandle,
     OrchestratorDecision,
@@ -32,6 +33,7 @@ from xauusd_agent import (
     PreflightCheck,
     PricePoint,
     ReversalSetup,
+    SetupCandidate,
     SourceSnapshot,
     SymbolSnapshot,
     TechnicalDecision,
@@ -80,6 +82,7 @@ from xauusd_agent import (
     classify_news_reaction_event,
     detect_news_reaction_price,
     detect_rsi_divergence,
+    detect_current_session,
     build_orchestrator_decision,
     build_scenario_plan,
     build_technical_decision,
@@ -97,6 +100,7 @@ from xauusd_agent import (
     load_user_settings,
     macro_catalyst_gold_bias,
     merge_news_items,
+    news_reaction_to_setup_candidate,
     resample_candles,
     score_headline,
     score_headline_v2,
@@ -283,6 +287,72 @@ class HeadlineScoringTests(unittest.TestCase):
         self.assertEqual(classify_bias(0), "neutral")
         self.assertEqual(classify_bias(-2), "slightly bearish")
         self.assertEqual(classify_bias(-6), "bearish")
+
+
+class Phase7AFoundationTests(unittest.TestCase):
+    def news_plan(self, status: str = "TRADE_READY", direction: str = "BUY") -> NewsReactionTradePlan:
+        return NewsReactionTradePlan(
+            status=status,
+            direction=direction,
+            event_type="POLITICAL_FLASH",
+            title="Trump says Iran talks changed oil risk",
+            source="Reuters",
+            source_url="https://www.reuters.com/test",
+            confidence=82,
+            validity_minutes=45,
+            valid_until="2026-05-15T13:45:00+00:00",
+            entry_type="NEWS_REACTION",
+            reference_price=4650.0,
+            entry_zone_low=4649.0,
+            entry_zone_high=4651.0,
+            stop_loss=4638.0,
+            tp1=4668.0,
+            tp2=4682.0,
+            tp3=4700.0,
+            risk_reward_tp1=1.5,
+            risk_reward_tp2=2.67,
+            risk_reward_tp3=4.17,
+            confirmation_score=3,
+            latency_seconds=18.0,
+            created_at="2026-05-15T13:00:00+00:00",
+            event_id="news-123",
+            reasons=["Source rapide confirmee.", "Prix confirme."],
+            blockers=[],
+        )
+
+    def test_phase7a_detects_utc_market_sessions(self) -> None:
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 3, 0, tzinfo=timezone.utc)), "asian")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 8, 0, tzinfo=timezone.utc)), "london_open")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 11, 0, tzinfo=timezone.utc)), "london_morning")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 14, 0, tzinfo=timezone.utc)), "london_ny_overlap")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 17, 0, tzinfo=timezone.utc)), "ny_afternoon")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 20, 0, tzinfo=timezone.utc)), "ny_close")
+        self.assertEqual(detect_current_session(datetime(2026, 5, 15, 22, 0, tzinfo=timezone.utc)), "off_hours")
+
+    def test_phase7a_news_reaction_trade_ready_to_setup_candidate(self) -> None:
+        candidate = news_reaction_to_setup_candidate(self.news_plan())
+        self.assertIsInstance(candidate, SetupCandidate)
+        self.assertEqual(candidate.name, "NewsReactionSetup")
+        self.assertEqual(candidate.status, "TRADE_READY")
+        self.assertEqual(candidate.direction, "BUY")
+        self.assertEqual(candidate.confidence, 82)
+        self.assertEqual(candidate.confluence_score, 3)
+        self.assertEqual(candidate.rr_tp1, 1.5)
+        self.assertEqual(candidate.preferred_session, "all")
+        self.assertIn("fast_news_event", candidate.conditions_met)
+        self.assertEqual(candidate.metadata["event_id"], "news-123")
+        self.assertEqual(candidate.metadata["source"], "Reuters")
+
+    def test_phase7a_news_reaction_watch_direction_is_normalized(self) -> None:
+        candidate = news_reaction_to_setup_candidate(self.news_plan(status="WATCH", direction="WATCH_SELL"))
+        self.assertEqual(candidate.status, "WATCH")
+        self.assertEqual(candidate.direction, "SELL")
+
+    def test_phase7a_news_reaction_empty_candidate_is_no_setup(self) -> None:
+        candidate = news_reaction_to_setup_candidate(None)
+        self.assertEqual(candidate.status, "NO_SETUP")
+        self.assertEqual(candidate.direction, "NEUTRAL")
+        self.assertEqual(candidate.name, "NewsReactionSetup")
 
 
 class Phase45NewsCategoryMappingTests(unittest.TestCase):

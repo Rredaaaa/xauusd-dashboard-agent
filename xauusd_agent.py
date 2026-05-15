@@ -825,6 +825,33 @@ class NewsReactionTradePlan:
 
 
 @dataclass
+class SetupCandidate:
+    name: str
+    status: str
+    direction: str
+    confidence: int
+    confluence_score: int
+    conditions_met: list[str]
+    entry_zone_low: float
+    entry_zone_high: float
+    stop_loss: float
+    tp1: float
+    tp2: float
+    tp3: float
+    rr_tp1: float
+    rr_tp2: float
+    rr_tp3: float
+    validity_minutes: int
+    cooldown_after_loss_minutes: int
+    cooldown_after_win_minutes: int
+    preferred_session: str
+    reasons: list[str]
+    blockers: list[str]
+    detected_at: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ReversalSetup:
     horizon: str
     status: str
@@ -7674,6 +7701,114 @@ def news_reaction_levels(direction: str, price: float, move_pct: float) -> tuple
 
 def is_weekend_market_window(now: datetime) -> bool:
     return now.weekday() in {5, 6}
+
+
+def detect_current_session(now: datetime | None = None) -> str:
+    reference = now or datetime.now(timezone.utc)
+    utc_hour = reference.astimezone(timezone.utc).hour
+    if 0 <= utc_hour < 7:
+        return "asian"
+    if 7 <= utc_hour < 9:
+        return "london_open"
+    if 9 <= utc_hour < 13:
+        return "london_morning"
+    if 13 <= utc_hour < 16:
+        return "london_ny_overlap"
+    if 16 <= utc_hour < 19:
+        return "ny_afternoon"
+    if 19 <= utc_hour < 21:
+        return "ny_close"
+    return "off_hours"
+
+
+def normalize_setup_direction(direction: str) -> str:
+    upper = direction.upper()
+    if "BUY" in upper:
+        return "BUY"
+    if "SELL" in upper:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def news_reaction_status_for_setup(status: str) -> str:
+    upper = status.upper()
+    if upper == "TRADE_READY":
+        return "TRADE_READY"
+    if upper == "WATCH":
+        return "WATCH"
+    if upper == "SUSPENDED":
+        return "SUSPENDED"
+    return "NO_SETUP"
+
+
+def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> SetupCandidate:
+    if setup is None:
+        reference = iso_now()
+        return SetupCandidate(
+            name="NewsReactionSetup",
+            status="NO_SETUP",
+            direction="NEUTRAL",
+            confidence=0,
+            confluence_score=0,
+            conditions_met=[],
+            entry_zone_low=0.0,
+            entry_zone_high=0.0,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            tp3=0.0,
+            rr_tp1=0.0,
+            rr_tp2=0.0,
+            rr_tp3=0.0,
+            validity_minutes=0,
+            cooldown_after_loss_minutes=240,
+            cooldown_after_win_minutes=120,
+            preferred_session="all",
+            reasons=["Aucun evenement news reaction qualifie."],
+            blockers=[],
+            detected_at=reference,
+            metadata={"source": "NewsReactionEngine"},
+        )
+    status = news_reaction_status_for_setup(setup.status)
+    conditions = ["fast_news_event"]
+    if setup.confirmation_score:
+        conditions.append(f"confirmation_score_{setup.confirmation_score}")
+    if setup.latency_seconds is not None:
+        conditions.append("latency_measured")
+    return SetupCandidate(
+        name="NewsReactionSetup",
+        status=status,
+        direction=normalize_setup_direction(setup.direction),
+        confidence=setup.confidence,
+        confluence_score=setup.confirmation_score,
+        conditions_met=conditions,
+        entry_zone_low=setup.entry_zone_low,
+        entry_zone_high=setup.entry_zone_high,
+        stop_loss=setup.stop_loss,
+        tp1=setup.tp1,
+        tp2=setup.tp2,
+        tp3=setup.tp3,
+        rr_tp1=setup.risk_reward_tp1,
+        rr_tp2=setup.risk_reward_tp2,
+        rr_tp3=setup.risk_reward_tp3,
+        validity_minutes=setup.validity_minutes,
+        cooldown_after_loss_minutes=240,
+        cooldown_after_win_minutes=120,
+        preferred_session="all",
+        reasons=setup.reasons[:8],
+        blockers=setup.blockers[:6],
+        detected_at=setup.created_at,
+        metadata={
+            "event_type": setup.event_type,
+            "event_id": setup.event_id,
+            "title": setup.title,
+            "source": setup.source,
+            "source_url": setup.source_url,
+            "valid_until": setup.valid_until,
+            "latency_seconds": setup.latency_seconds,
+            "entry_type": setup.entry_type,
+        },
+    )
 
 
 def build_news_reaction_trade_plan(

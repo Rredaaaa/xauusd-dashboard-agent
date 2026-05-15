@@ -7811,6 +7811,498 @@ def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> Set
     )
 
 
+def no_setup_candidate(
+    name: str,
+    reason: str,
+    preferred_session: str = "all",
+    metadata: dict[str, Any] | None = None,
+) -> SetupCandidate:
+    return SetupCandidate(
+        name=name,
+        status="NO_SETUP",
+        direction="NEUTRAL",
+        confidence=0,
+        confluence_score=0,
+        conditions_met=[],
+        entry_zone_low=0.0,
+        entry_zone_high=0.0,
+        stop_loss=0.0,
+        tp1=0.0,
+        tp2=0.0,
+        tp3=0.0,
+        rr_tp1=0.0,
+        rr_tp2=0.0,
+        rr_tp3=0.0,
+        validity_minutes=0,
+        cooldown_after_loss_minutes=240,
+        cooldown_after_win_minutes=60,
+        preferred_session=preferred_session,
+        reasons=[reason],
+        blockers=[],
+        detected_at=iso_now(),
+        metadata=metadata or {},
+    )
+
+
+def setup_candidate_from_levels(
+    name: str,
+    status: str,
+    direction: str,
+    confidence: int,
+    confluence_score: int,
+    conditions_met: list[str],
+    levels: MarketTradeLevels,
+    preferred_session: str,
+    reasons: list[str],
+    blockers: list[str] | None = None,
+    cooldown_after_loss_minutes: int = 240,
+    cooldown_after_win_minutes: int = 60,
+    metadata: dict[str, Any] | None = None,
+) -> SetupCandidate:
+    return SetupCandidate(
+        name=name,
+        status=status,
+        direction=direction,
+        confidence=clamp_score(confidence),
+        confluence_score=clamp_score(confluence_score),
+        conditions_met=conditions_met,
+        entry_zone_low=levels.entry_zone_low,
+        entry_zone_high=levels.entry_zone_high,
+        stop_loss=levels.stop_loss,
+        tp1=levels.tp1,
+        tp2=levels.tp2,
+        tp3=levels.tp3,
+        rr_tp1=levels.risk_reward_tp1,
+        rr_tp2=levels.risk_reward_tp2,
+        rr_tp3=levels.risk_reward_tp3,
+        validity_minutes=levels.validity_minutes,
+        cooldown_after_loss_minutes=cooldown_after_loss_minutes,
+        cooldown_after_win_minutes=cooldown_after_win_minutes,
+        preferred_session=preferred_session,
+        reasons=(reasons + levels.reasons)[:10],
+        blockers=blockers or [],
+        detected_at=iso_now(),
+        metadata=metadata or {},
+    )
+
+
+def last_candle_rejection(candles: list[OHLCCandle], direction: str, minimum_wick_share: float = 0.45) -> bool:
+    if not candles:
+        return False
+    candle = candles[-1]
+    full_range = max(candle.high - candle.low, 0.01)
+    lower_wick = min(candle.open, candle.close) - candle.low
+    upper_wick = candle.high - max(candle.open, candle.close)
+    body = abs(candle.close - candle.open)
+    if direction == "BUY":
+        return lower_wick / full_range >= minimum_wick_share and candle.close >= candle.open - body * 0.25
+    return upper_wick / full_range >= minimum_wick_share and candle.close <= candle.open + body * 0.25
+
+
+def trend_direction_from_readings(readings: list[TechnicalReading]) -> str:
+    relevant = [reading for reading in readings if reading.timeframe in {"1D", "4H", "1H"}]
+    buy = sum(1 for reading in relevant if reading.verdict == "BUY")
+    sell = sum(1 for reading in relevant if reading.verdict == "SELL")
+    if buy >= 2 and buy > sell:
+        return "BUY"
+    if sell >= 2 and sell > buy:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def ema_stack_matches(reading: TechnicalReading | None, direction: str) -> bool:
+    if reading is None:
+        return False
+    if direction == "BUY":
+        return reading.ema20 >= reading.ema50 >= reading.ema100 >= reading.ema200
+    if direction == "SELL":
+        return reading.ema20 <= reading.ema50 <= reading.ema100 <= reading.ema200
+    return False
+
+
+def trend_strength_proxy(reading: TechnicalReading | None) -> float:
+    if reading is None:
+        return 0.0
+    atr = max(reading.atr14, 1.0)
+    ema_spread = abs(reading.ema20 - reading.ema200) / atr
+    score_strength = abs(reading.score) / 10.0
+    volume_boost = max(0.0, reading.volume_ratio - 1.0) * 0.4
+    return round(min(5.0, ema_spread + score_strength + volume_boost), 2)
+
+
+def direction_by_level_proximity(price: float, lower_level: float, upper_level: float, tolerance: float) -> str:
+    if abs(price - lower_level) <= tolerance:
+        return "BUY"
+    if abs(price - upper_level) <= tolerance:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def range_bounds_from_candles(candles: list[OHLCCandle]) -> tuple[float, float, int, int]:
+    if not candles:
+        return 0.0, 0.0, 0, 0
+    recent = candles[-24:] if len(candles) >= 24 else candles
+    low = min(candle.low for candle in recent)
+    high = max(candle.high for candle in recent)
+    range_size = max(high - low, 0.01)
+    tolerance = max(range_size * 0.08, 1.0)
+    low_touches = sum(1 for candle in recent if candle.low <= low + tolerance)
+    high_touches = sum(1 for candle in recent if candle.high >= high - tolerance)
+    return round(low, 2), round(high, 2), low_touches, high_touches
+
+
+def asian_range_from_candles(candles: list[OHLCCandle], now: datetime | None = None) -> tuple[float, float]:
+    if not candles:
+        return 0.0, 0.0
+    reference = now or datetime.now(timezone.utc)
+    reference_date = reference.astimezone(timezone.utc).date()
+    asian = [
+        candle
+        for candle in candles
+        if (stamp := datetime.fromtimestamp(candle.timestamp, timezone.utc)).date() == reference_date
+        and 0 <= stamp.hour < 7
+    ]
+    if len(asian) < 4:
+        fallback_count = max(4, min(len(candles), len(candles) // 3 or len(candles)))
+        asian = candles[:fallback_count]
+    return round(min(candle.low for candle in asian), 2), round(max(candle.high for candle in asian), 2)
+
+
+def candidate_status_from_conditions(
+    conditions_count: int,
+    blockers: list[str],
+    ready_threshold: int,
+    watch_threshold: int,
+) -> str:
+    if blockers and conditions_count < ready_threshold:
+        return "NO_SETUP"
+    if conditions_count >= ready_threshold and not blockers:
+        return "TRADE_READY"
+    if conditions_count >= watch_threshold:
+        return "WATCH"
+    return "NO_SETUP"
+
+
+def evaluate_pivot_rejection_setup(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    now: datetime | None = None,
+) -> SetupCandidate:
+    h1 = reading_for_timeframe(readings, "H1") or reading_for_timeframe(readings, "M15")
+    candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
+    if h1 is None or not candles:
+        return no_setup_candidate("PivotRejectionSetup", "Donnees H1/M15 insuffisantes pour tester le rejet de pivot.")
+
+    levels = price_action_levels(gold)
+    atr = max(h1.atr14, 3.0)
+    tolerance = max(atr * 0.45, 2.5)
+    lower_candidates = [levels["camarilla_s3"], levels["camarilla_s4"], levels["support"]]
+    upper_candidates = [levels["camarilla_r3"], levels["camarilla_r4"], levels["resistance"]]
+    lower = min(lower_candidates, key=lambda level: abs(gold.price - level))
+    upper = min(upper_candidates, key=lambda level: abs(gold.price - level))
+    direction = direction_by_level_proximity(gold.price, lower, upper, tolerance)
+    if direction == "NEUTRAL":
+        return no_setup_candidate(
+            "PivotRejectionSetup",
+            "Prix trop loin des pivots Camarilla/support/resistance pour un rejet exploitable.",
+            metadata={"distance_to_lower": round(abs(gold.price - lower), 2), "distance_to_upper": round(abs(gold.price - upper), 2)},
+        )
+
+    conditions: list[str] = ["near_pivot"]
+    reasons = [f"Prix proche du pivot {direction}: tolerance {tolerance:.2f}."]
+    blockers: list[str] = []
+    if last_candle_rejection(candles, direction):
+        conditions.append("wick_rejection")
+        reasons.append("Derniere bougie rejette le niveau avec une meche nette.")
+    if gold.day_low is not None and gold.day_high is not None:
+        day_range = max(gold.day_high - gold.day_low, 1.0)
+        if direction == "BUY" and gold.price <= gold.day_low + max(day_range * 0.25, atr):
+            conditions.append("day_range_support")
+        if direction == "SELL" and gold.price >= gold.day_high - max(day_range * 0.25, atr):
+            conditions.append("day_range_resistance")
+    if direction == "BUY" and h1.rsi7 <= 45:
+        conditions.append("rsi_room_for_rebound")
+    if direction == "SELL" and h1.rsi7 >= 55:
+        conditions.append("rsi_room_for_pullback")
+    if not last_candle_rejection(candles, direction):
+        blockers.append("Pas encore de bougie de rejet claire.")
+
+    status = candidate_status_from_conditions(len(conditions), blockers, 3, 2)
+    trade_levels = build_market_trade_levels(gold, direction, "pivot_rejection", atr, readings=readings, min_rr=1.5)
+    confidence = 48 + len(conditions) * 10 + (8 if status == "TRADE_READY" else 0)
+    return setup_candidate_from_levels(
+        "PivotRejectionSetup",
+        status,
+        direction,
+        confidence,
+        len(conditions) * 20,
+        conditions,
+        trade_levels,
+        "all",
+        reasons,
+        blockers if status != "TRADE_READY" else [],
+        cooldown_after_loss_minutes=180,
+        cooldown_after_win_minutes=60,
+        metadata={"levels": levels, "tolerance": round(tolerance, 2), "session": detect_current_session(now)},
+    )
+
+
+def evaluate_mean_reversion_setup(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    now: datetime | None = None,
+) -> SetupCandidate:
+    h1 = reading_for_timeframe(readings, "H1")
+    candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
+    if h1 is None:
+        return no_setup_candidate("MeanReversionSetup", "Lecture H1 indisponible pour la mean reversion.")
+
+    atr = max(h1.atr14, 3.0)
+    direction = "NEUTRAL"
+    if h1.rsi7 <= 25:
+        direction = "BUY"
+    elif h1.rsi7 >= 75:
+        direction = "SELL"
+    if direction == "NEUTRAL":
+        return no_setup_candidate("MeanReversionSetup", f"RSI7 H1 {h1.rsi7:.1f}: pas d'extreme mean reversion.")
+
+    conditions = ["rsi_extreme"]
+    reasons = [f"RSI7 H1 {h1.rsi7:.1f} en zone extreme {direction}."]
+    extension = abs(gold.price - h1.ema20)
+    if extension >= atr * 1.25:
+        conditions.append("ema20_extension")
+        reasons.append(f"Ecart au EMA20 H1 {extension:.2f}, soit {extension / atr:.1f} ATR.")
+    if last_candle_rejection(candles, direction, minimum_wick_share=0.40):
+        conditions.append("rejection_candle")
+    divergence = None
+    if len(candles) >= 8:
+        closes = [candle.close for candle in candles]
+        divergence = detect_rsi_divergence(closes, rsi_series(closes, 7), window=8)
+    if divergence and divergence["direction"] == direction:
+        conditions.append("rsi_divergence")
+        reasons.append("Divergence RSI detectee dans le sens du retour a la moyenne.")
+    if (direction == "BUY" and h1.macd_histogram > -0.6) or (direction == "SELL" and h1.macd_histogram < 0.6):
+        conditions.append("macd_fade_proxy")
+
+    blockers = [] if len(conditions) >= 3 else ["Mean reversion encore incomplete: attendre rejet/divergence/extension."]
+    status = candidate_status_from_conditions(len(conditions), blockers, 3, 2)
+    trade_levels = build_market_trade_levels(gold, direction, "mean_reversion", atr, readings=readings, min_rr=1.5)
+    return setup_candidate_from_levels(
+        "MeanReversionSetup",
+        status,
+        direction,
+        45 + len(conditions) * 11,
+        len(conditions) * 18,
+        conditions,
+        trade_levels,
+        "all",
+        reasons,
+        blockers if status != "TRADE_READY" else [],
+        cooldown_after_loss_minutes=360,
+        cooldown_after_win_minutes=120,
+        metadata={"rsi_h1": round(h1.rsi7, 2), "ema20_extension": round(extension, 2), "session": detect_current_session(now)},
+    )
+
+
+def evaluate_range_trading_setup(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    now: datetime | None = None,
+) -> SetupCandidate:
+    h1 = reading_for_timeframe(readings, "H1")
+    candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
+    if h1 is None or len(candles) < 12:
+        return no_setup_candidate("RangeTradingSetup", "Historique H1/M15 insuffisant pour qualifier un range.")
+
+    low, high, low_touches, high_touches = range_bounds_from_candles(candles)
+    range_size = max(high - low, 0.01)
+    atr = max(h1.atr14, 3.0)
+    tolerance = max(range_size * 0.10, atr * 0.50)
+    direction = direction_by_level_proximity(gold.price, low, high, tolerance)
+    if direction == "NEUTRAL":
+        return no_setup_candidate(
+            "RangeTradingSetup",
+            "Prix au milieu du range: pas de bord de range exploitable.",
+            preferred_session="asian",
+            metadata={"range_low": low, "range_high": high, "tolerance": round(tolerance, 2)},
+        )
+
+    low_trend = trend_strength_proxy(h1) <= 2.4
+    enough_touches = low_touches >= 2 and high_touches >= 2
+    conditions = ["near_range_edge"]
+    reasons = [f"Range detecte {low:.2f}/{high:.2f}, prix proche du bord {direction}."]
+    blockers: list[str] = []
+    if low_trend:
+        conditions.append("low_trend_strength")
+    else:
+        blockers.append("Tendance trop forte: range trading degrade.")
+    if enough_touches:
+        conditions.append("range_touches")
+    if last_candle_rejection(candles, direction, minimum_wick_share=0.35):
+        conditions.append("edge_rejection")
+    if detect_current_session(now) == "asian":
+        conditions.append("asian_session")
+    status = candidate_status_from_conditions(len(conditions), blockers, 4, 3)
+    trade_levels = build_market_trade_levels(gold, direction, "range", atr, readings=readings, min_rr=1.5)
+    return setup_candidate_from_levels(
+        "RangeTradingSetup",
+        status,
+        direction,
+        42 + len(conditions) * 10,
+        len(conditions) * 17,
+        conditions,
+        trade_levels,
+        "asian",
+        reasons,
+        blockers if status != "TRADE_READY" else [],
+        cooldown_after_loss_minutes=180,
+        cooldown_after_win_minutes=60,
+        metadata={"range_low": low, "range_high": high, "touches": {"low": low_touches, "high": high_touches}},
+    )
+
+
+def evaluate_trend_continuation_setup(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    event_mode: EventModeAnalysis | None = None,
+    now: datetime | None = None,
+) -> SetupCandidate:
+    direction = trend_direction_from_readings(readings)
+    h1 = reading_for_timeframe(readings, "H1")
+    h4 = reading_for_timeframe(readings, "H4")
+    d1 = reading_for_timeframe(readings, "D1")
+    if direction == "NEUTRAL" or h1 is None:
+        return no_setup_candidate("TrendContinuationSetup", "Alignement 1D/4H/1H insuffisant pour une continuation.")
+    if event_mode is not None and event_mode.active:
+        return no_setup_candidate(
+            "TrendContinuationSetup",
+            "Mode event actif: continuation suspendue avant confirmation post-event.",
+            preferred_session="london_ny_overlap",
+            metadata={"event_mode": event_mode.status},
+        )
+
+    atr = max(h1.atr14, 3.0)
+    conditions = ["multi_timeframe_alignment"]
+    reasons = [f"Alignement multi-timeframe {direction}."]
+    if ema_stack_matches(h1, direction):
+        conditions.append("h1_ema_stack")
+    if ema_stack_matches(h4, direction) or ema_stack_matches(d1, direction):
+        conditions.append("higher_tf_ema_stack")
+    distance_to_pullback = min(abs(gold.price - h1.ema20), abs(gold.price - h1.ema50))
+    if distance_to_pullback <= atr * 1.25:
+        conditions.append("pullback_to_dynamic_support")
+        reasons.append(f"Prix proche EMA20/50 H1 ({distance_to_pullback:.2f}).")
+    strength = trend_strength_proxy(h1)
+    if strength >= 1.8:
+        conditions.append("trend_strength_proxy")
+    session = detect_current_session(now)
+    if session in {"london_open", "london_morning", "london_ny_overlap", "ny_afternoon"}:
+        conditions.append("liquid_session")
+    blockers = [] if len(conditions) >= 4 else ["Continuation pas assez confirmee: attendre pullback/liquidite/force."]
+    status = candidate_status_from_conditions(len(conditions), blockers, 4, 3)
+    trade_levels = build_market_trade_levels(gold, direction, "trend_continuation", atr, readings=readings, min_rr=1.5)
+    return setup_candidate_from_levels(
+        "TrendContinuationSetup",
+        status,
+        direction,
+        45 + len(conditions) * 10,
+        len(conditions) * 17,
+        conditions,
+        trade_levels,
+        "london_ny_overlap",
+        reasons,
+        blockers if status != "TRADE_READY" else [],
+        cooldown_after_loss_minutes=240,
+        cooldown_after_win_minutes=60,
+        metadata={"trend_strength_proxy": strength, "session": session},
+    )
+
+
+def evaluate_breakout_du_jour_setup(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    now: datetime | None = None,
+) -> SetupCandidate:
+    m15 = reading_for_timeframe(readings, "M15")
+    candles = candles_for_timeframe(chart_store, "15m")
+    if m15 is None or len(candles) < 12:
+        return no_setup_candidate("BreakoutDuJourSetup", "Donnees M15 insuffisantes pour breakout du jour.", preferred_session="london_open")
+
+    session = detect_current_session(now)
+    asian_low, asian_high = asian_range_from_candles(candles, now)
+    last = candles[-1]
+    previous = candles[-2] if len(candles) >= 2 else last
+    direction = "NEUTRAL"
+    if last.close > asian_high and previous.close <= asian_high:
+        direction = "BUY"
+    elif last.close < asian_low and previous.close >= asian_low:
+        direction = "SELL"
+    if direction == "NEUTRAL":
+        return no_setup_candidate(
+            "BreakoutDuJourSetup",
+            "Aucune cloture M15 de rupture du range asiatique.",
+            preferred_session="london_open",
+            metadata={"asian_low": asian_low, "asian_high": asian_high, "session": session},
+        )
+
+    conditions = ["asian_range_break"]
+    reasons = [f"Cloture M15 {direction} hors range asiatique {asian_low:.2f}/{asian_high:.2f}."]
+    blockers: list[str] = []
+    if m15.volume_ratio >= 1.5:
+        conditions.append("volume_expansion")
+    else:
+        blockers.append("Volume proxy insuffisant pour valider la rupture.")
+    if session in {"london_open", "london_ny_overlap"}:
+        conditions.append("breakout_session")
+    else:
+        blockers.append("Session peu favorable au breakout du jour.")
+    if (direction == "BUY" and m15.rsi7 >= 52) or (direction == "SELL" and m15.rsi7 <= 48):
+        conditions.append("momentum_confirmed")
+    atr = max(m15.atr14, 3.0)
+    trade_levels = build_market_trade_levels(gold, direction, "breakout", atr, readings=readings, min_rr=2.0)
+    if trade_levels.risk_reward_tp1 < 2.0:
+        blockers.append("R/R TP1 inferieur a 2.0 pour breakout.")
+    status = candidate_status_from_conditions(len(conditions), blockers, 3, 2)
+    return setup_candidate_from_levels(
+        "BreakoutDuJourSetup",
+        status,
+        direction,
+        44 + len(conditions) * 12,
+        len(conditions) * 22,
+        conditions,
+        trade_levels,
+        "london_open",
+        reasons,
+        blockers if status != "TRADE_READY" else [],
+        cooldown_after_loss_minutes=240,
+        cooldown_after_win_minutes=120,
+        metadata={"asian_low": asian_low, "asian_high": asian_high, "session": session},
+    )
+
+
+def build_strategy_candidates(
+    gold: SymbolSnapshot,
+    readings: list[TechnicalReading],
+    chart_store: ChartStore | None,
+    news_reaction_setup: NewsReactionTradePlan | None = None,
+    event_mode: EventModeAnalysis | None = None,
+    now: datetime | None = None,
+) -> list[SetupCandidate]:
+    return [
+        evaluate_pivot_rejection_setup(gold, readings, chart_store, now=now),
+        evaluate_mean_reversion_setup(gold, readings, chart_store, now=now),
+        evaluate_range_trading_setup(gold, readings, chart_store, now=now),
+        evaluate_trend_continuation_setup(gold, readings, chart_store, event_mode=event_mode, now=now),
+        evaluate_breakout_du_jour_setup(gold, readings, chart_store, now=now),
+        news_reaction_to_setup_candidate(news_reaction_setup),
+    ]
+
+
 def build_news_reaction_trade_plan(
     event: FastNewsEvent,
     reaction: PriceReactionSignal,

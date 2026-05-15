@@ -2,7 +2,7 @@ import json
 import unittest
 import xml.etree.ElementTree as ET
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -78,6 +78,12 @@ from xauusd_agent import (
     build_passive_agent_results,
     build_payload,
     build_news_reaction_engine,
+    build_strategy_candidates,
+    evaluate_breakout_du_jour_setup,
+    evaluate_mean_reversion_setup,
+    evaluate_pivot_rejection_setup,
+    evaluate_range_trading_setup,
+    evaluate_trend_continuation_setup,
     build_reversal_engine,
     classify_news_reaction_event,
     detect_news_reaction_price,
@@ -3540,6 +3546,240 @@ class PrePhase7ReversalEngineTests(unittest.TestCase):
         self.assertIn("Aucune position active", combined)
         for hidden in ["Orchestrateur v3", "score pondere", "reference initiale", "Quality Gate", "SURVEILLER", "WATCH BUY", "BLOCKED", "Signal live"]:
             self.assertNotIn(hidden, combined)
+
+
+class Phase7BStrategyCandidateTests(unittest.TestCase):
+    base_time = datetime(2026, 5, 15, 7, 15, tzinfo=timezone.utc)
+
+    def snapshot(
+        self,
+        price: float = 100.0,
+        previous_close: float = 100.0,
+        day_low: float = 80.0,
+        day_high: float = 120.0,
+    ) -> SymbolSnapshot:
+        return SymbolSnapshot(
+            symbol="XAU/USD",
+            label="XAU/USD",
+            price=price,
+            previous_close=previous_close,
+            change_abs=price - previous_close,
+            change_pct=((price - previous_close) / previous_close) * 100,
+            period_change_pct=((price - previous_close) / previous_close) * 100,
+            day_high=day_high,
+            day_low=day_low,
+            support=day_low,
+            resistance=day_high,
+            fetched_at=self.base_time.isoformat(),
+            points=[PricePoint(timestamp=int(self.base_time.timestamp()), close=price)],
+        )
+
+    def reading(
+        self,
+        timeframe: str,
+        verdict: str = "BUY",
+        rsi: float = 56.0,
+        atr: float = 4.0,
+        volume_ratio: float = 1.2,
+        close: float = 100.0,
+        score: float = 7.0,
+    ) -> TechnicalReading:
+        if verdict == "SELL":
+            ema20, ema50, ema100, ema200 = close - 1.0, close, close + 1.5, close + 3.0
+            macd_histogram = -0.8
+        else:
+            ema20, ema50, ema100, ema200 = close + 1.0, close, close - 1.5, close - 3.0
+            macd_histogram = 0.8
+        return TechnicalReading(
+            timeframe=timeframe,
+            close=close,
+            ema20=ema20,
+            ema50=ema50,
+            ema100=ema100,
+            ema200=ema200,
+            rsi7=rsi,
+            macd_line=macd_histogram,
+            macd_signal=0.0,
+            macd_histogram=macd_histogram,
+            volume_ratio=volume_ratio,
+            atr14=atr,
+            score=score if verdict == "BUY" else -score,
+            verdict=verdict,
+            reasons=["test"],
+        )
+
+    def candle(
+        self,
+        offset_minutes: int,
+        open_: float,
+        high: float,
+        low: float,
+        close: float,
+        timeframe: str = "H1",
+        volume: int = 1000,
+    ) -> OHLCCandle:
+        timestamp = int((self.base_time + timedelta(minutes=offset_minutes)).timestamp())
+        return OHLCCandle(
+            timestamp=timestamp,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+            source="test",
+            timeframe=timeframe,
+            fetched_at=self.base_time.isoformat(),
+        )
+
+    def chart_store(self, h1: list[OHLCCandle] | None = None, m15: list[OHLCCandle] | None = None) -> ChartStore:
+        return ChartStore(
+            generated_at=self.base_time.isoformat(),
+            symbol="GC=F",
+            source="test",
+            status="READY",
+            summary="ready",
+            timeframes=[
+                ChartTimeframe("H1", "READY", h1 or []),
+                ChartTimeframe("M15", "READY", m15 or []),
+            ],
+        )
+
+    def rejection_series(self, direction: str, base: float = 100.0) -> list[OHLCCandle]:
+        candles = [self.candle(-720 + index * 60, base, base + 2, base - 2, base + 0.2) for index in range(12)]
+        if direction == "BUY":
+            candles[-1] = self.candle(0, base - 1.0, base + 2.0, base - 7.0, base + 1.2)
+        else:
+            candles[-1] = self.candle(0, base + 1.0, base + 7.0, base - 2.0, base - 1.2)
+        return candles
+
+    def test_phase7b_pivot_rejection_buy_ready_near_camarilla_support(self) -> None:
+        gold = self.snapshot(price=89.2, previous_close=100.0, day_low=80.0, day_high=120.0)
+        readings = [self.reading("1H", "BUY", rsi=42.0, close=89.0)]
+        setup = evaluate_pivot_rejection_setup(gold, readings, self.chart_store(h1=self.rejection_series("BUY", 89.0)), now=self.base_time)
+        self.assertEqual(setup.name, "PivotRejectionSetup")
+        self.assertEqual(setup.direction, "BUY")
+        self.assertEqual(setup.status, "TRADE_READY")
+        self.assertIn("wick_rejection", setup.conditions_met)
+        self.assertGreater(setup.tp1, setup.entry_zone_high)
+
+    def test_phase7b_pivot_rejection_sell_ready_near_camarilla_resistance(self) -> None:
+        gold = self.snapshot(price=110.8, previous_close=100.0, day_low=80.0, day_high=120.0)
+        readings = [self.reading("1H", "SELL", rsi=62.0, close=111.0)]
+        setup = evaluate_pivot_rejection_setup(gold, readings, self.chart_store(h1=self.rejection_series("SELL", 111.0)), now=self.base_time)
+        self.assertEqual(setup.direction, "SELL")
+        self.assertEqual(setup.status, "TRADE_READY")
+        self.assertLess(setup.tp1, setup.entry_zone_low)
+
+    def test_phase7b_mean_reversion_buy_uses_h1_extreme_and_extension(self) -> None:
+        gold = self.snapshot(price=90.0, previous_close=100.0, day_low=88.0, day_high=118.0)
+        reading = self.reading("1H", "BUY", rsi=20.0, atr=4.0, close=90.0)
+        reading.ema20 = 99.0
+        reading.macd_histogram = -0.2
+        setup = evaluate_mean_reversion_setup(gold, [reading], self.chart_store(h1=self.rejection_series("BUY", 90.0)), now=self.base_time)
+        self.assertEqual(setup.direction, "BUY")
+        self.assertIn(setup.status, {"TRADE_READY", "WATCH"})
+        self.assertIn("rsi_extreme", setup.conditions_met)
+        self.assertIn("ema20_extension", setup.conditions_met)
+
+    def test_phase7b_mean_reversion_sell_uses_h1_overbought(self) -> None:
+        gold = self.snapshot(price=112.0, previous_close=100.0, day_low=88.0, day_high=114.0)
+        reading = self.reading("1H", "SELL", rsi=80.0, atr=4.0, close=112.0)
+        reading.ema20 = 103.0
+        reading.macd_histogram = 0.2
+        setup = evaluate_mean_reversion_setup(gold, [reading], self.chart_store(h1=self.rejection_series("SELL", 112.0)), now=self.base_time)
+        self.assertEqual(setup.direction, "SELL")
+        self.assertIn("rsi_extreme", setup.conditions_met)
+        self.assertLess(setup.tp1, setup.entry_zone_low)
+
+    def test_phase7b_range_trading_buy_at_lower_edge(self) -> None:
+        h1 = []
+        for index in range(24):
+            low = 100.0 if index % 5 == 0 else 102.0
+            high = 120.0 if index % 6 == 0 else 118.0
+            h1.append(self.candle(-1440 + index * 60, 110.0, high, low, 101.5 if index == 23 else 110.0))
+        gold = self.snapshot(price=101.0, previous_close=110.0, day_low=100.0, day_high=120.0)
+        reading = self.reading("1H", "NEUTRAL", rsi=40.0, atr=3.0, close=101.0, score=0.0)
+        reading.ema20 = 109.0
+        reading.ema50 = 109.2
+        reading.ema100 = 109.5
+        reading.ema200 = 109.8
+        setup = evaluate_range_trading_setup(gold, [reading], self.chart_store(h1=h1), now=datetime(2026, 5, 15, 3, 0, tzinfo=timezone.utc))
+        self.assertEqual(setup.direction, "BUY")
+        self.assertIn("range_touches", setup.conditions_met)
+        self.assertEqual(setup.preferred_session, "asian")
+
+    def test_phase7b_range_trading_rejects_middle_of_range(self) -> None:
+        h1 = [self.candle(-720 + index * 60, 110.0, 120.0, 100.0, 110.0) for index in range(12)]
+        gold = self.snapshot(price=110.0, previous_close=110.0, day_low=100.0, day_high=120.0)
+        setup = evaluate_range_trading_setup(gold, [self.reading("1H", "NEUTRAL", close=110.0, score=0.0)], self.chart_store(h1=h1), now=self.base_time)
+        self.assertEqual(setup.status, "NO_SETUP")
+        self.assertEqual(setup.direction, "NEUTRAL")
+
+    def test_phase7b_trend_continuation_buy_ready_on_alignment(self) -> None:
+        gold = self.snapshot(price=111.8, previous_close=108.0, day_low=104.0, day_high=116.0)
+        readings = [
+            self.reading("1D", "BUY", close=112.0),
+            self.reading("4H", "BUY", close=112.0),
+            self.reading("1H", "BUY", close=112.0, volume_ratio=1.5),
+        ]
+        setup = evaluate_trend_continuation_setup(gold, readings, self.chart_store(), now=datetime(2026, 5, 15, 13, 30, tzinfo=timezone.utc))
+        self.assertEqual(setup.direction, "BUY")
+        self.assertEqual(setup.status, "TRADE_READY")
+        self.assertIn("multi_timeframe_alignment", setup.conditions_met)
+
+    def test_phase7b_trend_continuation_suspended_by_event_mode(self) -> None:
+        gold = self.snapshot(price=111.8, previous_close=108.0)
+        readings = [self.reading("1D", "BUY"), self.reading("4H", "BUY"), self.reading("1H", "BUY")]
+        event_mode = EventModeAnalysis(True, 80, "ACTIVE", "freeze", 1.5, ["test"])
+        setup = evaluate_trend_continuation_setup(gold, readings, self.chart_store(), event_mode=event_mode, now=self.base_time)
+        self.assertEqual(setup.status, "NO_SETUP")
+        self.assertIn("Mode event actif", setup.reasons[0])
+
+    def test_phase7b_breakout_du_jour_buy_ready_on_london_break(self) -> None:
+        reference = datetime(2026, 5, 15, 7, 15, tzinfo=timezone.utc)
+        candles: list[OHLCCandle] = []
+        for index in range(28):
+            ts = int((datetime(2026, 5, 15, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=15 * index)).timestamp())
+            candles.append(OHLCCandle(ts, 101.0, 104.0, 100.0, 102.0, 1000, "test", "M15", reference.isoformat()))
+        candles.append(OHLCCandle(int((reference - timedelta(minutes=15)).timestamp()), 103.5, 104.5, 102.5, 104.0, 1200, "test", "M15", reference.isoformat()))
+        candles.append(OHLCCandle(int(reference.timestamp()), 104.2, 107.0, 103.8, 106.2, 2200, "test", "M15", reference.isoformat()))
+        gold = self.snapshot(price=106.2, previous_close=102.0, day_low=100.0, day_high=107.0)
+        setup = evaluate_breakout_du_jour_setup(
+            gold,
+            [self.reading("15m", "BUY", rsi=58.0, atr=3.0, volume_ratio=1.8, close=106.2)],
+            self.chart_store(m15=candles),
+            now=reference,
+        )
+        self.assertEqual(setup.direction, "BUY")
+        self.assertEqual(setup.status, "TRADE_READY")
+        self.assertIn("asian_range_break", setup.conditions_met)
+
+    def test_phase7b_breakout_du_jour_rejects_off_hours(self) -> None:
+        reference = datetime(2026, 5, 15, 22, 15, tzinfo=timezone.utc)
+        candles = [
+            OHLCCandle(int((datetime(2026, 5, 15, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=15 * index)).timestamp()), 101.0, 104.0, 100.0, 102.0, 1000, "test", "M15", reference.isoformat())
+            for index in range(28)
+        ]
+        candles.append(OHLCCandle(int((reference - timedelta(minutes=15)).timestamp()), 103.5, 104.5, 102.5, 104.0, 1200, "test", "M15", reference.isoformat()))
+        candles.append(OHLCCandle(int(reference.timestamp()), 104.2, 107.0, 103.8, 106.2, 2200, "test", "M15", reference.isoformat()))
+        gold = self.snapshot(price=106.2, previous_close=102.0)
+        setup = evaluate_breakout_du_jour_setup(
+            gold,
+            [self.reading("15m", "BUY", rsi=58.0, atr=3.0, volume_ratio=1.8, close=106.2)],
+            self.chart_store(m15=candles),
+            now=reference,
+        )
+        self.assertEqual(setup.direction, "BUY")
+        self.assertIn(setup.status, {"WATCH", "NO_SETUP"})
+        self.assertIn("Session peu favorable au breakout du jour.", setup.blockers)
+
+    def test_phase7b_build_strategy_candidates_returns_all_six_sources(self) -> None:
+        gold = self.snapshot(price=111.8, previous_close=108.0, day_low=104.0, day_high=116.0)
+        readings = [self.reading("1D", "BUY", close=112.0), self.reading("4H", "BUY", close=112.0), self.reading("1H", "BUY", close=112.0), self.reading("15m", "BUY", close=112.0)]
+        candidates = build_strategy_candidates(gold, readings, self.chart_store(h1=self.rejection_series("BUY", 112.0)), now=self.base_time)
+        self.assertEqual(len(candidates), 6)
+        self.assertEqual(candidates[-1].name, "NewsReactionSetup")
+        self.assertTrue({candidate.name for candidate in candidates}.issuperset({"PivotRejectionSetup", "MeanReversionSetup", "RangeTradingSetup", "TrendContinuationSetup", "BreakoutDuJourSetup"}))
 
 
 if __name__ == "__main__":

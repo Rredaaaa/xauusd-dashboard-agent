@@ -1,6 +1,6 @@
 # Fourniwell Signals v4 - Phase 7
 
-Statut: Phase 7A, 7B et 7C livrees.
+Statut: Phase 7A, 7B, 7C et 7D livrees.
 
 Objectif: remplacer la logique mono-setup par un moteur multi-strategies capable de produire plusieurs candidates auditees avant selection du setup dominant.
 
@@ -159,8 +159,6 @@ Verification:
 - `python -m unittest tests/test_xauusd_agent.py`
 - `python -m py_compile xauusd_agent.py`
 
-## Prochaine etape
-
 ## Phase 7C livree
 
 Livree le 2026-05-15.
@@ -220,9 +218,40 @@ Verification:
 - `python -m unittest tests/test_xauusd_agent.py`
 - `python -m py_compile xauusd_agent.py`
 
+## Phase 7D livree
+
+Livree le 2026-05-15.
+
+Contenu:
+
+- affichage `Phase 7D · Multi-Strategy Inspector` dans l'onglet Inspector;
+- affichage du setup dominant selectionne par `StrategyCoordinator`;
+- affichage de la session, entry zone, SL, TP1/TP2/TP3 et R/R TP1 du setup dominant;
+- tableau de toutes les candidates rankees ou rejetees;
+- exposition des raisons et blockers dans l'Inspector;
+- propagation de `strategy_candidates` et `strategy_selection` dans `BriefingBundle`, payload et audit snapshot.
+
+Limite volontaire:
+
+- le chef de file n'est pas modifie;
+- le trade lock n'est pas modifie;
+- aucun trade n'est cree par la selection multi-strategies;
+- le dashboard principal garde son verdict actuel.
+
+Tests ajoutes:
+
+- rendu Inspector Phase 7D;
+- verification que le verdict principal reste visible et distinct du setup dominant.
+
+Verification:
+
+- `python -m unittest tests.test_xauusd_agent.Phase7CStrategyCoordinatorTests`
+- `python -m unittest tests/test_xauusd_agent.py`
+- `python -m py_compile xauusd_agent.py`
+
 ## Prochaine etape
 
-Phase 7D ou Phase 7.5 selon decision:
+Phase 7.5:
 
-- soit brancher prudemment la selection dominante dans l'Inspector uniquement;
-- soit passer directement a la Phase 7.5 de calibration/backtest avant tout impact sur le chef de file.
+- calibration/backtest du coordinateur avant tout impact sur le chef de file ou le trade lock;
+- validation des priorites, scores, cooldowns et seuils R/R sur historique.

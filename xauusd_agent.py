@@ -1365,6 +1365,8 @@ class BriefingBundle:
     chart_store: ChartStore | None = None
     news_reaction_setup: NewsReactionTradePlan | None = None
     reversal_engine: dict[str, ReversalSetup] = field(default_factory=dict)
+    strategy_candidates: list[SetupCandidate] = field(default_factory=list)
+    strategy_selection: StrategySelection | None = None
 
 
 @dataclass
@@ -3175,6 +3177,8 @@ def build_monitoring_inspector_payload(
     global_recommendation: TradeRecommendation | None,
     market_regime: MarketRegimeAnalysis | None,
     chart_store: ChartStore | None = None,
+    strategy_candidates: list[SetupCandidate] | None = None,
+    strategy_selection: StrategySelection | None = None,
 ) -> dict[str, Any]:
     snapshots = data_quality.snapshots if data_quality else []
     source_issues = [snapshot for snapshot in snapshots if snapshot.status != "ok"]
@@ -3307,6 +3311,18 @@ def build_monitoring_inspector_payload(
             "post_mortems": [asdict(item) for item in trade_ledger.post_mortems] if trade_ledger else [],
             "rows": trade_rows[:12],
         },
+        "strategy": {
+            "status": strategy_selection.status if strategy_selection else "UNAVAILABLE",
+            "session": strategy_selection.session if strategy_selection else detect_current_session(),
+            "event_mode_active": strategy_selection.event_mode_active if strategy_selection else False,
+            "selected_score": strategy_selection.selected_score if strategy_selection else 0,
+            "selected_setup": asdict(strategy_selection.selected_setup) if strategy_selection and strategy_selection.selected_setup else None,
+            "reasons": strategy_selection.reasons if strategy_selection else [],
+            "ranked_candidates": strategy_selection.ranked_candidates if strategy_selection else [],
+            "rejected_candidates": strategy_selection.rejected_candidates if strategy_selection else [],
+            "candidate_count": len(strategy_candidates or []),
+            "raw_candidates": [asdict(candidate) for candidate in (strategy_candidates or [])],
+        },
     }
 
 
@@ -3321,6 +3337,8 @@ def build_audit_log_snapshot(bundle: BriefingBundle) -> dict[str, Any]:
         bundle.global_recommendation,
         bundle.market_regime,
         bundle.chart_store,
+        bundle.strategy_candidates,
+        bundle.strategy_selection,
     )
     return {
         "generated_at": generated_at,
@@ -11083,6 +11101,8 @@ def build_payload(
         global_recommendation,
         market_regime,
         chart_store,
+        strategy_candidates,
+        strategy_selection,
     )
     if weekend_gold:
         payload["market_snapshot"]["weekend_gold"] = {
@@ -13050,6 +13070,8 @@ def render_monitoring_inspector_panel(
     global_recommendation: TradeRecommendation | None,
     market_regime: MarketRegimeAnalysis | None,
     chart_store: ChartStore | None = None,
+    strategy_candidates: list[SetupCandidate] | None = None,
+    strategy_selection: StrategySelection | None = None,
 ) -> str:
     inspector = build_monitoring_inspector_payload(
         generated_at,
@@ -13060,6 +13082,8 @@ def render_monitoring_inspector_panel(
         global_recommendation,
         market_regime,
         chart_store,
+        strategy_candidates,
+        strategy_selection,
     )
     source_rows = []
     for snapshot in (data_quality.snapshots if data_quality else []):
@@ -13137,6 +13161,41 @@ def render_monitoring_inspector_panel(
         """.strip()
         for item in chart_payload["timeframes"]
     )
+    strategy = inspector["strategy"]
+    selected_setup = strategy["selected_setup"]
+    if selected_setup:
+        selected_summary = f"""
+        <div class="trade-verdict {state_tone_class(strategy['status'])}">Multi-Strategy · {html.escape(strategy['status'])} · {html.escape(selected_setup['name'])} · {html.escape(selected_setup['direction'])} · {strategy['selected_score']}/100</div>
+        <p class="trade-summary">{html.escape(' '.join(strategy['reasons'][:2]))}</p>
+        <div class="geo-grid">
+          <div class="geo-stat"><strong>Session</strong><span>{html.escape(strategy['session'])}</span></div>
+          <div class="geo-stat"><strong>Entry zone</strong><span>{selected_setup['entry_zone_low']:.2f} / {selected_setup['entry_zone_high']:.2f}</span></div>
+          <div class="geo-stat"><strong>SL</strong><span>{selected_setup['stop_loss']:.2f}</span></div>
+          <div class="geo-stat"><strong>TP1 / TP2 / TP3</strong><span>{selected_setup['tp1']:.2f} / {selected_setup['tp2']:.2f} / {selected_setup['tp3']:.2f}</span><small>R/R TP1 {selected_setup['rr_tp1']:.2f}R</small></div>
+        </div>
+        """.strip()
+    else:
+        selected_summary = f"""
+        <div class="trade-verdict neutral">Multi-Strategy · {html.escape(strategy['status'])}</div>
+        <p class="trade-summary">{html.escape('; '.join(strategy['reasons']) if strategy['reasons'] else 'Aucun setup dominant selectionne pour ce snapshot.')}</p>
+        """.strip()
+    strategy_rows = []
+    for item in [*strategy["ranked_candidates"], *strategy["rejected_candidates"]]:
+        row_class = "bullish" if item["eligible"] and "BUY" in item["direction"] else "bearish" if item["eligible"] and "SELL" in item["direction"] else "neutral"
+        details = "; ".join(item["reasons"][:2] or item["blockers"][:2])
+        strategy_rows.append(
+            f"""
+            <tr>
+              <td><strong>{html.escape(item['name'])}</strong><br><span class="soft">{'eligible' if item['eligible'] else 'rejetee'}</span></td>
+              <td class="{row_class}">{html.escape(item['direction'])}</td>
+              <td>{html.escape(item['status'])}</td>
+              <td>{item['score']}/100</td>
+              <td>{item['confidence']}/100 · conf. {item['confluence_score']}/100</td>
+              <td>{item['rr_tp1']:.2f}R</td>
+              <td>{html.escape(details[:220])}</td>
+            </tr>
+            """.strip()
+        )
 
     return f"""
     <div class="trade-verdict {state_tone_class(decision['gate_status'])}">Inspector · {html.escape(decision['verdict'])} {decision['score']}/100 · Data quality {inspector['data_quality_score']}/100</div>
@@ -13150,6 +13209,16 @@ def render_monitoring_inspector_panel(
       <div class="geo-stat"><strong>Preflight</strong><span>{html.escape(preflight['status'])}</span><small>{'trade bloque' if preflight['trade_blocked'] else 'data OK trade'}</small></div>
       <div class="geo-stat"><strong>Chart Store</strong><span>{html.escape(chart_payload['status'])}</span><small>{len(chart_payload['timeframes'])} TF</small></div>
       <div class="geo-stat"><strong>Audit log</strong><span>{html.escape(str(AUDIT_LOG_PATH))}</span><small>append-only JSONL</small></div>
+    </div>
+    <div class="module-block">
+      <div class="section-kicker">Phase 7D · Multi-Strategy Inspector</div>
+      {selected_summary}
+    </div>
+    <div class="table-wrap">
+      <table class="technical-table">
+        <thead><tr><th>Setup</th><th>Direction</th><th>Status</th><th>Score</th><th>Confiance</th><th>R/R</th><th>Pourquoi</th></tr></thead>
+        <tbody>{''.join(strategy_rows) or '<tr><td colspan="7">Aucune candidate multi-strategie disponible.</td></tr>'}</tbody>
+      </table>
     </div>
     <div class="geo-columns">
       <div class="module-block">
@@ -14590,6 +14659,20 @@ def render_dashboard_clarity_v2(
             data_quality=data_quality,
         )
     reversal_engine = bundle.reversal_engine or build_reversal_engine(gold, technical_readings, chart_store)
+    active_settings = parse_user_settings(settings_payload)
+    strategy_candidates = bundle.strategy_candidates or build_strategy_candidates(
+        gold,
+        technical_readings,
+        chart_store,
+        news_reaction_setup=news_reaction_setup,
+        event_mode=event_mode,
+    )
+    strategy_selection = bundle.strategy_selection or build_strategy_selection(
+        strategy_candidates,
+        event_mode=event_mode,
+        trade_ledger=trade_ledger,
+        min_rr=active_settings.minimum_risk_reward,
+    )
     agent_results = bundle.agent_results or build_passive_agent_results(
         gold,
         dxy,
@@ -15560,7 +15643,7 @@ def render_dashboard_clarity_v2(
         <section class="tab-view" id="inspector" data-tab-view="inspector">
           <div class="view-header"><div><div class="section-kicker">Inspector</div><h2>Audit sources, agents, gates et trades</h2><p>Tout ce qui explique pourquoi une decision ou un trade existe.</p></div></div>
           <section class="layout-inspector">
-            <article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store)}</article>
+            <article class="panel span-12"><div class="section-kicker">Monitoring / Audit / Inspector</div><h2>Flux, sources, agents et trades</h2>{render_monitoring_inspector_panel(generated_at, data_quality, agent_results, trade_ledger, orchestrator_decision, global_recommendation, market_regime, chart_store, strategy_candidates, strategy_selection)}</article>
             <article class="panel span-12"><div class="section-kicker">Source Registry</div><h2>Gouvernance des flux d'information</h2>{render_data_quality_panel(data_quality)}</article>
             <article class="panel span-12"><div class="section-kicker">Regime interne</div><h2>Mode politique / petrole / dollar</h2>{render_market_regime_panel(market_regime, cross_asset_analysis)}</article>
             <article class="panel span-12"><div class="section-kicker">Event Facts</div><h2>Faits detectes, sources et chaines marche</h2>{render_event_facts_panel(event_facts)}</article>
@@ -15958,6 +16041,8 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
     live_bundle.chart_store = chart_store
     live_bundle.news_reaction_setup = news_reaction_setup
     live_bundle.reversal_engine = reversal_engine
+    live_bundle.strategy_candidates = strategy_candidates
+    live_bundle.strategy_selection = strategy_selection
     return live_bundle
 
 
@@ -16212,6 +16297,8 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         chart_store=chart_store,
         news_reaction_setup=news_reaction_setup,
         reversal_engine=reversal_engine,
+        strategy_candidates=strategy_candidates,
+        strategy_selection=strategy_selection,
     )
 
 

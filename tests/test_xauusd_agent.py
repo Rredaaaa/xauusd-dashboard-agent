@@ -98,6 +98,7 @@ from xauusd_agent import (
     parse_ishares_iau_official_data,
     render_dashboard,
     render_desk_position_summary,
+    render_monitoring_inspector_panel,
     render_news_flow_panel,
     render_reversal_panels,
     render_signal_locked_panel,
@@ -3920,6 +3921,40 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
         self.assertEqual(selection.status, "NO_SETUP")
         self.assertIsNone(selection.selected_setup)
         self.assertEqual(selection.ranked_candidates, [])
+
+    def test_phase7d_inspector_renders_selected_strategy_without_changing_verdict(self) -> None:
+        candidates = [
+            self.candidate("TrendContinuationSetup", confidence=78, confluence=80, preferred_session="london_ny_overlap"),
+            self.candidate("PivotRejectionSetup", confidence=92, confluence=92),
+        ]
+        selection = build_strategy_selection(candidates, now=self.reference)
+        recommendation = TradeRecommendation(
+            "global",
+            "WAIT",
+            55,
+            "Signal principal inchange.",
+            [],
+            0.0,
+            0.0,
+            0.0,
+            "test",
+        )
+        html = render_monitoring_inspector_panel(
+            self.reference.isoformat(),
+            None,
+            [],
+            None,
+            None,
+            recommendation,
+            None,
+            None,
+            candidates,
+            selection,
+        )
+        self.assertIn("Phase 7D", html)
+        self.assertIn("Multi-Strategy", html)
+        self.assertIn("TrendContinuationSetup", html)
+        self.assertIn("Inspector · WAIT 55/100", html)
 
 
 if __name__ == "__main__":

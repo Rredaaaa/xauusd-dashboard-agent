@@ -2138,6 +2138,7 @@ def trade_ledger_public_dict(ledger: TradeLedgerSummary) -> dict[str, Any]:
     payload = asdict(ledger)
     payload["active_trades"] = [trade_plan_public_dict(plan) for plan in ledger.active_trades]
     payload["recent_trades"] = [trade_plan_public_dict(plan) for plan in ledger.recent_trades]
+    payload["plans"] = payload["active_trades"]
     return payload
 
 
@@ -2210,6 +2211,12 @@ def append_trade_gate_audit_event(
 
 def trade_plan_closed(plan: TradePlan) -> bool:
     return plan.status in {"tp2_hit", "tp3_hit", "sl_hit", "expired", "invalidated", "closed_manual"}
+
+
+def trade_plan_is_active(plan: TradePlan) -> bool:
+    if trade_plan_closed(plan):
+        return False
+    return plan.outcome in {"open", "partial", ""} and plan.status in {"pending", "active", "tp1_hit"}
 
 
 def compute_risk_reward(direction: str, entry: float, stop_loss: float, target: float) -> float:
@@ -2925,8 +2932,7 @@ def build_trade_ledger_summary(
             gate_reasons = ["Trade Snapshot cree et verrouille dans le ledger append-only."]
 
     plans = [enrich_trade_plan_v3(plan) for plan in plans]
-    active_statuses = {"pending", "active", "tp1_hit"}
-    active_trades = [plan for plan in plans if plan.status in active_statuses]
+    active_trades = [plan for plan in plans if trade_plan_is_active(plan)]
     wins = sum(1 for plan in plans if plan.outcome == "win")
     losses = sum(1 for plan in plans if plan.outcome == "loss")
     partials = sum(1 for plan in plans if plan.outcome == "partial")
@@ -8053,7 +8059,7 @@ def build_passive_agent_results(
     if data_quality and data_quality.score < 70:
         risk_reasons.append(f"Data quality degradee {data_quality.score}/100")
     ledger_plans = load_trade_ledger()
-    active_ledger_trades = [plan for plan in ledger_plans if plan.status in {"pending", "active", "tp1_hit"}]
+    active_ledger_trades = [plan for plan in ledger_plans if trade_plan_is_active(plan)]
     recent_losses = count_recent_losses(ledger_plans, datetime.now(timezone.utc), 24)
     rr_tp1 = (
         compute_risk_reward(
@@ -10167,7 +10173,7 @@ def build_trade_ledger_from_payload(data: dict[str, Any] | None) -> TradeLedgerS
         quality_gate_reasons=[str(item) for item in data.get("quality_gate_reasons", [])],
         active_trades=[
             parse_trade_plan(item)
-            for item in data.get("active_trades", [])
+            for item in data.get("active_trades", data.get("plans", []))
             if isinstance(item, dict)
         ],
         recent_trades=[
@@ -12061,23 +12067,49 @@ def visible_lead_status(
     return global_recommendation.verdict, global_recommendation.score, global_recommendation.verdict
 
 
+def find_locked_trade_for_status(trade_ledger: TradeLedgerSummary | None, lead_status: str) -> TradePlan | None:
+    direction = trade_direction_from_text(lead_status)
+    if trade_ledger is None or direction not in {"BUY", "SELL"}:
+        return None
+    seen: set[str] = set()
+    for plan in [*trade_ledger.active_trades, *trade_ledger.recent_trades]:
+        if plan.trade_id in seen:
+            continue
+        seen.add(plan.trade_id)
+        if plan.direction == direction and trade_plan_is_active(plan) and trade_plan_levels_are_valid(plan):
+            return plan
+    return None
+
+
 def render_desk_position_summary(
     global_recommendation: TradeRecommendation,
     orchestrator_decision: OrchestratorDecision | None,
     scenario_plan: ScenarioPlan | None,
+    trade_ledger: TradeLedgerSummary | None = None,
 ) -> str:
     lead_status, lead_score, lead_bias = visible_lead_status(global_recommendation, orchestrator_decision)
     tone = state_tone_class(lead_status)
     trigger = scenario_plan.trigger if scenario_plan else "Attendre une confirmation prix + agents."
     invalidation = scenario_plan.invalidation if scenario_plan else "Signal invalide si les confirmations disparaissent."
     is_trade = lead_status in {"TRADE_BUY", "TRADE_SELL"}
-    levels_ok = is_trade and recommendation_levels_are_valid(global_recommendation)
-    if levels_ok:
+    locked_trade = find_locked_trade_for_status(trade_ledger, lead_status)
+    if locked_trade is not None:
+        locked_at = format_timestamp_for_humans(locked_trade.created_at)
         level_html = f"""
-        <div class="trade-levels">
-          <div><span>SL</span><strong>{global_recommendation.stop_loss:.2f}</strong></div>
-          <div><span>TP1</span><strong>{global_recommendation.take_profit_1:.2f}</strong></div>
-          <div><span>TP2</span><strong>{global_recommendation.take_profit_2:.2f}</strong></div>
+        <div class="trade-levels trade-locked">
+          <div><span>Entry</span><strong>{locked_trade.reference_price:.2f}</strong></div>
+          <div><span>SL</span><strong>{locked_trade.stop_loss:.2f}</strong></div>
+          <div><span>TP1 · 50%</span><strong>{locked_trade.tp1:.2f}</strong></div>
+          <div><span>TP2 · 30%</span><strong>{locked_trade.tp2:.2f}</strong></div>
+          <div><span>TP3 · 20%</span><strong>{locked_trade.tp3:.2f}</strong></div>
+        </div>
+        <p class="trade-summary">Locked trade: niveaux figes depuis {html.escape(locked_at)} · R/R TP1 {locked_trade.risk_reward_tp1:.2f}R · ID {html.escape(locked_trade.trade_id)}.</p>
+        """.strip()
+    elif is_trade:
+        level_html = f"""
+        <div class="decision-item caution">
+          <strong>Signal live sans trade locked</strong>
+          <span>Statut actuel: {html.escape(lead_status)}. Aucun TradePlan actif correspondant n'est verrouille dans le ledger; les niveaux live ne sont pas affiches car ils changent au refresh.</span>
         </div>
         """.strip()
     else:
@@ -14145,7 +14177,7 @@ def render_dashboard_clarity_v2(
                 Mis a jour {html.escape(generated_at)} · Source prix spot: <a href="{INVESTING_XAUUSD_URL}" target="_blank" rel="noopener noreferrer">Investing.com XAU/USD</a><br>
                 Range du jour: {format_number(gold.day_low)} / {format_number(gold.day_high)}
               </div>
-              {render_desk_position_summary(global_recommendation, orchestrator_decision, scenario_plan)}
+              {render_desk_position_summary(global_recommendation, orchestrator_decision, scenario_plan, trade_ledger)}
               <div class="metric-strip">
                 <div class="metric-chip"><strong>Biais</strong><span class="{price_class}">{format_bias_label(analysis.bias)}</span><small>Lecture globale du moment</small></div>
                 <div class="metric-chip"><strong>Confiance</strong><span>{analysis.confidence}/100</span><div class="confidence-bar"><span></span></div></div>

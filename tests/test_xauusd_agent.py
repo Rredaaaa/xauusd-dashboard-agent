@@ -25,6 +25,7 @@ from xauusd_agent import (
     MarketRegimeAnalysis,
     NewsItem,
     OfficialMacroRates,
+    OrchestratorDecision,
     PoliticalStatement,
     PreflightCheck,
     PricePoint,
@@ -81,6 +82,7 @@ from xauusd_agent import (
     parse_ig_weekend_gold_snapshot,
     parse_ishares_iau_official_data,
     render_dashboard,
+    render_desk_position_summary,
     render_signal_locked_panel,
     render_trade_tracker_panel,
     render_replay_report_markdown,
@@ -94,6 +96,7 @@ from xauusd_agent import (
     set_agent_enabled,
     should_skip_headline,
     trade_plan_levels_are_valid,
+    trade_ledger_public_dict,
     trade_setup_from_structure,
     update_orchestrator_agent,
 )
@@ -3060,6 +3063,183 @@ class Phase6TradeLevelsTests(unittest.TestCase):
             "all_trump_white_house_direct_feeds_down",
             criticality="high",
         )
+
+    def test_p0_desk_uses_locked_trade_levels_not_live_recommendation(self) -> None:
+        plan = TradePlan(
+            trade_id="LOCKED-SELL",
+            created_at="2026-05-14T22:04:00+00:00",
+            updated_at="2026-05-14T22:04:00+00:00",
+            status="active",
+            direction="SELL",
+            entry_type="trend_continuation",
+            reference_price=4651.14,
+            entry_zone_low=4650.0,
+            entry_zone_high=4652.0,
+            stop_loss=4659.87,
+            tp1=4634.19,
+            tp2=4625.0,
+            tp3=4610.04,
+            risk_reward_tp1=1.94,
+            risk_reward_tp2=3.0,
+            risk_reward_tp3=4.7,
+            max_valid_until="2026-05-15T22:04:00+00:00",
+            source_signal_id="locked-signal",
+            global_score_at_creation=77,
+            data_quality_score=80,
+            confidence_score=72,
+            market_regime="normal",
+            agents_validating=["TechnicalAgent"],
+            agents_contradicting=[],
+            evidence_sources=["ledger"],
+            event_facts_snapshot=[],
+            technical_snapshot="M15:SELL",
+            macro_snapshot="",
+            geopolitical_snapshot="",
+            elliott_wave_snapshot="",
+            invalidation_rules=[],
+            outcome="open",
+            outcome_reason="Trade Snapshot cree par Quality Gate; SL/TP figes.",
+        )
+        ledger = TradeLedgerSummary(
+            ledger_path="reports/trade_ledger.jsonl",
+            generated_at="2026-05-15T00:00:00+00:00",
+            quality_gate_status="WAIT",
+            quality_gate_reasons=[],
+            active_trades=[],
+            recent_trades=[plan],
+            total_trades=1,
+        )
+        live_recommendation = TradeRecommendation(
+            "global",
+            "SELL",
+            81,
+            "Live recommendation recalculated at refresh.",
+            [],
+            4704.90,
+            4575.72,
+            4524.04,
+            "live",
+        )
+        orchestrator = OrchestratorDecision(
+            verdict="SELL",
+            score=77,
+            status="TRADE_SELL",
+            engine="orchestrator_v3",
+            bullish_score=32.3,
+            legacy_verdict="SELL",
+            legacy_score=62,
+            top_reasons=["Trade exploitable."],
+            counter_reasons=[],
+            contradictions=[],
+            quality_gate_reasons=[],
+        )
+        html = render_desk_position_summary(live_recommendation, orchestrator, None, ledger)
+        self.assertIn("4659.87", html)
+        self.assertIn("4634.19", html)
+        self.assertIn("4625.00", html)
+        self.assertIn("4610.04", html)
+        self.assertIn("Locked trade", html)
+        self.assertNotIn("4704.90", html)
+        self.assertNotIn("4575.72", html)
+        self.assertNotIn("4524.04", html)
+
+    def test_p0_desk_hides_live_levels_when_trade_status_without_lock(self) -> None:
+        live_recommendation = TradeRecommendation(
+            "global",
+            "SELL",
+            81,
+            "Live recommendation recalculated at refresh.",
+            [],
+            4704.90,
+            4575.72,
+            4524.04,
+            "live",
+        )
+        orchestrator = OrchestratorDecision(
+            verdict="SELL",
+            score=77,
+            status="TRADE_SELL",
+            engine="orchestrator_v3",
+            bullish_score=32.3,
+            legacy_verdict="SELL",
+            legacy_score=62,
+            top_reasons=["Trade exploitable."],
+            counter_reasons=[],
+            contradictions=[],
+            quality_gate_reasons=[],
+        )
+        ledger = TradeLedgerSummary(
+            ledger_path="reports/trade_ledger.jsonl",
+            generated_at="2026-05-15T00:00:00+00:00",
+            quality_gate_status="WAIT",
+            quality_gate_reasons=[],
+            active_trades=[],
+            recent_trades=[],
+            total_trades=0,
+        )
+        html = render_desk_position_summary(live_recommendation, orchestrator, None, ledger)
+        self.assertIn("Signal live sans trade locked", html)
+        self.assertNotIn("4704.90", html)
+        self.assertNotIn("4575.72", html)
+        self.assertNotIn("4524.04", html)
+
+    def test_p0_active_trades_and_plans_alias_include_open_ledger_trade(self) -> None:
+        with TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "trade_ledger.jsonl"
+            open_plan = TradePlan(
+                trade_id="OPEN-BUY",
+                created_at="2026-05-15T00:00:00+00:00",
+                updated_at="2026-05-15T00:00:00+00:00",
+                status="active",
+                direction="BUY",
+                entry_type="trend_continuation",
+                reference_price=2400.0,
+                entry_zone_low=2399.0,
+                entry_zone_high=2401.0,
+                stop_loss=2388.0,
+                tp1=2418.0,
+                tp2=2428.0,
+                tp3=2440.0,
+                risk_reward_tp1=1.5,
+                risk_reward_tp2=2.3,
+                risk_reward_tp3=3.3,
+                max_valid_until="2026-05-15T12:00:00+00:00",
+                source_signal_id="open-buy",
+                global_score_at_creation=70,
+                data_quality_score=80,
+                confidence_score=70,
+                market_regime="normal",
+                agents_validating=[],
+                agents_contradicting=[],
+                evidence_sources=[],
+                event_facts_snapshot=[],
+                technical_snapshot="",
+                macro_snapshot="",
+                geopolitical_snapshot="",
+                elliott_wave_snapshot="",
+                invalidation_rules=[],
+                outcome="open",
+                outcome_reason="open",
+            )
+            ledger_path.write_text(json.dumps(asdict(open_plan), ensure_ascii=False) + "\n", encoding="utf-8")
+            recommendation = TradeRecommendation("global", "WAIT", 50, "wait", [], 0.0, 0.0, 0.0, "test")
+            summary = build_trade_ledger_summary(
+                self.snapshot(2400.0),
+                recommendation,
+                None,
+                [],
+                None,
+                [],
+                [],
+                path=ledger_path,
+                now=datetime(2026, 5, 15, 1, 0, tzinfo=timezone.utc),
+                allow_create=False,
+            )
+            payload = trade_ledger_public_dict(summary)
+            self.assertEqual(len(summary.active_trades), 1)
+            self.assertEqual(summary.active_trades[0].trade_id, "OPEN-BUY")
+            self.assertEqual(len(payload["plans"]), 1)
+            self.assertEqual(payload["plans"][0]["trade_id"], "OPEN-BUY")
 
 
 if __name__ == "__main__":

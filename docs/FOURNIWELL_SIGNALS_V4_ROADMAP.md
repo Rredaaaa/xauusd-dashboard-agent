@@ -1018,7 +1018,7 @@ Livrable:
 5. Phase 4 - Rebuild des agents. Statut: livre partiel, a completer par Phase 4.5.
 6. Phase 4.5 - Redressement exhaustif avant Phase 5. Statut: livree le 2026-05-14.
 7. Phase 5 - News Reaction Engine. Statut: livree le 2026-05-14.
-8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14, quick win UI partiels + fallback Trump livre le 2026-05-14.
+8. Phase 6 - Refonte Trade Levels. Statut: livree le 2026-05-14, quick win UI partiels + fallback Trump livre le 2026-05-14, hot-fix P0 Desk locked-vs-live livre le 2026-05-15.
 9. Phase 7 - Multi-Strategy Engine.
 10. Phase 7.5 - Calibration Orchestrator Backtest.
 11. Phase 8 - Interface Fourniwell Signals.

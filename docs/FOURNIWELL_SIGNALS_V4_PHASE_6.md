@@ -10,6 +10,14 @@ Patch pre-Phase 7 livre le 2026-05-14:
 - fallback Google News politique active seulement si Truth Social, White House et tous les mirrors Nitter Trump/WhiteHouse sont indisponibles;
 - Phase 7.5 ajoutee a la roadmap juste apres Phase 7 pour calibrer l'Orchestrator par backtest avant l'interface et la production.
 
+Hot-fix P0 livre le 2026-05-15:
+
+- le Desk principal n'affiche plus les SL/TP live de `global_recommendation` comme si c'etait un trade verrouille;
+- si un trade ouvert existe, le Desk affiche les niveaux figes du ledger: `reference_price`, `SL`, `TP1 50%`, `TP2 30%`, `TP3 20%`;
+- si le statut live est `TRADE_BUY` ou `TRADE_SELL` mais qu'aucun trade locked correspondant n'existe, le Desk affiche un avertissement `Signal live sans trade locked` et masque les niveaux live;
+- le payload expose `plans` comme alias de `active_trades` pour compatibilite avec les audits externes;
+- `active_trades` est maintenant base sur `outcome=open/partial` et `status=pending/active/tp1_hit`.
+
 ## Ce qui est livre
 
 ### 1. MarketTradeLevels
@@ -107,6 +115,7 @@ Tests ajoutes:
 - mapping structure -> setup.
 - UI: sorties partielles visibles dans les panneaux trade;
 - news politique: fallback Google News degrade si tous les feeds directs Trump/WhiteHouse tombent.
+- P0 Desk: affichage des niveaux locked depuis le ledger, jamais depuis la recommandation live.
 
 ## Critere de reussite Phase 6
 

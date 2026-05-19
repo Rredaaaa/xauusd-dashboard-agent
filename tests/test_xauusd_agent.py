@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import unittest
 import xml.etree.ElementTree as ET
@@ -48,6 +50,7 @@ from xauusd_agent import (
     OFFICIAL_NEWS_RSS_FEEDS,
     SOURCE_CATEGORY_TO_LOGICAL,
     append_audit_log_snapshot,
+    append_multi_strategy_history,
     apply_user_settings_to_agents,
     build_market_trade_levels,
     build_market_regime_analysis,
@@ -86,6 +89,7 @@ from xauusd_agent import (
     evaluate_trend_continuation_setup,
     build_reversal_engine,
     build_strategy_selection,
+    asian_range_from_candles,
     classify_news_reaction_event,
     detect_news_reaction_price,
     detect_rsi_divergence,
@@ -358,7 +362,7 @@ class Phase7AFoundationTests(unittest.TestCase):
 
     def test_phase7a_news_reaction_empty_candidate_is_no_setup(self) -> None:
         candidate = news_reaction_to_setup_candidate(None)
-        self.assertEqual(candidate.status, "NO_SETUP")
+        self.assertEqual(candidate.status, "NO_SETUP_TRADE")
         self.assertEqual(candidate.direction, "NEUTRAL")
         self.assertEqual(candidate.name, "NewsReactionSetup")
 
@@ -3714,7 +3718,7 @@ class Phase7BStrategyCandidateTests(unittest.TestCase):
         h1 = [self.candle(-720 + index * 60, 110.0, 120.0, 100.0, 110.0) for index in range(12)]
         gold = self.snapshot(price=110.0, previous_close=110.0, day_low=100.0, day_high=120.0)
         setup = evaluate_range_trading_setup(gold, [self.reading("1H", "NEUTRAL", close=110.0, score=0.0)], self.chart_store(h1=h1), now=self.base_time)
-        self.assertEqual(setup.status, "NO_SETUP")
+        self.assertEqual(setup.status, "NO_SETUP_TRADE")
         self.assertEqual(setup.direction, "NEUTRAL")
 
     def test_phase7b_trend_continuation_buy_ready_on_alignment(self) -> None:
@@ -3734,7 +3738,7 @@ class Phase7BStrategyCandidateTests(unittest.TestCase):
         readings = [self.reading("1D", "BUY"), self.reading("4H", "BUY"), self.reading("1H", "BUY")]
         event_mode = EventModeAnalysis(True, 80, "ACTIVE", "freeze", 1.5, ["test"])
         setup = evaluate_trend_continuation_setup(gold, readings, self.chart_store(), event_mode=event_mode, now=self.base_time)
-        self.assertEqual(setup.status, "NO_SETUP")
+        self.assertEqual(setup.status, "NO_SETUP_TRADE")
         self.assertIn("Mode event actif", setup.reasons[0])
 
     def test_phase7b_breakout_du_jour_buy_ready_on_london_break(self) -> None:
@@ -3772,7 +3776,7 @@ class Phase7BStrategyCandidateTests(unittest.TestCase):
             now=reference,
         )
         self.assertEqual(setup.direction, "BUY")
-        self.assertIn(setup.status, {"WATCH", "NO_SETUP"})
+        self.assertIn(setup.status, {"WATCH", "NO_SETUP_TRADE"})
         self.assertIn("Session peu favorable au breakout du jour.", setup.blockers)
 
     def test_phase7b_build_strategy_candidates_returns_all_six_sources(self) -> None:
@@ -3782,6 +3786,53 @@ class Phase7BStrategyCandidateTests(unittest.TestCase):
         self.assertEqual(len(candidates), 6)
         self.assertEqual(candidates[-1].name, "NewsReactionSetup")
         self.assertTrue({candidate.name for candidate in candidates}.issuperset({"PivotRejectionSetup", "MeanReversionSetup", "RangeTradingSetup", "TrendContinuationSetup", "BreakoutDuJourSetup"}))
+
+    def test_phase7_audit_session_weekend_blocks_market_strategies(self) -> None:
+        saturday = datetime(2026, 5, 16, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(detect_current_session(saturday), "weekend")
+        gold = self.snapshot(price=111.8, previous_close=108.0)
+        readings = [self.reading("1D", "BUY"), self.reading("4H", "BUY"), self.reading("1H", "BUY"), self.reading("15m", "BUY")]
+        candidates = build_strategy_candidates(gold, readings, self.chart_store(h1=self.rejection_series("BUY", 112.0)), now=saturday)
+        market_candidates = [candidate for candidate in candidates if candidate.name != "NewsReactionSetup"]
+        self.assertTrue(all(candidate.status == "NO_SETUP_TRADE" for candidate in market_candidates))
+        self.assertTrue(all(candidate.metadata.get("session") == "weekend" for candidate in market_candidates))
+
+    def test_phase7_audit_partial_conditions_are_exposed_for_buy_and_sell(self) -> None:
+        gold = self.snapshot(price=110.0, previous_close=100.0, day_low=80.0, day_high=120.0)
+        readings = [self.reading("1H", "SELL", rsi=62.0, close=110.0)]
+        setup = evaluate_pivot_rejection_setup(gold, readings, self.chart_store(h1=self.rejection_series("SELL", 111.0)), now=self.base_time)
+        self.assertIn("buy", setup.partial_conditions)
+        self.assertIn("sell", setup.partial_conditions)
+        self.assertTrue(setup.partial_conditions["buy"])
+        self.assertTrue(setup.partial_conditions["sell"])
+        self.assertTrue(all("met" in item and "reason" in item for item in setup.partial_conditions["sell"]))
+
+    def test_phase7_audit_asian_range_requires_real_asian_candles(self) -> None:
+        reference = datetime(2026, 5, 15, 7, 30, tzinfo=timezone.utc)
+        candles = [
+            OHLCCandle(
+                int((datetime(2026, 5, 15, 7, 0, tzinfo=timezone.utc) + timedelta(minutes=15 * index)).timestamp()),
+                101.0,
+                104.0,
+                100.0,
+                102.0,
+                1000,
+                "test",
+                "M15",
+                reference.isoformat(),
+            )
+            for index in range(12)
+        ]
+        self.assertEqual(asian_range_from_candles(candles, reference), (0.0, 0.0))
+        gold = self.snapshot(price=106.2, previous_close=102.0)
+        setup = evaluate_breakout_du_jour_setup(
+            gold,
+            [self.reading("15m", "BUY", rsi=58.0, atr=3.0, volume_ratio=1.8, close=106.2)],
+            self.chart_store(m15=candles),
+            now=reference,
+        )
+        self.assertEqual(setup.status, "NO_SETUP_TRADE")
+        self.assertFalse(setup.metadata["asian_range_valid"])
 
 
 class Phase7CStrategyCoordinatorTests(unittest.TestCase):
@@ -3894,7 +3945,7 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
             [self.candidate("BreakoutDuJourSetup", rr=1.8, preferred_session="london_open")],
             now=datetime(2026, 5, 15, 7, 30, tzinfo=timezone.utc),
         )
-        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertEqual(selection.status, "NO_SETUP_TRADE")
         self.assertIn("R/R TP1 1.80R < minimum 2.00R.", selection.rejected_candidates[0]["blockers"])
 
     def test_phase7c_cooldown_blocks_recent_same_direction_loss(self) -> None:
@@ -3910,17 +3961,25 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
             trade_ledger=ledger,
             now=self.reference,
         )
-        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertEqual(selection.status, "NO_SETUP_TRADE")
         self.assertIn("Cooldown MeanReversionSetup", selection.rejected_candidates[0]["blockers"][0])
 
     def test_phase7c_no_setup_when_all_candidates_are_noise(self) -> None:
         selection = build_strategy_selection(
-            [self.candidate("RangeTradingSetup", status="NO_SETUP", direction="NEUTRAL", rr=0.0)],
+            [self.candidate("RangeTradingSetup", status="NO_SETUP_TRADE", direction="NEUTRAL", rr=0.0)],
             now=self.reference,
         )
-        self.assertEqual(selection.status, "NO_SETUP")
+        self.assertEqual(selection.status, "NO_SETUP_TRADE")
         self.assertIsNone(selection.selected_setup)
         self.assertEqual(selection.ranked_candidates, [])
+
+    def test_phase7_audit_coordinator_blocks_spot_strategy_on_weekend(self) -> None:
+        selection = build_strategy_selection(
+            [self.candidate("TrendContinuationSetup", preferred_session="london_ny_overlap")],
+            now=datetime(2026, 5, 16, 13, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(selection.status, "NO_SETUP_TRADE")
+        self.assertIn("Session weekend: strategie spot suspendue.", selection.rejected_candidates[0]["blockers"])
 
     def test_phase7d_inspector_renders_selected_strategy_without_changing_verdict(self) -> None:
         candidates = [
@@ -3955,6 +4014,100 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
         self.assertIn("Multi-Strategy", html)
         self.assertIn("TrendContinuationSetup", html)
         self.assertIn("Inspector · WAIT 55/100", html)
+
+    def test_phase7_audit_history_logger_writes_jsonl_cycle(self) -> None:
+        candidates = [self.candidate("TrendContinuationSetup", preferred_session="london_ny_overlap")]
+        selection = build_strategy_selection(candidates, now=self.reference)
+        gold = SymbolSnapshot(
+            "XAU/USD",
+            "Gold",
+            100.0,
+            99.0,
+            1.0,
+            1.0,
+            1.0,
+            102.0,
+            98.0,
+            98.0,
+            102.0,
+            self.reference.isoformat(),
+            [],
+        )
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "multi_strategy_history.jsonl"
+            append_multi_strategy_history(gold, candidates, selection, path=path, now=self.reference)
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["selected_setup"], "TrendContinuationSetup")
+        self.assertEqual(rows[0]["candidate_count"], 1)
+
+    def test_phase7_audit_strategy_selection_does_not_mutate_candidates(self) -> None:
+        candidates = [
+            self.candidate("TrendContinuationSetup", confidence=78, confluence=80, preferred_session="london_ny_overlap"),
+            self.candidate("PivotRejectionSetup", confidence=92, confluence=92),
+        ]
+        before = [asdict(candidate) for candidate in candidates]
+        build_strategy_selection(candidates, now=self.reference)
+        self.assertEqual([asdict(candidate) for candidate in candidates], before)
+
+    def test_phase7_audit_news_reaction_wrapper_does_not_mutate_plan(self) -> None:
+        plan = NewsReactionTradePlan(
+            status="TRADE_READY",
+            direction="BUY",
+            event_type="geopolitical",
+            title="test",
+            source="Reuters",
+            source_url="https://example.com",
+            confidence=80,
+            validity_minutes=60,
+            valid_until=(self.reference + timedelta(hours=1)).isoformat(),
+            entry_type="market",
+            reference_price=100.0,
+            entry_zone_low=99.0,
+            entry_zone_high=101.0,
+            stop_loss=95.0,
+            tp1=110.0,
+            tp2=115.0,
+            tp3=120.0,
+            risk_reward_tp1=2.0,
+            risk_reward_tp2=3.0,
+            risk_reward_tp3=4.0,
+            confirmation_score=3,
+            latency_seconds=12.0,
+            created_at=self.reference.isoformat(),
+            event_id="event-1",
+            reasons=["test"],
+            blockers=[],
+        )
+        before = asdict(plan)
+        candidate = news_reaction_to_setup_candidate(plan)
+        self.assertEqual(asdict(plan), before)
+        self.assertEqual(candidate.partial_conditions["buy"][0]["name"], "fast_news_event")
+
+    def test_phase7_audit_reversal_engine_input_not_mutated_by_strategy_selection(self) -> None:
+        reversal = ReversalSetup(
+            horizon="intraday",
+            status="NO_REVERSAL_TRADE",
+            direction="NEUTRAL",
+            tf_signal="M15",
+            tf_context="H1",
+            confluence_score=1,
+            conditions_met=[],
+            entry_zone_low=0.0,
+            entry_zone_high=0.0,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            tp3=0.0,
+            risk_reward_tp1=0.0,
+            validity_minutes=0,
+            reasons=["test"],
+            blockers=["test"],
+            detected_at=self.reference.isoformat(),
+        )
+        before = asdict(reversal)
+        build_strategy_selection([self.candidate("RangeTradingSetup", status="NO_SETUP_TRADE", direction="NEUTRAL", rr=0.0)], now=self.reference)
+        self.assertEqual(asdict(reversal), before)
 
 
 if __name__ == "__main__":

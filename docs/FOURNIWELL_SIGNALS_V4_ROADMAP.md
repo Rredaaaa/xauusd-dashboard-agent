@@ -930,7 +930,30 @@ Le correctif pre-Phase 7 est valide seulement si:
 
 Objectif: ne plus dependre d'une seule logique directionnelle.
 
-Strategies a creer:
+Statut: Phase 7A a 7D livrees, avec correctif audit obligatoire applique avant la suite.
+
+Sous-phases officielles:
+
+- 7A Foundation: `SetupCandidate`, sessions, wrapper `NewsReactionTradePlan`;
+- 7B Strategy candidates: PivotRejection, MeanReversion, RangeTrading, TrendContinuation, BreakoutDuJour;
+- 7C Coordinator: ranking, priorites, R/R minimum, cooldowns;
+- 7D Inspector: exposition du setup dominant et des candidates;
+- 7E Integration controlee: aucun impact chef de file/trade lock avant calibration;
+- 7F QA Phase 7 complete: tests systeme + venv, non-regression, audit log.
+
+Correctif audit A-D obligatoire livre:
+
+- tests compatibles Python 3.9 et Python venv;
+- `NO_SETUP_TRADE` remplace `NO_SETUP`;
+- `partial_conditions` obligatoire pour BUY et SELL;
+- weekend detecte comme session et bloque les strategies spot;
+- range trading durci a 3 touches haut/bas;
+- breakout refuse le range asiatique incomplet au lieu d'utiliser un fallback arbitraire;
+- logger `reports/multi_strategy_history.jsonl` append-only avec rotation;
+- tests d'isolation contre mutation orchestrator/news/reversal;
+- proxies ADX/Bollinger documentes comme transitoires, a calibrer/remplacer en Phase 7.5.
+
+Strategies creees:
 
 - Trend continuation;
 - Range trading;
@@ -956,6 +979,7 @@ Sessions:
 - London open;
 - London-NY overlap;
 - NY close.
+- Weekend: aucune strategie spot exploitable, uniquement surveillance/news.
 
 Priorite:
 
@@ -971,6 +995,7 @@ Livrable:
 - plusieurs types de setups;
 - moins de trades forces en range;
 - meilleur choix du setup dominant.
+- historique multi-strategy exploitable pour calibration 7.5.
 
 ## 12. Phase 7.5 - Calibration Orchestrator Backtest
 

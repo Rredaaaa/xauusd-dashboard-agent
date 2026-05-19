@@ -1,6 +1,6 @@
 # Fourniwell Signals v4 - Phase 7
 
-Statut: Phase 7A, 7B, 7C et 7D livrees.
+Statut: Phase 7A a 7D livrees + correctif audit A-D applique avant toute suite 7E/7F/7.5.
 
 Objectif: remplacer la logique mono-setup par un moteur multi-strategies capable de produire plusieurs candidates auditees avant selection du setup dominant.
 
@@ -28,7 +28,8 @@ Contenu:
 - `TrendContinuationSetup`;
 - `BreakoutDuJourSetup`;
 - `build_strategy_candidates`;
-- statuts candidates: `TRADE_READY`, `WATCH`, `NO_SETUP`;
+- statuts candidates: `TRADE_READY`, `WATCH`, `NO_SETUP_TRADE`;
+- `partial_conditions` expose toujours les deux cotes `buy` et `sell`;
 - SL/TP/RR calcules via `MarketTradeLevels`;
 - validite et cooldown propres par strategie;
 - session preferee par strategie;
@@ -87,6 +88,7 @@ Base:
 
 - detection high/low sur les 24 dernieres bougies;
 - touches du haut et du bas;
+- minimum 3 touches en haut et 3 touches en bas pour valider le range;
 - faible force de tendance;
 - rejet du bord de range;
 - bonus session asiatique.
@@ -125,6 +127,7 @@ But: capter la cassure du range asiatique.
 Base:
 
 - cloture M15 hors range asiatique;
+- le range asiatique est invalide si moins de 4 bougies asiatiques datees du jour sont disponibles;
 - volume proxy >= 1.5x;
 - session London open ou London/NY overlap;
 - momentum RSI dans le sens de la cassure;
@@ -158,6 +161,30 @@ Verification:
 - `python -m unittest tests.test_xauusd_agent.Phase7BStrategyCandidateTests`
 - `python -m unittest tests/test_xauusd_agent.py`
 - `python -m py_compile xauusd_agent.py`
+
+## Correctif audit Phase 7A-D applique
+
+Applique le 2026-05-19 avant la suite Phase 7.
+
+Corrections obligatoires livrees:
+
+- compatibilite Python 3.9 des tests via `from __future__ import annotations`;
+- statut unique `NO_SETUP_TRADE` pour les candidates Phase 7;
+- session `weekend` detectee et blocage des strategies marche spot pendant le week-end;
+- champ `partial_conditions` ajoute a `SetupCandidate` avec details BUY et SELL;
+- suppression du double appel a `last_candle_rejection` dans `PivotRejectionSetup`;
+- `RangeTradingSetup` exige maintenant au moins 3 touches haut/bas;
+- `BreakoutDuJourSetup` refuse un range asiatique invente ou incomplet;
+- historique append-only `reports/multi_strategy_history.jsonl` avec rotation;
+- tests d'isolation: Phase 7 ne mute pas les candidates, le plan NewsReaction, ni le ReversalSetup;
+- documentation des proxies: ADX et Bollinger reels restent a remplacer/calibrer en Phase 7.5, les proxies actuels restent explicitement transitoires.
+
+Validation attendue:
+
+- `python3 -m unittest discover tests`;
+- `.venv/bin/python -m unittest discover tests`;
+- `.venv/bin/python -m py_compile xauusd_agent.py`;
+- `git diff --check`.
 
 ## Phase 7C livree
 

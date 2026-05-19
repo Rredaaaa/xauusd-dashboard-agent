@@ -189,6 +189,7 @@ CME_FEDWATCH_API_INFO_URL = "https://www.cmegroup.com/market-data/market-data-ap
 TRADE_LEDGER_PATH = Path("reports") / "trade_ledger.jsonl"
 TRADE_GATE_AUDIT_PATH = Path("reports") / "trade_gate_audit.jsonl"
 AUDIT_LOG_PATH = Path("reports") / "audit_log.jsonl"
+MULTI_STRATEGY_HISTORY_PATH = Path("reports") / "multi_strategy_history.jsonl"
 SOURCE_ERRORS_PATH = Path("reports") / "source_errors.jsonl"
 FEED_HASH_CACHE_PATH = Path("reports") / "feed_hash_cache.json"
 CHART_STORE_CACHE_PATH = Path("reports") / "chart_store_cache.json"
@@ -849,6 +850,9 @@ class SetupCandidate:
     blockers: list[str]
     detected_at: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    partial_conditions: dict[str, list[dict[str, Any]]] = field(
+        default_factory=lambda: {"buy": [], "sell": []}
+    )
 
 
 @dataclass
@@ -7735,6 +7739,8 @@ def is_weekend_market_window(now: datetime) -> bool:
 
 def detect_current_session(now: datetime | None = None) -> str:
     reference = now or datetime.now(timezone.utc)
+    if is_weekend_market_window(reference):
+        return "weekend"
     utc_hour = reference.astimezone(timezone.utc).hour
     if 0 <= utc_hour < 7:
         return "asian"
@@ -7760,6 +7766,17 @@ def normalize_setup_direction(direction: str) -> str:
     return "NEUTRAL"
 
 
+def setup_condition(name: str, met: bool, reason: str) -> dict[str, Any]:
+    return {"name": name, "met": bool(met), "reason": reason}
+
+
+def setup_partial_conditions(
+    buy: list[dict[str, Any]] | None = None,
+    sell: list[dict[str, Any]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    return {"buy": buy or [], "sell": sell or []}
+
+
 def news_reaction_status_for_setup(status: str) -> str:
     upper = status.upper()
     if upper == "TRADE_READY":
@@ -7768,7 +7785,7 @@ def news_reaction_status_for_setup(status: str) -> str:
         return "WATCH"
     if upper == "SUSPENDED":
         return "SUSPENDED"
-    return "NO_SETUP"
+    return "NO_SETUP_TRADE"
 
 
 def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> SetupCandidate:
@@ -7776,7 +7793,7 @@ def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> Set
         reference = iso_now()
         return SetupCandidate(
             name="NewsReactionSetup",
-            status="NO_SETUP",
+            status="NO_SETUP_TRADE",
             direction="NEUTRAL",
             confidence=0,
             confluence_score=0,
@@ -7798,6 +7815,7 @@ def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> Set
             blockers=[],
             detected_at=reference,
             metadata={"source": "NewsReactionEngine"},
+            partial_conditions=setup_partial_conditions(),
         )
     status = news_reaction_status_for_setup(setup.status)
     conditions = ["fast_news_event"]
@@ -7805,6 +7823,21 @@ def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> Set
         conditions.append(f"confirmation_score_{setup.confirmation_score}")
     if setup.latency_seconds is not None:
         conditions.append("latency_measured")
+    side = "buy" if normalize_setup_direction(setup.direction) == "BUY" else "sell"
+    partial_conditions = setup_partial_conditions()
+    partial_conditions[side] = [
+        setup_condition("fast_news_event", True, "Evenement rapide qualifie par NewsReactionEngine."),
+        setup_condition(
+            "confirmation_score",
+            setup.confirmation_score > 0,
+            f"Score confirmation news/prix/cross-assets: {setup.confirmation_score}.",
+        ),
+        setup_condition(
+            "latency_measured",
+            setup.latency_seconds is not None,
+            "Latence source -> systeme mesuree." if setup.latency_seconds is not None else "Latence non mesuree.",
+        ),
+    ]
     return SetupCandidate(
         name="NewsReactionSetup",
         status=status,
@@ -7838,6 +7871,7 @@ def news_reaction_to_setup_candidate(setup: NewsReactionTradePlan | None) -> Set
             "latency_seconds": setup.latency_seconds,
             "entry_type": setup.entry_type,
         },
+        partial_conditions=partial_conditions,
     )
 
 
@@ -7846,10 +7880,11 @@ def no_setup_candidate(
     reason: str,
     preferred_session: str = "all",
     metadata: dict[str, Any] | None = None,
+    partial_conditions: dict[str, list[dict[str, Any]]] | None = None,
 ) -> SetupCandidate:
     return SetupCandidate(
         name=name,
-        status="NO_SETUP",
+        status="NO_SETUP_TRADE",
         direction="NEUTRAL",
         confidence=0,
         confluence_score=0,
@@ -7871,6 +7906,7 @@ def no_setup_candidate(
         blockers=[],
         detected_at=iso_now(),
         metadata=metadata or {},
+        partial_conditions=partial_conditions or setup_partial_conditions(),
     )
 
 
@@ -7888,6 +7924,7 @@ def setup_candidate_from_levels(
     cooldown_after_loss_minutes: int = 240,
     cooldown_after_win_minutes: int = 60,
     metadata: dict[str, Any] | None = None,
+    partial_conditions: dict[str, list[dict[str, Any]]] | None = None,
 ) -> SetupCandidate:
     return SetupCandidate(
         name=name,
@@ -7913,6 +7950,7 @@ def setup_candidate_from_levels(
         blockers=blockers or [],
         detected_at=iso_now(),
         metadata=metadata or {},
+        partial_conditions=partial_conditions or setup_partial_conditions(),
     )
 
 
@@ -7993,8 +8031,7 @@ def asian_range_from_candles(candles: list[OHLCCandle], now: datetime | None = N
         and 0 <= stamp.hour < 7
     ]
     if len(asian) < 4:
-        fallback_count = max(4, min(len(candles), len(candles) // 3 or len(candles)))
-        asian = candles[:fallback_count]
+        return 0.0, 0.0
     return round(min(candle.low for candle in asian), 2), round(max(candle.high for candle in asian), 2)
 
 
@@ -8005,12 +8042,12 @@ def candidate_status_from_conditions(
     watch_threshold: int,
 ) -> str:
     if blockers and conditions_count < ready_threshold:
-        return "NO_SETUP"
+        return "NO_SETUP_TRADE"
     if conditions_count >= ready_threshold and not blockers:
         return "TRADE_READY"
     if conditions_count >= watch_threshold:
         return "WATCH"
-    return "NO_SETUP"
+    return "NO_SETUP_TRADE"
 
 
 def evaluate_pivot_rejection_setup(
@@ -8019,6 +8056,13 @@ def evaluate_pivot_rejection_setup(
     chart_store: ChartStore | None,
     now: datetime | None = None,
 ) -> SetupCandidate:
+    session = detect_current_session(now)
+    if session == "weekend":
+        return no_setup_candidate(
+            "PivotRejectionSetup",
+            "Weekend: marche spot ferme, rejet de pivot suspendu.",
+            metadata={"session": session},
+        )
     h1 = reading_for_timeframe(readings, "H1") or reading_for_timeframe(readings, "M15")
     candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
     if h1 is None or not candles:
@@ -8032,17 +8076,35 @@ def evaluate_pivot_rejection_setup(
     lower = min(lower_candidates, key=lambda level: abs(gold.price - level))
     upper = min(upper_candidates, key=lambda level: abs(gold.price - level))
     direction = direction_by_level_proximity(gold.price, lower, upper, tolerance)
+    buy_rejection = last_candle_rejection(candles, "BUY")
+    sell_rejection = last_candle_rejection(candles, "SELL")
+    day_range = max((gold.day_high or gold.price) - (gold.day_low or gold.price), 1.0)
+    buy_partial = [
+        setup_condition("near_lower_pivot", abs(gold.price - lower) <= tolerance, f"Distance support/pivot: {abs(gold.price - lower):.2f}, tolerance {tolerance:.2f}."),
+        setup_condition("wick_rejection", buy_rejection, "Meche basse de rejet detectee." if buy_rejection else "Pas de meche basse de rejet."),
+        setup_condition("day_range_support", gold.day_low is not None and gold.price <= gold.day_low + max(day_range * 0.25, atr), "Prix proche du bas de range journalier."),
+        setup_condition("rsi_room", h1.rsi7 <= 45, f"RSI7 {h1.rsi7:.1f} <= 45."),
+    ]
+    sell_partial = [
+        setup_condition("near_upper_pivot", abs(gold.price - upper) <= tolerance, f"Distance resistance/pivot: {abs(gold.price - upper):.2f}, tolerance {tolerance:.2f}."),
+        setup_condition("wick_rejection", sell_rejection, "Meche haute de rejet detectee." if sell_rejection else "Pas de meche haute de rejet."),
+        setup_condition("day_range_resistance", gold.day_high is not None and gold.price >= gold.day_high - max(day_range * 0.25, atr), "Prix proche du haut de range journalier."),
+        setup_condition("rsi_room", h1.rsi7 >= 55, f"RSI7 {h1.rsi7:.1f} >= 55."),
+    ]
+    partial_conditions = setup_partial_conditions(buy_partial, sell_partial)
     if direction == "NEUTRAL":
         return no_setup_candidate(
             "PivotRejectionSetup",
             "Prix trop loin des pivots Camarilla/support/resistance pour un rejet exploitable.",
             metadata={"distance_to_lower": round(abs(gold.price - lower), 2), "distance_to_upper": round(abs(gold.price - upper), 2)},
+            partial_conditions=partial_conditions,
         )
 
     conditions: list[str] = ["near_pivot"]
     reasons = [f"Prix proche du pivot {direction}: tolerance {tolerance:.2f}."]
     blockers: list[str] = []
-    if last_candle_rejection(candles, direction):
+    has_rejection = buy_rejection if direction == "BUY" else sell_rejection
+    if has_rejection:
         conditions.append("wick_rejection")
         reasons.append("Derniere bougie rejette le niveau avec une meche nette.")
     if gold.day_low is not None and gold.day_high is not None:
@@ -8055,7 +8117,7 @@ def evaluate_pivot_rejection_setup(
         conditions.append("rsi_room_for_rebound")
     if direction == "SELL" and h1.rsi7 >= 55:
         conditions.append("rsi_room_for_pullback")
-    if not last_candle_rejection(candles, direction):
+    if not has_rejection:
         blockers.append("Pas encore de bougie de rejet claire.")
 
     status = candidate_status_from_conditions(len(conditions), blockers, 3, 2)
@@ -8074,7 +8136,8 @@ def evaluate_pivot_rejection_setup(
         blockers if status != "TRADE_READY" else [],
         cooldown_after_loss_minutes=180,
         cooldown_after_win_minutes=60,
-        metadata={"levels": levels, "tolerance": round(tolerance, 2), "session": detect_current_session(now)},
+        metadata={"levels": levels, "tolerance": round(tolerance, 2), "session": session},
+        partial_conditions=partial_conditions,
     )
 
 
@@ -8084,27 +8147,54 @@ def evaluate_mean_reversion_setup(
     chart_store: ChartStore | None,
     now: datetime | None = None,
 ) -> SetupCandidate:
+    session = detect_current_session(now)
+    if session == "weekend":
+        return no_setup_candidate(
+            "MeanReversionSetup",
+            "Weekend: marche spot ferme, mean reversion suspendue.",
+            metadata={"session": session},
+        )
     h1 = reading_for_timeframe(readings, "H1")
     candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
     if h1 is None:
         return no_setup_candidate("MeanReversionSetup", "Lecture H1 indisponible pour la mean reversion.")
 
     atr = max(h1.atr14, 3.0)
+    extension = abs(gold.price - h1.ema20)
+    buy_rejection = last_candle_rejection(candles, "BUY", minimum_wick_share=0.40)
+    sell_rejection = last_candle_rejection(candles, "SELL", minimum_wick_share=0.40)
+    partial_conditions = setup_partial_conditions(
+        [
+            setup_condition("rsi_oversold", h1.rsi7 <= 25, f"RSI7 H1 {h1.rsi7:.1f} <= 25."),
+            setup_condition("ema20_extension", extension >= atr * 1.25, f"Extension EMA20 {extension:.2f} vs seuil {atr * 1.25:.2f}."),
+            setup_condition("rejection_candle", buy_rejection, "Bougie de rejet acheteur detectee."),
+            setup_condition("macd_fade_proxy", h1.macd_histogram > -0.6, f"MACD histogramme {h1.macd_histogram:.2f} > -0.60."),
+        ],
+        [
+            setup_condition("rsi_overbought", h1.rsi7 >= 75, f"RSI7 H1 {h1.rsi7:.1f} >= 75."),
+            setup_condition("ema20_extension", extension >= atr * 1.25, f"Extension EMA20 {extension:.2f} vs seuil {atr * 1.25:.2f}."),
+            setup_condition("rejection_candle", sell_rejection, "Bougie de rejet vendeur detectee."),
+            setup_condition("macd_fade_proxy", h1.macd_histogram < 0.6, f"MACD histogramme {h1.macd_histogram:.2f} < 0.60."),
+        ],
+    )
     direction = "NEUTRAL"
     if h1.rsi7 <= 25:
         direction = "BUY"
     elif h1.rsi7 >= 75:
         direction = "SELL"
     if direction == "NEUTRAL":
-        return no_setup_candidate("MeanReversionSetup", f"RSI7 H1 {h1.rsi7:.1f}: pas d'extreme mean reversion.")
+        return no_setup_candidate(
+            "MeanReversionSetup",
+            f"RSI7 H1 {h1.rsi7:.1f}: pas d'extreme mean reversion.",
+            partial_conditions=partial_conditions,
+        )
 
     conditions = ["rsi_extreme"]
     reasons = [f"RSI7 H1 {h1.rsi7:.1f} en zone extreme {direction}."]
-    extension = abs(gold.price - h1.ema20)
     if extension >= atr * 1.25:
         conditions.append("ema20_extension")
         reasons.append(f"Ecart au EMA20 H1 {extension:.2f}, soit {extension / atr:.1f} ATR.")
-    if last_candle_rejection(candles, direction, minimum_wick_share=0.40):
+    if (direction == "BUY" and buy_rejection) or (direction == "SELL" and sell_rejection):
         conditions.append("rejection_candle")
     divergence = None
     if len(candles) >= 8:
@@ -8132,7 +8222,8 @@ def evaluate_mean_reversion_setup(
         blockers if status != "TRADE_READY" else [],
         cooldown_after_loss_minutes=360,
         cooldown_after_win_minutes=120,
-        metadata={"rsi_h1": round(h1.rsi7, 2), "ema20_extension": round(extension, 2), "session": detect_current_session(now)},
+        metadata={"rsi_h1": round(h1.rsi7, 2), "ema20_extension": round(extension, 2), "session": session},
+        partial_conditions=partial_conditions,
     )
 
 
@@ -8142,6 +8233,14 @@ def evaluate_range_trading_setup(
     chart_store: ChartStore | None,
     now: datetime | None = None,
 ) -> SetupCandidate:
+    session = detect_current_session(now)
+    if session == "weekend":
+        return no_setup_candidate(
+            "RangeTradingSetup",
+            "Weekend: marche spot ferme, range trading suspendu.",
+            preferred_session="asian",
+            metadata={"session": session},
+        )
     h1 = reading_for_timeframe(readings, "H1")
     candles = candles_for_timeframe(chart_store, "1H") or candles_for_timeframe(chart_store, "15m")
     if h1 is None or len(candles) < 12:
@@ -8152,16 +8251,35 @@ def evaluate_range_trading_setup(
     atr = max(h1.atr14, 3.0)
     tolerance = max(range_size * 0.10, atr * 0.50)
     direction = direction_by_level_proximity(gold.price, low, high, tolerance)
+    low_trend = trend_strength_proxy(h1) <= 2.4
+    enough_touches = low_touches >= 3 and high_touches >= 3
+    buy_rejection = last_candle_rejection(candles, "BUY", minimum_wick_share=0.35)
+    sell_rejection = last_candle_rejection(candles, "SELL", minimum_wick_share=0.35)
+    partial_conditions = setup_partial_conditions(
+        [
+            setup_condition("near_lower_range_edge", abs(gold.price - low) <= tolerance, f"Distance bas de range: {abs(gold.price - low):.2f}."),
+            setup_condition("low_trend_strength", low_trend, "Force tendance basse compatible range."),
+            setup_condition("range_touches", enough_touches, f"Touches bas/haut: {low_touches}/{high_touches}, minimum 3/3."),
+            setup_condition("edge_rejection", buy_rejection, "Rejet acheteur sur bord bas detecte."),
+            setup_condition("asian_session", session == "asian", f"Session actuelle: {session}."),
+        ],
+        [
+            setup_condition("near_upper_range_edge", abs(gold.price - high) <= tolerance, f"Distance haut de range: {abs(gold.price - high):.2f}."),
+            setup_condition("low_trend_strength", low_trend, "Force tendance basse compatible range."),
+            setup_condition("range_touches", enough_touches, f"Touches bas/haut: {low_touches}/{high_touches}, minimum 3/3."),
+            setup_condition("edge_rejection", sell_rejection, "Rejet vendeur sur bord haut detecte."),
+            setup_condition("asian_session", session == "asian", f"Session actuelle: {session}."),
+        ],
+    )
     if direction == "NEUTRAL":
         return no_setup_candidate(
             "RangeTradingSetup",
             "Prix au milieu du range: pas de bord de range exploitable.",
             preferred_session="asian",
             metadata={"range_low": low, "range_high": high, "tolerance": round(tolerance, 2)},
+            partial_conditions=partial_conditions,
         )
 
-    low_trend = trend_strength_proxy(h1) <= 2.4
-    enough_touches = low_touches >= 2 and high_touches >= 2
     conditions = ["near_range_edge"]
     reasons = [f"Range detecte {low:.2f}/{high:.2f}, prix proche du bord {direction}."]
     blockers: list[str] = []
@@ -8171,9 +8289,9 @@ def evaluate_range_trading_setup(
         blockers.append("Tendance trop forte: range trading degrade.")
     if enough_touches:
         conditions.append("range_touches")
-    if last_candle_rejection(candles, direction, minimum_wick_share=0.35):
+    if (direction == "BUY" and buy_rejection) or (direction == "SELL" and sell_rejection):
         conditions.append("edge_rejection")
-    if detect_current_session(now) == "asian":
+    if session == "asian":
         conditions.append("asian_session")
     status = candidate_status_from_conditions(len(conditions), blockers, 4, 3)
     trade_levels = build_market_trade_levels(gold, direction, "range", atr, readings=readings, min_rr=1.5)
@@ -8191,6 +8309,7 @@ def evaluate_range_trading_setup(
         cooldown_after_loss_minutes=180,
         cooldown_after_win_minutes=60,
         metadata={"range_low": low, "range_high": high, "touches": {"low": low_touches, "high": high_touches}},
+        partial_conditions=partial_conditions,
     )
 
 
@@ -8201,18 +8320,50 @@ def evaluate_trend_continuation_setup(
     event_mode: EventModeAnalysis | None = None,
     now: datetime | None = None,
 ) -> SetupCandidate:
+    session = detect_current_session(now)
+    if session == "weekend":
+        return no_setup_candidate(
+            "TrendContinuationSetup",
+            "Weekend: marche spot ferme, continuation de tendance suspendue.",
+            preferred_session="london_ny_overlap",
+            metadata={"session": session},
+        )
     direction = trend_direction_from_readings(readings)
     h1 = reading_for_timeframe(readings, "H1")
     h4 = reading_for_timeframe(readings, "H4")
     d1 = reading_for_timeframe(readings, "D1")
+    buy_alignment = sum(1 for reading in readings if reading.timeframe in {"1D", "4H", "1H"} and reading.verdict == "BUY") >= 2
+    sell_alignment = sum(1 for reading in readings if reading.timeframe in {"1D", "4H", "1H"} and reading.verdict == "SELL") >= 2
+    strength = trend_strength_proxy(h1)
+    partial_conditions = setup_partial_conditions(
+        [
+            setup_condition("multi_timeframe_alignment", buy_alignment, "Au moins 2 timeframes 1D/4H/1H sont BUY."),
+            setup_condition("h1_ema_stack", ema_stack_matches(h1, "BUY"), "EMA H1 empilees en tendance BUY."),
+            setup_condition("higher_tf_ema_stack", ema_stack_matches(h4, "BUY") or ema_stack_matches(d1, "BUY"), "EMA 4H ou 1D confirme BUY."),
+            setup_condition("trend_strength_proxy", strength >= 1.8, f"Force tendance proxy {strength:.2f} >= 1.80."),
+            setup_condition("liquid_session", session in {"london_open", "london_morning", "london_ny_overlap", "ny_afternoon"}, f"Session actuelle: {session}."),
+        ],
+        [
+            setup_condition("multi_timeframe_alignment", sell_alignment, "Au moins 2 timeframes 1D/4H/1H sont SELL."),
+            setup_condition("h1_ema_stack", ema_stack_matches(h1, "SELL"), "EMA H1 empilees en tendance SELL."),
+            setup_condition("higher_tf_ema_stack", ema_stack_matches(h4, "SELL") or ema_stack_matches(d1, "SELL"), "EMA 4H ou 1D confirme SELL."),
+            setup_condition("trend_strength_proxy", strength >= 1.8, f"Force tendance proxy {strength:.2f} >= 1.80."),
+            setup_condition("liquid_session", session in {"london_open", "london_morning", "london_ny_overlap", "ny_afternoon"}, f"Session actuelle: {session}."),
+        ],
+    )
     if direction == "NEUTRAL" or h1 is None:
-        return no_setup_candidate("TrendContinuationSetup", "Alignement 1D/4H/1H insuffisant pour une continuation.")
+        return no_setup_candidate(
+            "TrendContinuationSetup",
+            "Alignement 1D/4H/1H insuffisant pour une continuation.",
+            partial_conditions=partial_conditions,
+        )
     if event_mode is not None and event_mode.active:
         return no_setup_candidate(
             "TrendContinuationSetup",
             "Mode event actif: continuation suspendue avant confirmation post-event.",
             preferred_session="london_ny_overlap",
             metadata={"event_mode": event_mode.status},
+            partial_conditions=partial_conditions,
         )
 
     atr = max(h1.atr14, 3.0)
@@ -8226,10 +8377,8 @@ def evaluate_trend_continuation_setup(
     if distance_to_pullback <= atr * 1.25:
         conditions.append("pullback_to_dynamic_support")
         reasons.append(f"Prix proche EMA20/50 H1 ({distance_to_pullback:.2f}).")
-    strength = trend_strength_proxy(h1)
     if strength >= 1.8:
         conditions.append("trend_strength_proxy")
-    session = detect_current_session(now)
     if session in {"london_open", "london_morning", "london_ny_overlap", "ny_afternoon"}:
         conditions.append("liquid_session")
     blockers = [] if len(conditions) >= 4 else ["Continuation pas assez confirmee: attendre pullback/liquidite/force."]
@@ -8249,6 +8398,7 @@ def evaluate_trend_continuation_setup(
         cooldown_after_loss_minutes=240,
         cooldown_after_win_minutes=60,
         metadata={"trend_strength_proxy": strength, "session": session},
+        partial_conditions=partial_conditions,
     )
 
 
@@ -8258,13 +8408,31 @@ def evaluate_breakout_du_jour_setup(
     chart_store: ChartStore | None,
     now: datetime | None = None,
 ) -> SetupCandidate:
+    session = detect_current_session(now)
+    if session == "weekend":
+        return no_setup_candidate(
+            "BreakoutDuJourSetup",
+            "Weekend: marche spot ferme, breakout du jour suspendu.",
+            preferred_session="london_open",
+            metadata={"session": session},
+        )
     m15 = reading_for_timeframe(readings, "M15")
     candles = candles_for_timeframe(chart_store, "15m")
     if m15 is None or len(candles) < 12:
         return no_setup_candidate("BreakoutDuJourSetup", "Donnees M15 insuffisantes pour breakout du jour.", preferred_session="london_open")
 
-    session = detect_current_session(now)
     asian_low, asian_high = asian_range_from_candles(candles, now)
+    if asian_low == 0.0 and asian_high == 0.0:
+        return no_setup_candidate(
+            "BreakoutDuJourSetup",
+            "Range asiatique indisponible: moins de 4 bougies asiatiques datees aujourd'hui.",
+            preferred_session="london_open",
+            metadata={"asian_low": asian_low, "asian_high": asian_high, "session": session, "asian_range_valid": False},
+            partial_conditions=setup_partial_conditions(
+                [setup_condition("asian_range_valid", False, "Moins de 4 bougies asiatiques aujourd'hui.")],
+                [setup_condition("asian_range_valid", False, "Moins de 4 bougies asiatiques aujourd'hui.")],
+            ),
+        )
     last = candles[-1]
     previous = candles[-2] if len(candles) >= 2 else last
     direction = "NEUTRAL"
@@ -8272,12 +8440,29 @@ def evaluate_breakout_du_jour_setup(
         direction = "BUY"
     elif last.close < asian_low and previous.close >= asian_low:
         direction = "SELL"
+    buy_break = last.close > asian_high and previous.close <= asian_high
+    sell_break = last.close < asian_low and previous.close >= asian_low
+    partial_conditions = setup_partial_conditions(
+        [
+            setup_condition("asian_range_break", buy_break, f"Cloture M15 {last.close:.2f} > range haut {asian_high:.2f}."),
+            setup_condition("volume_expansion", m15.volume_ratio >= 1.5, f"Volume proxy {m15.volume_ratio:.2f} >= 1.50."),
+            setup_condition("breakout_session", session in {"london_open", "london_ny_overlap"}, f"Session actuelle: {session}."),
+            setup_condition("momentum_confirmed", m15.rsi7 >= 52, f"RSI7 M15 {m15.rsi7:.1f} >= 52."),
+        ],
+        [
+            setup_condition("asian_range_break", sell_break, f"Cloture M15 {last.close:.2f} < range bas {asian_low:.2f}."),
+            setup_condition("volume_expansion", m15.volume_ratio >= 1.5, f"Volume proxy {m15.volume_ratio:.2f} >= 1.50."),
+            setup_condition("breakout_session", session in {"london_open", "london_ny_overlap"}, f"Session actuelle: {session}."),
+            setup_condition("momentum_confirmed", m15.rsi7 <= 48, f"RSI7 M15 {m15.rsi7:.1f} <= 48."),
+        ],
+    )
     if direction == "NEUTRAL":
         return no_setup_candidate(
             "BreakoutDuJourSetup",
             "Aucune cloture M15 de rupture du range asiatique.",
             preferred_session="london_open",
             metadata={"asian_low": asian_low, "asian_high": asian_high, "session": session},
+            partial_conditions=partial_conditions,
         )
 
     conditions = ["asian_range_break"]
@@ -8312,6 +8497,7 @@ def evaluate_breakout_du_jour_setup(
         cooldown_after_loss_minutes=240,
         cooldown_after_win_minutes=120,
         metadata={"asian_low": asian_low, "asian_high": asian_high, "session": session},
+        partial_conditions=partial_conditions,
     )
 
 
@@ -8372,7 +8558,7 @@ class StrategyCoordinator:
         ranked.sort(key=lambda item: (item["score"], item["priority"], item["confidence"]), reverse=True)
         if not ranked:
             return StrategySelection(
-                status="NO_SETUP",
+                status="NO_SETUP_TRADE",
                 selected_setup=None,
                 selected_score=0,
                 session=session,
@@ -8424,6 +8610,9 @@ class StrategyCoordinator:
         if candidate.direction not in {"BUY", "SELL"}:
             eligible = False
             blockers.append("Direction non exploitable.")
+        if session == "weekend" and candidate.name != "NewsReactionSetup":
+            eligible = False
+            blockers.append("Session weekend: strategie spot suspendue.")
         rr_min = 2.0 if candidate.name == "BreakoutDuJourSetup" else self.min_rr
         if candidate.rr_tp1 < rr_min:
             eligible = False
@@ -8554,6 +8743,51 @@ def build_strategy_selection(
         trade_ledger=trade_ledger,
         now=now,
     )
+
+
+def append_multi_strategy_history(
+    gold: SymbolSnapshot,
+    candidates: list[SetupCandidate],
+    selection: StrategySelection,
+    path: Path = MULTI_STRATEGY_HISTORY_PATH,
+    now: datetime | None = None,
+) -> None:
+    try:
+        reference = now or datetime.now(timezone.utc)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_jsonl_file(path)
+        selected = selection.selected_setup
+        row = {
+            "timestamp": reference.isoformat(),
+            "spot": round(gold.price, 2),
+            "session": selection.session,
+            "status": selection.status,
+            "selected_score": selection.selected_score,
+            "selected_setup": selected.name if selected else None,
+            "selected_direction": selected.direction if selected else "NEUTRAL",
+            "event_mode_active": selection.event_mode_active,
+            "candidate_count": len(candidates),
+            "ranked_count": len(selection.ranked_candidates),
+            "rejected_count": len(selection.rejected_candidates),
+            "candidates": [
+                {
+                    "name": candidate.name,
+                    "status": candidate.status,
+                    "direction": candidate.direction,
+                    "confidence": candidate.confidence,
+                    "confluence_score": candidate.confluence_score,
+                    "rr_tp1": candidate.rr_tp1,
+                    "conditions_met": candidate.conditions_met,
+                    "blockers": candidate.blockers,
+                }
+                for candidate in candidates
+            ],
+            "reasons": selection.reasons,
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+    except Exception:
+        return
 
 
 def build_news_reaction_trade_plan(
@@ -15970,6 +16204,7 @@ def build_live_bundle(base_bundle: BriefingBundle) -> BriefingBundle:
         trade_ledger=trade_ledger,
         min_rr=user_settings.minimum_risk_reward,
     )
+    append_multi_strategy_history(gold, strategy_candidates, strategy_selection)
     payload = build_payload(
         gold,
         dxy,
@@ -16221,6 +16456,7 @@ def build_briefing(top_news: int, include_ai: bool = True) -> BriefingBundle:
         trade_ledger=trade_ledger,
         min_rr=user_settings.minimum_risk_reward,
     )
+    append_multi_strategy_history(gold, strategy_candidates, strategy_selection)
     payload = build_payload(
         gold,
         dxy,

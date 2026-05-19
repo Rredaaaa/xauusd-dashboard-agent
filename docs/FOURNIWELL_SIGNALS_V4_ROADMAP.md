@@ -930,7 +930,7 @@ Le correctif pre-Phase 7 est valide seulement si:
 
 Objectif: ne plus dependre d'une seule logique directionnelle.
 
-Statut: Phase 7A a 7D livrees, avec correctif audit obligatoire applique avant la suite.
+Statut: Phase 7A a 7E livrees, avec correctif audit obligatoire applique.
 
 Sous-phases officielles:
 
@@ -938,7 +938,7 @@ Sous-phases officielles:
 - 7B Strategy candidates: PivotRejection, MeanReversion, RangeTrading, TrendContinuation, BreakoutDuJour;
 - 7C Coordinator: ranking, priorites, R/R minimum, cooldowns;
 - 7D Inspector: exposition du setup dominant et des candidates;
-- 7E Integration controlee: aucun impact chef de file/trade lock avant calibration;
+- 7E Integration controlee: shadow integration livree, aucun impact chef de file/trade lock avant calibration;
 - 7F QA Phase 7 complete: tests systeme + venv, non-regression, audit log.
 
 Correctif audit A-D obligatoire livre:
@@ -996,6 +996,14 @@ Livrable:
 - moins de trades forces en range;
 - meilleur choix du setup dominant.
 - historique multi-strategy exploitable pour calibration 7.5.
+
+Livrable 7E:
+
+- `StrategyShadowIntegration` compare le setup dominant au chef de file;
+- le payload expose `strategy_shadow_integration`;
+- l'Inspector expose `Phase 7E · Integration controlee`;
+- `allowed_to_affect_lead=False` et `allowed_to_lock_trade=False` restent obligatoires jusqu'a Phase 7.5;
+- les conflits multi-strategy vs chef de file sont journalises, pas trades.
 
 ## 12. Phase 7.5 - Calibration Orchestrator Backtest
 

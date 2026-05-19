@@ -1,6 +1,6 @@
 # Fourniwell Signals v4 - Phase 7
 
-Statut: Phase 7A a 7D livrees + correctif audit A-D applique avant toute suite 7E/7F/7.5.
+Statut: Phase 7A a 7E livrees + correctif audit A-D applique.
 
 Objectif: remplacer la logique mono-setup par un moteur multi-strategies capable de produire plusieurs candidates auditees avant selection du setup dominant.
 
@@ -276,9 +276,44 @@ Verification:
 - `python -m unittest tests/test_xauusd_agent.py`
 - `python -m py_compile xauusd_agent.py`
 
+## Phase 7E livree
+
+Livree le 2026-05-19.
+
+Objectif: integrer le moteur multi-strategies dans le flux systeme sans changer le chef de file, sans creer de trade et sans modifier le trade lock avant la calibration Phase 7.5.
+
+Contenu:
+
+- `StrategyShadowIntegration`;
+- `build_strategy_shadow_integration`;
+- comparaison entre chef de file et setup multi-strategy dominant;
+- statuts shadow: `SHADOW_CONFIRMS_LEAD`, `SHADOW_SUPPORTS_WATCH`, `SHADOW_CONFLICT`, `SHADOW_SETUP_WITHOUT_LEAD`, `SHADOW_NO_SETUP`;
+- exposition dans le payload `strategy_shadow_integration`;
+- exposition dans `monitoring_inspector.strategy_shadow`;
+- ajout au snapshot d'audit append-only;
+- rendu Inspector `Phase 7E · Integration controlee`;
+- garde-fous explicites `allowed_to_affect_lead=False` et `allowed_to_lock_trade=False`.
+
+Regle non negociable:
+
+- Phase 7E est une integration d'observation. Elle ne peut pas modifier le verdict principal ni verrouiller une position.
+
+Tests ajoutes:
+
+- shadow aligne avec le chef de file sans mutation;
+- shadow conflictuel sans trade lock;
+- rendu Inspector Phase 7E.
+
 ## Prochaine etape
 
-Phase 7.5:
+Phase 7F:
+
+- QA Phase 7 complete;
+- verification des logs `audit_log.jsonl` et `multi_strategy_history.jsonl`;
+- non-regression systeme/venv;
+- rapport de readiness avant Phase 7.5.
+
+Puis Phase 7.5:
 
 - calibration/backtest du coordinateur avant tout impact sur le chef de file ou le trade lock;
 - validation des priorites, scores, cooldowns et seuils R/R sur historique.

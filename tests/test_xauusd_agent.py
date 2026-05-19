@@ -89,6 +89,7 @@ from xauusd_agent import (
     evaluate_trend_continuation_setup,
     build_reversal_engine,
     build_strategy_selection,
+    build_strategy_shadow_integration,
     asian_range_from_candles,
     classify_news_reaction_event,
     detect_news_reaction_price,
@@ -4011,9 +4012,52 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
             selection,
         )
         self.assertIn("Phase 7D", html)
+        self.assertIn("Phase 7E", html)
         self.assertIn("Multi-Strategy", html)
         self.assertIn("TrendContinuationSetup", html)
         self.assertIn("Inspector · WAIT 55/100", html)
+
+    def test_phase7e_shadow_confirms_without_mutating_lead(self) -> None:
+        candidate = self.candidate("TrendContinuationSetup", direction="BUY", preferred_session="london_ny_overlap")
+        selection = build_strategy_selection([candidate], now=self.reference)
+        recommendation = TradeRecommendation(
+            "global",
+            "BUY",
+            72,
+            "Lead BUY.",
+            ["test"],
+            95.0,
+            110.0,
+            115.0,
+            "test",
+        )
+        before = asdict(recommendation)
+        shadow = build_strategy_shadow_integration(recommendation, selection)
+        self.assertEqual(asdict(recommendation), before)
+        self.assertEqual(shadow.status, "SHADOW_CONFIRMS_LEAD")
+        self.assertEqual(shadow.alignment, "ALIGNED")
+        self.assertFalse(shadow.allowed_to_affect_lead)
+        self.assertFalse(shadow.allowed_to_lock_trade)
+
+    def test_phase7e_shadow_flags_conflict_without_trade_lock(self) -> None:
+        candidate = self.candidate("MeanReversionSetup", direction="SELL")
+        selection = build_strategy_selection([candidate], now=self.reference)
+        recommendation = TradeRecommendation(
+            "global",
+            "BUY",
+            70,
+            "Lead BUY.",
+            ["test"],
+            95.0,
+            110.0,
+            115.0,
+            "test",
+        )
+        shadow = build_strategy_shadow_integration(recommendation, selection)
+        self.assertEqual(shadow.status, "SHADOW_CONFLICT")
+        self.assertEqual(shadow.alignment, "CONFLICT")
+        self.assertEqual(shadow.final_action, "LOG_ONLY_CONFLICT")
+        self.assertFalse(shadow.allowed_to_lock_trade)
 
     def test_phase7_audit_history_logger_writes_jsonl_cycle(self) -> None:
         candidates = [self.candidate("TrendContinuationSetup", preferred_session="london_ny_overlap")]

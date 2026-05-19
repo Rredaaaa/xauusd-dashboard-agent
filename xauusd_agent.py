@@ -868,6 +868,23 @@ class StrategySelection:
 
 
 @dataclass
+class StrategyShadowIntegration:
+    status: str
+    final_action: str
+    lead_verdict: str
+    lead_score: int
+    strategy_status: str
+    strategy_setup: str
+    strategy_direction: str
+    strategy_score: int
+    alignment: str
+    allowed_to_affect_lead: bool
+    allowed_to_lock_trade: bool
+    reasons: list[str]
+    blockers: list[str]
+
+
+@dataclass
 class ReversalSetup:
     horizon: str
     status: str
@@ -3230,6 +3247,7 @@ def build_monitoring_inspector_payload(
 
     preflight = data_quality.preflight if data_quality else None
     chart_timeframes = chart_store.timeframes if chart_store else []
+    strategy_shadow = build_strategy_shadow_integration(global_recommendation, strategy_selection)
 
     return {
         "generated_at": generated_at,
@@ -3327,6 +3345,7 @@ def build_monitoring_inspector_payload(
             "candidate_count": len(strategy_candidates or []),
             "raw_candidates": [asdict(candidate) for candidate in (strategy_candidates or [])],
         },
+        "strategy_shadow": asdict(strategy_shadow),
     }
 
 
@@ -3360,6 +3379,8 @@ def build_audit_log_snapshot(bundle: BriefingBundle) -> dict[str, Any]:
         "chart_store": inspector["chart_store"],
         "agents": inspector["agents"]["outputs"],
         "trades": inspector["trades"],
+        "strategy": inspector["strategy"],
+        "strategy_shadow": inspector["strategy_shadow"],
     }
 
 
@@ -8745,6 +8766,69 @@ def build_strategy_selection(
     )
 
 
+def build_strategy_shadow_integration(
+    global_recommendation: TradeRecommendation | None,
+    strategy_selection: StrategySelection | None,
+) -> StrategyShadowIntegration:
+    lead_verdict = global_recommendation.verdict if global_recommendation else "UNAVAILABLE"
+    lead_score = global_recommendation.score if global_recommendation else 0
+    lead_direction = normalize_scenario_bias(lead_verdict, fallback="WAIT")
+    selected = strategy_selection.selected_setup if strategy_selection else None
+    strategy_status = strategy_selection.status if strategy_selection else "UNAVAILABLE"
+    strategy_setup = selected.name if selected else "none"
+    strategy_direction = selected.direction if selected else "NEUTRAL"
+    strategy_score = strategy_selection.selected_score if strategy_selection else 0
+
+    blockers = [
+        "Phase 7E shadow: le multi-strategy ne modifie pas le chef de file avant calibration Phase 7.5.",
+        "Phase 7E shadow: aucun trade lock ne peut etre cree depuis ce signal.",
+    ]
+    reasons: list[str] = []
+    if selected is None:
+        alignment = "NO_SETUP"
+        status = "SHADOW_NO_SETUP"
+        final_action = "LOG_ONLY"
+        reasons.append("Aucun setup dominant multi-strategy pour ce snapshot.")
+    elif lead_direction in {"BUY", "SELL"} and strategy_direction == lead_direction:
+        alignment = "ALIGNED"
+        status = "SHADOW_CONFIRMS_LEAD" if strategy_status == "TRADE_READY" else "SHADOW_SUPPORTS_WATCH"
+        final_action = "LOG_ONLY_READY_FOR_7_5" if strategy_status == "TRADE_READY" else "LOG_ONLY_WATCH"
+        reasons.append(f"Le setup {strategy_setup} confirme le chef de file {lead_direction}.")
+    elif lead_direction in {"BUY", "SELL"} and strategy_direction in {"BUY", "SELL"}:
+        alignment = "CONFLICT"
+        status = "SHADOW_CONFLICT"
+        final_action = "LOG_ONLY_CONFLICT"
+        reasons.append(f"Le setup {strategy_setup} {strategy_direction} contredit le chef de file {lead_direction}.")
+    elif strategy_direction in {"BUY", "SELL"}:
+        alignment = "LEAD_NOT_DIRECTIONAL"
+        status = "SHADOW_SETUP_WITHOUT_LEAD"
+        final_action = "LOG_ONLY_NEEDS_CALIBRATION"
+        reasons.append(f"Le multi-strategy voit {strategy_setup} {strategy_direction}, mais le chef de file reste {lead_verdict}.")
+    else:
+        alignment = "NO_DIRECTION"
+        status = "SHADOW_NO_DIRECTION"
+        final_action = "LOG_ONLY"
+        reasons.append("Ni le chef de file ni le multi-strategy ne donnent une direction exploitable.")
+
+    if strategy_selection and strategy_selection.reasons:
+        reasons.extend(strategy_selection.reasons[:3])
+    return StrategyShadowIntegration(
+        status=status,
+        final_action=final_action,
+        lead_verdict=lead_verdict,
+        lead_score=lead_score,
+        strategy_status=strategy_status,
+        strategy_setup=strategy_setup,
+        strategy_direction=strategy_direction,
+        strategy_score=strategy_score,
+        alignment=alignment,
+        allowed_to_affect_lead=False,
+        allowed_to_lock_trade=False,
+        reasons=unique_preserve_order(reasons)[:8],
+        blockers=blockers,
+    )
+
+
 def append_multi_strategy_history(
     gold: SymbolSnapshot,
     candidates: list[SetupCandidate],
@@ -11322,6 +11406,10 @@ def build_payload(
         payload["strategy_candidates"] = [asdict(candidate) for candidate in strategy_candidates]
     if strategy_selection:
         payload["strategy_selection"] = asdict(strategy_selection)
+    if global_recommendation or strategy_selection:
+        payload["strategy_shadow_integration"] = asdict(
+            build_strategy_shadow_integration(global_recommendation, strategy_selection)
+        )
     if settings:
         payload["settings"] = asdict(settings)
     if settings_validation:
@@ -13396,6 +13484,7 @@ def render_monitoring_inspector_panel(
         for item in chart_payload["timeframes"]
     )
     strategy = inspector["strategy"]
+    shadow = inspector["strategy_shadow"]
     selected_setup = strategy["selected_setup"]
     if selected_setup:
         selected_summary = f"""
@@ -13443,6 +13532,17 @@ def render_monitoring_inspector_panel(
       <div class="geo-stat"><strong>Preflight</strong><span>{html.escape(preflight['status'])}</span><small>{'trade bloque' if preflight['trade_blocked'] else 'data OK trade'}</small></div>
       <div class="geo-stat"><strong>Chart Store</strong><span>{html.escape(chart_payload['status'])}</span><small>{len(chart_payload['timeframes'])} TF</small></div>
       <div class="geo-stat"><strong>Audit log</strong><span>{html.escape(str(AUDIT_LOG_PATH))}</span><small>append-only JSONL</small></div>
+    </div>
+    <div class="module-block">
+      <div class="section-kicker">Phase 7E · Integration controlee</div>
+      <div class="trade-verdict {state_tone_class(shadow['status'])}">Shadow · {html.escape(shadow['status'])} · {html.escape(shadow['alignment'])}</div>
+      <p class="trade-summary">{html.escape(' '.join(shadow['reasons'][:2]))}</p>
+      <div class="geo-grid">
+        <div class="geo-stat"><strong>Chef de file</strong><span>{html.escape(shadow['lead_verdict'])}</span><small>{shadow['lead_score']}/100</small></div>
+        <div class="geo-stat"><strong>Setup shadow</strong><span>{html.escape(shadow['strategy_setup'])}</span><small>{html.escape(shadow['strategy_direction'])} · {shadow['strategy_score']}/100</small></div>
+        <div class="geo-stat"><strong>Action</strong><span>{html.escape(shadow['final_action'])}</span><small>log only</small></div>
+        <div class="geo-stat"><strong>Impact trade</strong><span>0</span><small>lead {str(shadow['allowed_to_affect_lead']).lower()} · lock {str(shadow['allowed_to_lock_trade']).lower()}</small></div>
+      </div>
     </div>
     <div class="module-block">
       <div class="section-kicker">Phase 7D · Multi-Strategy Inspector</div>

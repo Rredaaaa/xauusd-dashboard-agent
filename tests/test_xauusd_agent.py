@@ -1168,6 +1168,31 @@ class AnalysisShapeTests(unittest.TestCase):
             recent_trades=[],
             total_trades=0,
         )
+        candidate = SetupCandidate(
+            name="NewsReactionSetup",
+            status="TRADE_READY",
+            direction="BUY",
+            confidence=82,
+            confluence_score=78,
+            conditions_met=["fast_news_event", "confirmation_score_3"],
+            entry_zone_low=101.0,
+            entry_zone_high=102.0,
+            stop_loss=98.0,
+            tp1=108.0,
+            tp2=112.0,
+            tp3=116.0,
+            rr_tp1=2.0,
+            rr_tp2=3.0,
+            rr_tp3=4.0,
+            validity_minutes=120,
+            cooldown_after_loss_minutes=240,
+            cooldown_after_win_minutes=60,
+            preferred_session="all",
+            reasons=["News setup test."],
+            blockers=[],
+            detected_at="2026-04-24T00:00:00+00:00",
+        )
+        selection = build_strategy_selection([candidate], now=datetime(2026, 4, 24, 13, 30, tzinfo=timezone.utc))
         inspector = build_monitoring_inspector_payload(
             "2026-04-24T00:00:00+00:00",
             quality,
@@ -1176,11 +1201,18 @@ class AnalysisShapeTests(unittest.TestCase):
             None,
             recommendation,
             None,
+            strategy_candidates=[candidate],
+            strategy_selection=selection,
         )
         self.assertEqual(inspector["source_counts"]["active"], 1)
         self.assertEqual(inspector["source_counts"]["stale"], 1)
         self.assertEqual(inspector["agents"]["active"], 1)
         self.assertEqual(inspector["trades"]["quality_gate_status"], "WAIT")
+        self.assertEqual(inspector["strategy"]["candidate_count"], 1)
+        self.assertEqual(inspector["strategy"]["selected_setup"]["name"], "NewsReactionSetup")
+        self.assertEqual(inspector["strategy_shadow"]["status"], "SHADOW_CONFIRMS_LEAD")
+        self.assertFalse(inspector["strategy_shadow"]["allowed_to_affect_lead"])
+        self.assertFalse(inspector["strategy_shadow"]["allowed_to_lock_trade"])
 
         bundle = BriefingBundle(
             gold=gold,
@@ -1194,13 +1226,18 @@ class AnalysisShapeTests(unittest.TestCase):
             agent_results=agents,
             trade_ledger=ledger,
             global_recommendation=recommendation,
+            strategy_candidates=[candidate],
+            strategy_selection=selection,
         )
         with TemporaryDirectory() as tmpdir:
             audit_path = Path(tmpdir) / "audit_log.jsonl"
             entry = append_audit_log_snapshot(bundle, path=audit_path)
             self.assertTrue(audit_path.exists())
             self.assertEqual(entry["decision"]["verdict"], "BUY")
+            self.assertEqual(entry["strategy"]["candidate_count"], 1)
+            self.assertEqual(entry["strategy_shadow"]["alignment"], "ALIGNED")
             self.assertIn("Google News RSS / fallback feeds", audit_path.read_text(encoding="utf-8"))
+            self.assertIn("NewsReactionSetup", audit_path.read_text(encoding="utf-8"))
 
     def test_macro_catalyst_parsers_extract_official_events(self) -> None:
         fomc_html = """
@@ -3973,6 +4010,8 @@ class Phase7CStrategyCoordinatorTests(unittest.TestCase):
         self.assertEqual(selection.status, "NO_SETUP_TRADE")
         self.assertIsNone(selection.selected_setup)
         self.assertEqual(selection.ranked_candidates, [])
+        self.assertNotIn("candidate", selection.rejected_candidates[0])
+        json.dumps(asdict(selection))
 
     def test_phase7_audit_coordinator_blocks_spot_strategy_on_weekend(self) -> None:
         selection = build_strategy_selection(

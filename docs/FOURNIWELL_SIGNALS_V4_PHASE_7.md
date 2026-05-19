@@ -1,6 +1,6 @@
 # Fourniwell Signals v4 - Phase 7
 
-Statut: Phase 7A a 7E livrees + correctif audit A-D applique.
+Statut: Phase 7A a 7F livrees + correctif audit A-D applique. Phase 7.5 est la prochaine phase officielle.
 
 Objectif: remplacer la logique mono-setup par un moteur multi-strategies capable de produire plusieurs candidates auditees avant selection du setup dominant.
 
@@ -304,16 +304,32 @@ Tests ajoutes:
 - shadow conflictuel sans trade lock;
 - rendu Inspector Phase 7E.
 
+## Phase 7F livree
+
+Livree le 2026-05-19.
+
+Objectif: verrouiller la qualite de toute la Phase 7 avant Phase 7.5.
+
+Contenu:
+
+- QA complete Phase 7A a 7E;
+- correction du bug de serialization JSON quand aucune strategie n'est eligible;
+- verification des logs `audit_log.jsonl` et `multi_strategy_history.jsonl`;
+- verification runtime de `reports/xauusd_dashboard.html` et `reports/xauusd_data.json`;
+- non-regression Python systeme et venv;
+- rapport de readiness `docs/FOURNIWELL_SIGNALS_V4_PHASE_7F_QA.md`.
+
+Validation:
+
+- `python3 -m unittest discover tests`: 188 tests OK;
+- `.venv/bin/python -m unittest discover tests`: 188 tests OK;
+- `.venv/bin/python -m py_compile xauusd_agent.py tests/test_xauusd_agent.py`: OK;
+- `git diff --check`: OK;
+- cycle reel dashboard: OK.
+
 ## Prochaine etape
 
-Phase 7F:
-
-- QA Phase 7 complete;
-- verification des logs `audit_log.jsonl` et `multi_strategy_history.jsonl`;
-- non-regression systeme/venv;
-- rapport de readiness avant Phase 7.5.
-
-Puis Phase 7.5:
+Phase 7.5:
 
 - calibration/backtest du coordinateur avant tout impact sur le chef de file ou le trade lock;
 - validation des priorites, scores, cooldowns et seuils R/R sur historique.

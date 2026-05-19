@@ -8586,7 +8586,7 @@ class StrategyCoordinator:
                 event_mode_active=event_active,
                 reasons=["Aucune strategie Phase 7 eligible apres priorite, session, R/R et cooldown."],
                 ranked_candidates=[],
-                rejected_candidates=rejected,
+                rejected_candidates=[self.public_rank(item) for item in rejected],
             )
 
         winner = ranked[0]

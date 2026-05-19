@@ -930,7 +930,7 @@ Le correctif pre-Phase 7 est valide seulement si:
 
 Objectif: ne plus dependre d'une seule logique directionnelle.
 
-Statut: Phase 7A a 7E livrees, avec correctif audit obligatoire applique.
+Statut: Phase 7A a 7F livrees, avec correctif audit obligatoire applique. Prochaine phase officielle: Phase 7.5.
 
 Sous-phases officielles:
 
@@ -939,7 +939,7 @@ Sous-phases officielles:
 - 7C Coordinator: ranking, priorites, R/R minimum, cooldowns;
 - 7D Inspector: exposition du setup dominant et des candidates;
 - 7E Integration controlee: shadow integration livree, aucun impact chef de file/trade lock avant calibration;
-- 7F QA Phase 7 complete: tests systeme + venv, non-regression, audit log.
+- 7F QA Phase 7 complete: livree, tests systeme + venv, non-regression, audit log, runtime dashboard.
 
 Correctif audit A-D obligatoire livre:
 
@@ -1004,6 +1004,15 @@ Livrable 7E:
 - l'Inspector expose `Phase 7E · Integration controlee`;
 - `allowed_to_affect_lead=False` et `allowed_to_lock_trade=False` restent obligatoires jusqu'a Phase 7.5;
 - les conflits multi-strategy vs chef de file sont journalises, pas trades.
+
+Livrable 7F:
+
+- rapport `docs/FOURNIWELL_SIGNALS_V4_PHASE_7F_QA.md`;
+- bug de serialization JSON corrige sur `rejected_candidates`;
+- `audit_log.jsonl` verifie avec `strategy` et `strategy_shadow`;
+- `multi_strategy_history.jsonl` cree/verifie;
+- cycle reel dashboard valide;
+- Phase 7.5 autorisee.
 
 ## 12. Phase 7.5 - Calibration Orchestrator Backtest
 
